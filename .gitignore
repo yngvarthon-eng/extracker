@@ -1,4 +1,5 @@
 build/
+build-make/
 .vscode/
 *.o
 *.obj
@@ -6,3 +7,4 @@ build/
 *.a
 *.out
 .DS_Store
+extracker
