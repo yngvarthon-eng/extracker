@@ -1,0 +1,123 @@
+#include "extracker/plugin_cli.hpp"
+
+#include <cstdint>
+#include <iostream>
+#include <string>
+
+namespace extracker {
+
+void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
+  std::string subcommand;
+  pluginInput >> subcommand;
+  if (subcommand == "list") {
+    const auto available = plugins.discoverAvailablePlugins();
+    if (available.empty()) {
+      std::cout << "No plugins discovered" << '\n';
+    } else {
+      std::cout << "Discovered plugins:" << '\n';
+      for (const auto& id : available) {
+        std::cout << "  " << id << '\n';
+      }
+    }
+  } else if (subcommand == "load") {
+    std::string pluginId;
+    pluginInput >> pluginId;
+    if (pluginId.empty()) {
+      std::cout << "Usage: plugin load <id>" << '\n';
+    } else if (plugins.loadPlugin(pluginId)) {
+      std::cout << "Loaded plugin: " << pluginId << '\n';
+    } else {
+      std::cout << "Failed to load plugin: " << pluginId << '\n';
+    }
+  } else if (subcommand == "assign") {
+    int instrument = -1;
+    std::string pluginId;
+    pluginInput >> instrument >> pluginId;
+    if (instrument < 0 || pluginId.empty()) {
+      std::cout << "Usage: plugin assign <instrument> <id>" << '\n';
+    } else if (plugins.assignInstrument(static_cast<std::uint8_t>(instrument), pluginId)) {
+      std::cout << "Assigned " << pluginId << " to instrument " << instrument << '\n';
+    } else {
+      std::cout << "Failed to assign plugin; ensure it is loaded and instrument index is valid" << '\n';
+    }
+  } else {
+    std::cout << "Usage: plugin <list|load|assign> ..." << '\n';
+  }
+}
+
+void handleSineCommand(PluginHost& plugins, std::istringstream& sineInput) {
+  int instrument = -1;
+  sineInput >> instrument;
+  if (instrument < 0) {
+    std::cout << "Usage: sine <instrument>" << '\n';
+  } else {
+    if (!plugins.loadPlugin("builtin.sine")) {
+      std::cout << "Failed to load builtin.sine" << '\n';
+    } else if (!plugins.assignInstrument(static_cast<std::uint8_t>(instrument), "builtin.sine")) {
+      std::cout << "Failed to assign builtin.sine to instrument " << instrument << '\n';
+    } else {
+      std::cout << "Assigned builtin.sine to instrument " << instrument << '\n';
+    }
+  }
+}
+
+void handleHelpCommand() {
+  std::cout << "play                       start playback" << '\n';
+  std::cout << "stop                       stop playback" << '\n';
+  std::cout << "tempo <bpm>                set tempo" << '\n';
+  std::cout << "loop <on|off>              enable/disable looping for active play range" << '\n';
+  std::cout << "loop range <from> <to>     define loop/play range without starting" << '\n';
+  std::cout << "status                     show engine/transport/plugin state" << '\n';
+  std::cout << "reset                      stop playback and reset counters" << '\n';
+  std::cout << "save <file>                save module to file (defaults to .ex)" << '\n';
+  std::cout << "load <file>                load module from file (defaults to .ex)" << '\n';
+  std::cout << "plugin list                list discovered plugins" << '\n';
+  std::cout << "plugin load <id>           load plugin by id (e.g. builtin.sine)" << '\n';
+  std::cout << "plugin assign <i> <id>     assign loaded plugin to instrument slot" << '\n';
+  std::cout << "sine <instrument>          convenience command for builtin.sine" << '\n';
+  std::cout << "note set r c n i [v fx fv] set note in pattern (optional vel/effect)" << '\n';
+  std::cout << "note set dry ...           parse and preview note set without writing" << '\n';
+  std::cout << "note clear dry r c         preview note clear without writing" << '\n';
+  std::cout << "note clear r c             clear note at row/channel" << '\n';
+  std::cout << "note vel dry r c v         preview velocity set without writing" << '\n';
+  std::cout << "note vel r c v             set velocity for existing step" << '\n';
+  std::cout << "note gate dry r c t        preview gate tick set without writing" << '\n';
+  std::cout << "note gate r c t            set gate ticks for existing step" << '\n';
+  std::cout << "note fx dry r c f fv       preview effect set without writing" << '\n';
+  std::cout << "note fx r c f fv           set effect command/value for step" << '\n';
+  std::cout << "pattern print [from] [to]  print pattern rows (default 0..15)" << '\n';
+  std::cout << "pattern play [f] [t]       play selected row range, or full pattern" << '\n';
+  std::cout << "pattern template <name>    load a starter groove template" << '\n';
+  std::cout << "record on [channel]        arm step recording" << '\n';
+  std::cout << "record off                 disarm step recording" << '\n';
+  std::cout << "record channel <...>       set/show record channel without re-arming" << '\n';
+  std::cout << "record cursor <...>        set/show/move record cursor row (e.g. 12, +4, -1, start, end, next, prev)" << '\n';
+  std::cout << "record note ...            write to next empty row in armed channel (supports positional and keyword forms; instr defaults to midi instrument)" << '\n';
+  std::cout << "record note dry ...        parse and preview target row/value without writing" << '\n';
+  std::cout << "record quantize <...>      use current transport row when recording" << '\n';
+  std::cout << "record overdub <...>       allow replacing notes on occupied steps" << '\n';
+  std::cout << "record jump <ticks|ratio|status> cursor jump after each inserted note (e.g. 8, 1/1, 3/2)" << '\n';
+  std::cout << "record undo                revert the last recorded step write" << '\n';
+  std::cout << "record redo                re-apply the last undone record write" << '\n';
+  std::cout << "midi on                    start ALSA MIDI input" << '\n';
+  std::cout << "midi off                   stop ALSA MIDI input" << '\n';
+  std::cout << "midi status                show MIDI backend/connection hint" << '\n';
+  std::cout << "midi thru <on|off>         enable/disable live MIDI audition" << '\n';
+  std::cout << "midi instrument <index>    set instrument slot for MIDI thru/record" << '\n';
+  std::cout << "midi learn <on|off|status> auto-map incoming MIDI channels to instruments" << '\n';
+  std::cout << "midi map <channel> <instr> set fixed channel->instrument mapping" << '\n';
+  std::cout << "midi map status            show all active channel->instrument mappings" << '\n';
+  std::cout << "midi map <channel> clear   clear one channel mapping" << '\n';
+  std::cout << "midi map clear all         clear all channel mappings" << '\n';
+  std::cout << "midi transport <...>       sync transport from MIDI start/stop/clock" << '\n';
+  std::cout << "midi transport timeout <ms|status> set/show MIDI clock timeout" << '\n';
+  std::cout << "midi transport lock <on|off|status> lock fallback tempo to external BPM" << '\n';
+  std::cout << "midi clock help            print ALSA MIDI clock setup tips" << '\n';
+  std::cout << "midi clock sources [name]  list matching MIDI clock source ports" << '\n';
+  std::cout << "midi clock autoconnect [name] [index] auto-connect virtual MIDI clock source" << '\n';
+  std::cout << "midi clock diagnose [name] quick routing diagnostics for clock source" << '\n';
+  std::cout << "midi clock diagnose live [name] live clock health probe (1s)" << '\n';
+  std::cout << "quit                       exit" << '\n';
+}
+
+}  // namespace extracker
