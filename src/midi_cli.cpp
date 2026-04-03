@@ -291,8 +291,16 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
     } else {
       std::cout << "Usage: midi transport lock <on|off|status>" << '\n';
     }
+  } else if (mode == "reset") {
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      midiTransportRunning = false;
+      hasMidiClockTimestamp = false;
+      midiClockEstimatedBpm = 0.0;
+    }
+    std::cout << "MIDI transport state reset" << '\n';
   } else {
-    std::cout << "Usage: midi transport <on|off|status|timeout|lock>" << '\n';
+    std::cout << "Usage: midi transport <on|off|status|timeout|lock|reset>" << '\n';
   }
 }
 

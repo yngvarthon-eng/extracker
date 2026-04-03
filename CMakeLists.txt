@@ -76,6 +76,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_record_roundtrip_test extracker)
   add_test(NAME extracker_cli_record_roundtrip_test COMMAND extracker_cli_record_roundtrip_test)
 
+  add_executable(extracker_cli_save_load_default_ext_test tests/cli_save_load_default_ext_test.cpp)
+  add_dependencies(extracker_cli_save_load_default_ext_test extracker)
+  add_test(NAME extracker_cli_save_load_default_ext_test COMMAND extracker_cli_save_load_default_ext_test)
+
   add_executable(extracker_cli_record_jump_test tests/cli_record_jump_test.cpp)
   add_dependencies(extracker_cli_record_jump_test extracker)
   add_test(NAME extracker_cli_record_jump_test COMMAND extracker_cli_record_jump_test)
@@ -91,6 +95,10 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_midi_map_test tests/cli_midi_map_test.cpp)
   add_dependencies(extracker_cli_midi_map_test extracker)
   add_test(NAME extracker_cli_midi_map_test COMMAND extracker_cli_midi_map_test)
+
+  add_executable(extracker_cli_midi_transport_test tests/cli_midi_transport_test.cpp)
+  add_dependencies(extracker_cli_midi_transport_test extracker)
+  add_test(NAME extracker_cli_midi_transport_test COMMAND extracker_cli_midi_transport_test)
 
   add_executable(extracker_cli_record_on_cursor_test tests/cli_record_on_cursor_test.cpp)
   add_dependencies(extracker_cli_record_on_cursor_test extracker)

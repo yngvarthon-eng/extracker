@@ -263,7 +263,7 @@ int main() {
   auto normalizeModulePath = [](const std::string& rawPath) {
     std::filesystem::path path(rawPath);
     if (!path.has_extension()) {
-      path += ".ex";
+      path += ".xtp";
     }
     return path.string();
   };

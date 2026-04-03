@@ -15,8 +15,8 @@ int main() {
       "printf 'record on 0\\n"
       "record note 65 0 100\\n"
       "record undo\\n"
-      "save /tmp/xt_cli_roundtrip_test.xtp\\n"
-      "load /tmp/xt_cli_roundtrip_test.xtp\\n"
+      "save /tmp/xt_cli_roundtrip_test\\n"
+      "load /tmp/xt_cli_roundtrip_test\\n"
       "record redo\\n"
       "quit\\n' | " + appPath;
 
