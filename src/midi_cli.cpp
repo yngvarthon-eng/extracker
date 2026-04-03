@@ -87,6 +87,7 @@ ClockDiagnoseArgs parseClockDiagnoseArgs(
 
 struct ClockAutoconnectArgs {
   int selectedIndex = 0;
+  bool selectedIndexExplicit = false;
   std::string needle = "exTracker Virtual Clock";
 };
 
@@ -108,6 +109,7 @@ ClockAutoconnectArgs parseClockAutoconnectArgs(const std::string& rest) {
     std::istringstream indexStream(tokens.back());
     if (indexStream >> parsedIndex && indexStream.eof() && parsedIndex >= 0) {
       args.selectedIndex = parsedIndex;
+      args.selectedIndexExplicit = true;
       tokens.pop_back();
     }
   }
@@ -373,6 +375,36 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
       std::cout << "  exTracker endpoint: unavailable (start with: midi on)" << '\n';
     }
 
+    bool hasClockSnapshot = false;
+    bool clockFresh = false;
+    long long clockAgeMs = -1;
+    double clockBpmSnapshot = 0.0;
+    {
+      std::lock_guard<std::mutex> lock(context.stateMutex);
+      hasClockSnapshot = context.hasMidiClockTimestamp;
+      if (hasClockSnapshot) {
+        auto now = std::chrono::steady_clock::now();
+        clockAgeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - context.lastMidiClockTimestamp).count();
+        clockFresh = (now - context.lastMidiClockTimestamp) <= context.midiClockTimeout;
+      }
+      clockBpmSnapshot = context.midiClockEstimatedBpm;
+    }
+
+    if (!hasClockSnapshot) {
+      std::cout << "  Clock state: none" << '\n';
+    } else if (clockFresh) {
+      std::cout << "  Clock state: fresh" << '\n';
+    } else {
+      std::cout << "  Clock state: stale" << '\n';
+    }
+    if (clockAgeMs >= 0) {
+      std::cout << "  Last clock age ms: " << clockAgeMs << '\n';
+    }
+    if (clockBpmSnapshot > 0.0) {
+      std::cout << "  Clock BPM snapshot: " << clockBpmSnapshot << '\n';
+    }
+
     std::vector<MidiPortEntry> matches;
     if (!readMatchingClockSources(context, args.needle, matches)) {
       std::cout << "  ALSA port listing: failed (is aconnect installed?)" << '\n';
@@ -388,10 +420,17 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
       if (matches.empty()) {
         std::cout << "  Suggestion: start source script first:" << '\n';
         std::cout << "    python3 tools/virtual_midi_clock.py --bpm 125" << '\n';
+      } else if (matches.size() > 1) {
+        std::cout << "  Multiple matching sources found; choose an explicit index:" << '\n';
+        std::cout << "    midi clock autoconnect " << args.needle << " <index>" << '\n';
       } else if (!hasTargetEndpoint) {
         std::cout << "  Suggestion: run 'midi on' and then 'midi clock autoconnect'" << '\n';
       } else {
         std::cout << "  Suggestion: run 'midi clock autoconnect " << args.needle << " 0'" << '\n';
+      }
+
+      if (hasClockSnapshot && !clockFresh) {
+        std::cout << "  Suggestion: run 'midi transport reset' if clock source changed." << '\n';
       }
 
       if (args.liveProbe) {
@@ -413,6 +452,11 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
       } else if (matches.empty()) {
         std::cout << "No MIDI source matching '" << args.needle << "' found." << '\n';
         std::cout << "Tip: run script first: python3 tools/virtual_midi_clock.py --bpm 125" << '\n';
+      } else if (matches.size() > 1 && !args.selectedIndexExplicit) {
+        std::cout << "Multiple MIDI sources matched '" << args.needle << "'." << '\n';
+        std::cout << "Specify an explicit index to avoid accidental connection:" << '\n';
+        std::cout << "  midi clock autoconnect " << args.needle << " <index>" << '\n';
+        std::cout << "Use: midi clock sources " << args.needle << '\n';
       } else if (args.selectedIndex < 0 || static_cast<std::size_t>(args.selectedIndex) >= matches.size()) {
         std::cout << "Selected index " << args.selectedIndex << " is out of range for "
                   << matches.size() << " match(es)." << '\n';

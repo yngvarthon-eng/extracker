@@ -72,6 +72,14 @@ if(BUILD_TESTING)
   target_link_libraries(extracker_effect_regression_test PRIVATE extracker_core)
   add_test(NAME extracker_effect_regression_test COMMAND extracker_effect_regression_test)
 
+  add_executable(extracker_midi_clock_cli_logic_test
+    tests/midi_clock_cli_logic_test.cpp
+    src/midi_cli.cpp
+  )
+  target_include_directories(extracker_midi_clock_cli_logic_test PRIVATE include)
+  target_link_libraries(extracker_midi_clock_cli_logic_test PRIVATE extracker_core)
+  add_test(NAME extracker_midi_clock_cli_logic_test COMMAND extracker_midi_clock_cli_logic_test)
+
   add_executable(extracker_cli_record_roundtrip_test tests/cli_record_roundtrip_test.cpp)
   add_dependencies(extracker_cli_record_roundtrip_test extracker)
   add_test(NAME extracker_cli_record_roundtrip_test COMMAND extracker_cli_record_roundtrip_test)
