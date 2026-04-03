@@ -185,3 +185,7 @@ ctest --test-dir build --output-on-failure
 2. Add command chaining and tracker-compatible edge-case behavior across channels.
 3. Extend plugin API coverage for effect processors.
 4. Add PipeWire/JACK backends beside ALSA.
+
+## Release process
+
+- See docs/RELEASE_CHECKLIST.md for a lightweight release flow, tag steps, and issue seed list.
