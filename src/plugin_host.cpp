@@ -283,6 +283,7 @@ struct Lv2DiscoveredPlugin {
   std::vector<int> controlOutputPorts;
   std::vector<int> eventInputPorts;
   std::vector<extracker::PluginControlPortMeta> controlInputMeta;
+  std::vector<extracker::PluginControlPortMeta> controlOutputMeta;
 };
 
 class Lv2DynamicInstrumentPlugin final : public extracker::IInstrumentPlugin {
@@ -690,7 +691,7 @@ public:
         portInfo.controlOutCount= static_cast<int>(plugin.controlOutputPorts.size());
         portInfo.eventInCount   = static_cast<int>(plugin.eventInputPorts.size());
         portInfo.controlInMeta  = plugin.controlInputMeta;
-        portInfo.controlOutPorts = plugin.controlOutputPorts;
+        portInfo.controlOutMeta = plugin.controlOutputMeta;
         host.registerPluginPortInfo(pluginId, portInfo);
         discovered += 1;
       }
@@ -794,6 +795,19 @@ private:
     return val;
   }
 
+  static std::string parseQuotedStringAfterKey(const std::string& line, const std::string& key) {
+    const std::size_t pos = line.find(key);
+    if (pos == std::string::npos) {
+      return "";
+    }
+    const std::size_t start = line.find('"', pos + key.size());
+    const std::size_t end = line.find('"', start == std::string::npos ? 0 : start + 1);
+    if (start == std::string::npos || end == std::string::npos || end <= start + 1) {
+      return "";
+    }
+    return line.substr(start + 1, end - start - 1);
+  }
+
   static void applyParsedPortBlock(const std::string& uri,
                                    int index,
                                    bool isInput,
@@ -801,6 +815,8 @@ private:
                                    bool isAudio,
                                    bool isControl,
                                    bool isEvent,
+                                   const std::string& portSymbol,
+                                   const std::string& portLabel,
                                    std::optional<float> portMinVal,
                                    std::optional<float> portMaxVal,
                                    std::optional<float> portDefaultVal,
@@ -827,6 +843,8 @@ private:
           plugin.controlInputPorts.push_back(index);
           extracker::PluginControlPortMeta meta;
           meta.index = index;
+          meta.symbol = portSymbol;
+          meta.label = portLabel;
           if (portMinVal) { meta.minVal = *portMinVal; meta.hasMin = true; }
           if (portMaxVal) { meta.maxVal = *portMaxVal; meta.hasMax = true; }
           if (portDefaultVal) { meta.defaultVal = *portDefaultVal; meta.hasDefault = true; }
@@ -834,6 +852,14 @@ private:
         }
         if (isOutput && std::find(plugin.controlOutputPorts.begin(), plugin.controlOutputPorts.end(), index) == plugin.controlOutputPorts.end()) {
           plugin.controlOutputPorts.push_back(index);
+          extracker::PluginControlPortMeta meta;
+          meta.index = index;
+          meta.symbol = portSymbol;
+          meta.label = portLabel;
+          if (portMinVal) { meta.minVal = *portMinVal; meta.hasMin = true; }
+          if (portMaxVal) { meta.maxVal = *portMaxVal; meta.hasMax = true; }
+          if (portDefaultVal) { meta.defaultVal = *portDefaultVal; meta.hasDefault = true; }
+          plugin.controlOutputMeta.push_back(meta);
         }
       }
 
@@ -864,6 +890,8 @@ private:
       bool isAudio = false;
       bool isControl = false;
       bool isEvent = false;
+      std::string portSymbol;
+      std::string portLabel;
       std::optional<float> portMinVal;
       std::optional<float> portMaxVal;
       std::optional<float> portDefaultVal;
@@ -900,6 +928,8 @@ private:
           isAudio = (line.find("lv2:AudioPort") != std::string::npos);
           isControl = (line.find("lv2:ControlPort") != std::string::npos);
           isEvent = lineIsEventPort(line);
+          portSymbol = parseQuotedStringAfterKey(line, "lv2:symbol");
+          portLabel = parseQuotedStringAfterKey(line, "rdfs:label");
           portMinVal = parseFloatAfterKey(line, "lv2:minimum");
           portMaxVal = parseFloatAfterKey(line, "lv2:maximum");
           portDefaultVal = parseFloatAfterKey(line, "lv2:default");
@@ -913,13 +943,19 @@ private:
           isAudio = isAudio || (line.find("lv2:AudioPort") != std::string::npos);
           isControl = isControl || (line.find("lv2:ControlPort") != std::string::npos);
           isEvent = isEvent || lineIsEventPort(line);
+          if (const std::string value = parseQuotedStringAfterKey(line, "lv2:symbol"); !value.empty()) {
+            portSymbol = value;
+          }
+          if (const std::string value = parseQuotedStringAfterKey(line, "rdfs:label"); !value.empty()) {
+            portLabel = value;
+          }
           if (auto v = parseFloatAfterKey(line, "lv2:minimum")) { portMinVal = v; }
           if (auto v = parseFloatAfterKey(line, "lv2:maximum")) { portMaxVal = v; }
           if (auto v = parseFloatAfterKey(line, "lv2:default")) { portDefaultVal = v; }
         }
 
         if (inPortBlock && line.find(']') != std::string::npos) {
-          applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, isControl, isEvent, portMinVal, portMaxVal, portDefaultVal, plugins);
+          applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, isControl, isEvent, portSymbol, portLabel, portMinVal, portMaxVal, portDefaultVal, plugins);
           inPortBlock = false;
           portIndex = -1;
           isInput = false;
@@ -927,6 +963,8 @@ private:
           isAudio = false;
           isControl = false;
           isEvent = false;
+          portSymbol.clear();
+          portLabel.clear();
           portMinVal = std::nullopt;
           portMaxVal = std::nullopt;
           portDefaultVal = std::nullopt;
@@ -939,6 +977,10 @@ private:
       std::sort(plugin.controlOutputPorts.begin(), plugin.controlOutputPorts.end());
       std::sort(plugin.eventInputPorts.begin(), plugin.eventInputPorts.end());
       std::sort(plugin.controlInputMeta.begin(), plugin.controlInputMeta.end(),
+                [](const extracker::PluginControlPortMeta& a, const extracker::PluginControlPortMeta& b) {
+                  return a.index < b.index;
+                });
+      std::sort(plugin.controlOutputMeta.begin(), plugin.controlOutputMeta.end(),
                 [](const extracker::PluginControlPortMeta& a, const extracker::PluginControlPortMeta& b) {
                   return a.index < b.index;
                 });

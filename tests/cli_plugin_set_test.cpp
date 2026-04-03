@@ -45,10 +45,11 @@ int main() {
   {
     std::ofstream pluginTtl(pluginTtlPath);
     pluginTtl << "@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n";
+    pluginTtl << "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n";
     pluginTtl << "<urn:extracker:test:runtime> a lv2:Plugin ;\n";
     pluginTtl << "  lv2:port [ a lv2:InputPort , lv2:AudioPort ; lv2:index 0 ] ,\n";
     pluginTtl << "           [ a lv2:OutputPort , lv2:AudioPort ; lv2:index 1 ] ,\n";
-    pluginTtl << "           [ a lv2:InputPort , lv2:ControlPort ; lv2:index 2 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ; lv2:default 0.25 ] ,\n";
+    pluginTtl << "           [ a lv2:InputPort , lv2:ControlPort ; lv2:index 2 ; lv2:symbol \"gain\" ; rdfs:label \"Gain\" ; lv2:minimum 0.0 ; lv2:maximum 1.0 ; lv2:default 0.25 ] ,\n";
     pluginTtl << "           [ a lv2:OutputPort , lv2:ControlPort ; lv2:index 3 ] .\n";
   }
 
@@ -61,7 +62,7 @@ int main() {
       "printf 'plugin scan\n"
       "plugin load lv2:urn:extracker:test:runtime\n"
       "plugin assign 9 lv2:urn:extracker:test:runtime\n"
-      "plugin set 9 2 0.5\n"
+      "plugin set 9 gain 0.5\n"
       "quit\n' | " + appPath;
 
   std::array<char, 1024> buffer{};
@@ -87,7 +88,7 @@ int main() {
   const bool sawScan = output.find("plugin(s) available") != std::string::npos;
   const bool sawLoad = output.find("Loaded plugin: lv2:urn:extracker:test:runtime") != std::string::npos;
   const bool sawAssign = output.find("Assigned lv2:urn:extracker:test:runtime to instrument 9") != std::string::npos;
-  const bool sawSet = output.find("Set instrument 9 control port 2 to 0.5") != std::string::npos;
+  const bool sawSet = output.find("Set instrument 9 control port 2 [gain] \"Gain\" to 0.5") != std::string::npos;
 
   std::filesystem::remove_all(tmpRoot, fsError);
 

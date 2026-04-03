@@ -2,10 +2,63 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
 namespace extracker {
+
+namespace {
+
+bool tryParseControlIndex(const std::string& token, int& outIndex) {
+  if (token.empty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const long value = std::strtol(token.c_str(), &end, 10);
+  if (end == nullptr || *end != '\0' || value < 0) {
+    return false;
+  }
+  outIndex = static_cast<int>(value);
+  return true;
+}
+
+const PluginControlPortMeta* findControlMetaByToken(
+    const std::vector<PluginControlPortMeta>& controls,
+    const std::string& token,
+    std::size_t& ordinalOut) {
+  int controlIndex = -1;
+  if (tryParseControlIndex(token, controlIndex)) {
+    for (std::size_t index = 0; index < controls.size(); ++index) {
+      if (controls[index].index == controlIndex) {
+        ordinalOut = index;
+        return &controls[index];
+      }
+    }
+  }
+
+  for (std::size_t index = 0; index < controls.size(); ++index) {
+    if (controls[index].symbol == token || controls[index].label == token) {
+      ordinalOut = index;
+      return &controls[index];
+    }
+  }
+
+  return nullptr;
+}
+
+std::string describeControlPort(const PluginControlPortMeta& meta) {
+  std::string description = std::to_string(meta.index);
+  if (!meta.symbol.empty()) {
+    description += " [" + meta.symbol + "]";
+  }
+  if (!meta.label.empty()) {
+    description += " \"" + meta.label + "\"";
+  }
+  return description;
+}
+
+}  // namespace
 
 void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
   std::string subcommand;
@@ -43,11 +96,11 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     }
   } else if (subcommand == "set") {
     int instrument = -1;
-    int controlPortIndex = -1;
+    std::string controlPortToken;
     double value = 0.0;
-    pluginInput >> instrument >> controlPortIndex >> value;
-    if (instrument < 0 || controlPortIndex < 0 || !pluginInput) {
-      std::cout << "Usage: plugin set <instrument> <control-port-index> <value>" << '\n';
+    pluginInput >> instrument >> controlPortToken >> value;
+    if (instrument < 0 || controlPortToken.empty() || !pluginInput) {
+      std::cout << "Usage: plugin set <instrument> <control-port-index|symbol> <value>" << '\n';
     } else if (!plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument))) {
       std::cout << "Failed to set plugin control; instrument " << instrument << " has no assigned plugin" << '\n';
     } else {
@@ -57,22 +110,16 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
         std::cout << "Failed to set plugin control; assigned plugin has no LV2 control metadata" << '\n';
       } else {
         std::size_t controlOrdinal = info.controlInMeta.size();
-        for (std::size_t index = 0; index < info.controlInMeta.size(); ++index) {
-          if (info.controlInMeta[index].index == controlPortIndex) {
-            controlOrdinal = index;
-            break;
-          }
-        }
-
-        if (controlOrdinal >= info.controlInMeta.size()) {
-          std::cout << "Unknown control input port index: " << controlPortIndex << '\n';
+        const PluginControlPortMeta* meta = findControlMetaByToken(info.controlInMeta, controlPortToken, controlOrdinal);
+        if (meta == nullptr) {
+          std::cout << "Unknown control input port: " << controlPortToken << '\n';
         } else {
           const std::string parameterName = "lv2_control_in_" + std::to_string(controlOrdinal);
           if (plugins.setInstrumentParameter(static_cast<std::uint8_t>(instrument), parameterName, value)) {
             std::cout << "Set instrument " << instrument << " control port "
-                      << controlPortIndex << " to " << value << '\n';
+                      << describeControlPort(*meta) << " to " << value << '\n';
           } else {
-            std::cout << "Failed to set control port " << controlPortIndex
+            std::cout << "Failed to set control port " << describeControlPort(*meta)
                       << " on instrument " << instrument << '\n';
           }
         }
@@ -80,10 +127,10 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     }
   } else if (subcommand == "get") {
     int instrument = -1;
-    int controlPortIndex = -1;
-    pluginInput >> instrument >> controlPortIndex;
-    if (instrument < 0 || controlPortIndex < 0 || !pluginInput) {
-      std::cout << "Usage: plugin get <instrument> <control-port-index>" << '\n';
+    std::string controlPortToken;
+    pluginInput >> instrument >> controlPortToken;
+    if (instrument < 0 || controlPortToken.empty() || !pluginInput) {
+      std::cout << "Usage: plugin get <instrument> <control-port-index|symbol>" << '\n';
     } else if (!plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument))) {
       std::cout << "Failed to get plugin control; instrument " << instrument << " has no assigned plugin" << '\n';
     } else {
@@ -92,33 +139,19 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       if (!plugins.getPluginPortInfo(pluginId, info)) {
         std::cout << "Failed to get plugin control; assigned plugin has no LV2 control metadata" << '\n';
       } else {
-        bool found = false;
-        for (std::size_t index = 0; index < info.controlInMeta.size(); ++index) {
-          if (info.controlInMeta[index].index == controlPortIndex) {
-            const std::string parameterName = "lv2_control_in_" + std::to_string(index);
-            const double value = plugins.getInstrumentParameter(static_cast<std::uint8_t>(instrument), parameterName);
-            std::cout << "Instrument " << instrument << " control port "
-                      << controlPortIndex << " = " << value << " (input)" << '\n';
-            found = true;
-            break;
-          }
-        }
-
-        if (!found) {
-          for (std::size_t index = 0; index < info.controlOutPorts.size(); ++index) {
-            if (info.controlOutPorts[index] == controlPortIndex) {
-              const std::string parameterName = "lv2_control_out_" + std::to_string(index);
-              const double value = plugins.getInstrumentParameter(static_cast<std::uint8_t>(instrument), parameterName);
-              std::cout << "Instrument " << instrument << " control port "
-                        << controlPortIndex << " = " << value << " (output)" << '\n';
-              found = true;
-              break;
-            }
-          }
-        }
-
-        if (!found) {
-          std::cout << "Unknown control port index: " << controlPortIndex << '\n';
+        std::size_t controlOrdinal = info.controlInMeta.size();
+        if (const PluginControlPortMeta* meta = findControlMetaByToken(info.controlInMeta, controlPortToken, controlOrdinal)) {
+          const std::string parameterName = "lv2_control_in_" + std::to_string(controlOrdinal);
+          const double value = plugins.getInstrumentParameter(static_cast<std::uint8_t>(instrument), parameterName);
+          std::cout << "Instrument " << instrument << " control port "
+                    << describeControlPort(*meta) << " = " << value << " (input)" << '\n';
+        } else if (const PluginControlPortMeta* meta = findControlMetaByToken(info.controlOutMeta, controlPortToken, controlOrdinal)) {
+          const std::string parameterName = "lv2_control_out_" + std::to_string(controlOrdinal);
+          const double value = plugins.getInstrumentParameter(static_cast<std::uint8_t>(instrument), parameterName);
+          std::cout << "Instrument " << instrument << " control port "
+                    << describeControlPort(*meta) << " = " << value << " (output)" << '\n';
+        } else {
+          std::cout << "Unknown control port: " << controlPortToken << '\n';
         }
       }
     }
@@ -145,7 +178,7 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
         std::cout << "  audio out:    " << info.audioOut << '\n';
         std::cout << "  control in:   " << info.controlInCount << '\n';
         for (const auto& meta : info.controlInMeta) {
-          std::cout << "    port " << meta.index << ":";
+          std::cout << "    port " << describeControlPort(meta) << ":";
           if (meta.hasMin)     { std::cout << " min=" << meta.minVal; }
           if (meta.hasMax)     { std::cout << " max=" << meta.maxVal; }
           if (meta.hasDefault) { std::cout << " default=" << meta.defaultVal; }
@@ -153,6 +186,17 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
           std::cout << '\n';
         }
         std::cout << "  control out:  " << info.controlOutCount << '\n';
+        for (const auto& meta : info.controlOutMeta) {
+          std::cout << "    port " << describeControlPort(meta) << ":";
+          if (!meta.hasMin && !meta.hasMax && !meta.hasDefault) {
+            std::cout << " (no range)";
+          } else {
+            if (meta.hasMin)     { std::cout << " min=" << meta.minVal; }
+            if (meta.hasMax)     { std::cout << " max=" << meta.maxVal; }
+            if (meta.hasDefault) { std::cout << " default=" << meta.defaultVal; }
+          }
+          std::cout << '\n';
+        }
         std::cout << "  event in:     " << info.eventInCount << '\n';
       }
     }
@@ -204,8 +248,8 @@ void handleHelpCommand() {
   std::cout << "plugin list                list discovered plugins" << '\n';
   std::cout << "plugin load <id>           load plugin by id (e.g. builtin.sine)" << '\n';
   std::cout << "plugin assign <i> <id>     assign loaded plugin to instrument slot" << '\n';
-  std::cout << "plugin set <i> <p> <v>     set LV2 control input port index to value" << '\n';
-  std::cout << "plugin get <i> <p>         get LV2 control port value by port index" << '\n';
+  std::cout << "plugin set <i> <p> <v>     set LV2 control input by port index or symbol" << '\n';
+  std::cout << "plugin get <i> <p>         get LV2 control by port index or symbol" << '\n';
   std::cout << "plugin info <id>           show port layout for a plugin" << '\n';
   std::cout << "plugin status              show instrument->plugin assignments" << '\n';
   std::cout << "sine <instrument>          convenience command for builtin.sine" << '\n';

@@ -45,11 +45,12 @@ int main() {
   {
     std::ofstream pluginTtl(pluginTtlPath);
     pluginTtl << "@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n";
+    pluginTtl << "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n";
     pluginTtl << "<urn:extracker:test:runtime> a lv2:Plugin ;\n";
     pluginTtl << "  lv2:port [ a lv2:InputPort , lv2:AudioPort ; lv2:index 0 ] ,\n";
     pluginTtl << "           [ a lv2:OutputPort , lv2:AudioPort ; lv2:index 1 ] ,\n";
-    pluginTtl << "           [ a lv2:InputPort , lv2:ControlPort ; lv2:index 2 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ; lv2:default 0.25 ] ,\n";
-    pluginTtl << "           [ a lv2:OutputPort , lv2:ControlPort ; lv2:index 3 ] .\n";
+    pluginTtl << "           [ a lv2:InputPort , lv2:ControlPort ; lv2:index 2 ; lv2:symbol \"gain\" ; rdfs:label \"Gain\" ; lv2:minimum 0.0 ; lv2:maximum 1.0 ; lv2:default 0.25 ] ,\n";
+    pluginTtl << "           [ a lv2:OutputPort , lv2:ControlPort ; lv2:index 3 ; lv2:symbol \"meter\" ; rdfs:label \"Meter\" ] .\n";
   }
 
   if (setenv("LV2_PATH", tmpRoot.string().c_str(), 1) != 0) {
@@ -61,8 +62,9 @@ int main() {
       "printf 'plugin scan\n"
       "plugin load lv2:urn:extracker:test:runtime\n"
       "plugin assign 9 lv2:urn:extracker:test:runtime\n"
-      "plugin set 9 2 0.5\n"
-      "plugin get 9 2\n"
+      "plugin info lv2:urn:extracker:test:runtime\n"
+      "plugin set 9 gain 0.5\n"
+      "plugin get 9 gain\n"
       "quit\n' | " + appPath;
 
   std::array<char, 1024> buffer{};
@@ -85,12 +87,14 @@ int main() {
     return 1;
   }
 
-  const bool sawGet = output.find("Instrument 9 control port 2 = 0.5 (input)") != std::string::npos;
+  const bool sawInfo = output.find("port 2 [gain] \"Gain\": min=0 max=1 default=0.25") != std::string::npos;
+  const bool sawSet = output.find("Set instrument 9 control port 2 [gain] \"Gain\" to 0.5") != std::string::npos;
+  const bool sawGet = output.find("Instrument 9 control port 2 [gain] \"Gain\" = 0.5 (input)") != std::string::npos;
 
   std::filesystem::remove_all(tmpRoot, fsError);
 
-  if (!sawGet) {
-    std::cerr << "Missing expected plugin get output marker" << '\n';
+  if (!sawInfo || !sawSet || !sawGet) {
+    std::cerr << "Missing expected symbolic plugin control output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
   }

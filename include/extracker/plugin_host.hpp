@@ -60,6 +60,8 @@ public:
 
 struct PluginControlPortMeta {
   int index = -1;
+  std::string symbol;
+  std::string label;
   float minVal = 0.0f;
   float maxVal = 1.0f;
   float defaultVal = 0.0f;
@@ -75,7 +77,7 @@ struct PluginPortInfo {
   int controlOutCount = 0;
   int eventInCount = 0;
   std::vector<PluginControlPortMeta> controlInMeta;
-  std::vector<int> controlOutPorts;
+  std::vector<PluginControlPortMeta> controlOutMeta;
 };
 
 class PluginHost {
