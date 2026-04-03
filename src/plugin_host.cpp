@@ -218,12 +218,24 @@ using Lv2DescriptorFunction = const Lv2Descriptor* (*)(std::uint32_t index);
 struct Lv2DiscoveredPlugin {
   std::string uri;
   std::filesystem::path binaryPath;
+  int audioInputPort = -1;
+  int audioOutputPort = -1;
 };
 
 class Lv2DynamicInstrumentPlugin final : public extracker::IInstrumentPlugin {
 public:
-  Lv2DynamicInstrumentPlugin(const std::string& uri, const std::filesystem::path& binaryPath)
-      : uri_(uri), binaryPath_(binaryPath), fallbackSynth_(), moduleHandle_(nullptr), descriptor_(nullptr), loaded_(false) {
+  Lv2DynamicInstrumentPlugin(const std::string& uri,
+                             const std::filesystem::path& binaryPath,
+                             int audioInputPort,
+                             int audioOutputPort)
+      : uri_(uri),
+        binaryPath_(binaryPath),
+        audioInputPort_(audioInputPort),
+        audioOutputPort_(audioOutputPort),
+        fallbackSynth_(),
+        moduleHandle_(nullptr),
+        descriptor_(nullptr),
+        loaded_(false) {
     loaded_ = tryLoadDescriptor();
   }
 
@@ -257,6 +269,15 @@ public:
   double getParameter(const std::string& name) const override {
     if (name == "lv2_loaded") {
       return loaded_ ? 1.0 : 0.0;
+    }
+    if (name == "lv2_port_map_ready") {
+      return audioOutputPort_ >= 0 ? 1.0 : 0.0;
+    }
+    if (name == "lv2_audio_input_port") {
+      return static_cast<double>(audioInputPort_);
+    }
+    if (name == "lv2_audio_output_port") {
+      return static_cast<double>(audioOutputPort_);
     }
     return fallbackSynth_.getParameter(name);
   }
@@ -307,6 +328,8 @@ private:
 
   std::string uri_;
   std::filesystem::path binaryPath_;
+  int audioInputPort_;
+  int audioOutputPort_;
   Lv2PlaceholderInstrumentPlugin fallbackSynth_;
   void* moduleHandle_;
   const Lv2Descriptor* descriptor_;
@@ -327,7 +350,11 @@ public:
         host.registerPluginFactory(
             pluginId,
             [plugin]() {
-              return std::make_unique<Lv2DynamicInstrumentPlugin>(plugin.uri, plugin.binaryPath);
+              return std::make_unique<Lv2DynamicInstrumentPlugin>(
+                  plugin.uri,
+                  plugin.binaryPath,
+                  plugin.audioInputPort,
+                  plugin.audioOutputPort);
             });
         discovered += 1;
       }
@@ -385,6 +412,110 @@ private:
     return line.substr(start + 1, end - start - 1);
   }
 
+  static int parsePortIndexValue(const std::string& line) {
+    const std::string key = "lv2:index";
+    std::size_t keyPos = line.find(key);
+    if (keyPos == std::string::npos) {
+      return -1;
+    }
+
+    std::string tail = line.substr(keyPos + key.size());
+    std::istringstream parse(tail);
+    int value = -1;
+    parse >> value;
+    if (!parse || value < 0) {
+      return -1;
+    }
+    return value;
+  }
+
+  static void applyParsedPortBlock(const std::string& uri,
+                                   int index,
+                                   bool isInput,
+                                   bool isOutput,
+                                   bool isAudio,
+                                   std::vector<Lv2DiscoveredPlugin>& plugins) {
+    if (uri.empty() || index < 0 || !isAudio) {
+      return;
+    }
+
+    for (auto& plugin : plugins) {
+      if (plugin.uri != uri) {
+        continue;
+      }
+      if (isInput && plugin.audioInputPort < 0) {
+        plugin.audioInputPort = index;
+      }
+      if (isOutput && plugin.audioOutputPort < 0) {
+        plugin.audioOutputPort = index;
+      }
+      break;
+    }
+  }
+
+  static void parsePluginPortLayout(const std::filesystem::path& bundleDirectory,
+                                    std::vector<Lv2DiscoveredPlugin>& plugins) {
+    for (const auto& entry : std::filesystem::directory_iterator(bundleDirectory)) {
+      if (!entry.is_regular_file() || entry.path().extension() != ".ttl") {
+        continue;
+      }
+
+      std::ifstream ttl(entry.path());
+      if (!ttl) {
+        continue;
+      }
+
+      std::string currentUri;
+      bool inPortBlock = false;
+      int portIndex = -1;
+      bool isInput = false;
+      bool isOutput = false;
+      bool isAudio = false;
+
+      std::string line;
+      while (std::getline(ttl, line)) {
+        if (line.find("lv2:Plugin") != std::string::npos) {
+          std::string uri = firstAngleToken(line);
+          if (!uri.empty()) {
+            currentUri = uri;
+          }
+        }
+
+        const bool hasPortBlockStart =
+            line.find('[') != std::string::npos &&
+            (line.find("lv2:port") != std::string::npos ||
+             line.find("lv2:InputPort") != std::string::npos ||
+             line.find("lv2:OutputPort") != std::string::npos ||
+             line.find("lv2:AudioPort") != std::string::npos);
+
+        if (!inPortBlock && !currentUri.empty() && hasPortBlockStart) {
+          inPortBlock = true;
+          portIndex = parsePortIndexValue(line);
+          isInput = (line.find("lv2:InputPort") != std::string::npos);
+          isOutput = (line.find("lv2:OutputPort") != std::string::npos);
+          isAudio = (line.find("lv2:AudioPort") != std::string::npos);
+        } else if (inPortBlock) {
+          int parsedIndex = parsePortIndexValue(line);
+          if (parsedIndex >= 0) {
+            portIndex = parsedIndex;
+          }
+          isInput = isInput || (line.find("lv2:InputPort") != std::string::npos);
+          isOutput = isOutput || (line.find("lv2:OutputPort") != std::string::npos);
+          isAudio = isAudio || (line.find("lv2:AudioPort") != std::string::npos);
+        }
+
+        if (inPortBlock && line.find(']') != std::string::npos) {
+          applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, plugins);
+          inPortBlock = false;
+          portIndex = -1;
+          isInput = false;
+          isOutput = false;
+          isAudio = false;
+        }
+      }
+    }
+  }
+
   static std::vector<Lv2DiscoveredPlugin> discoverPlugins() {
     std::vector<Lv2DiscoveredPlugin> plugins;
     std::unordered_set<std::string> dedup;
@@ -439,6 +570,8 @@ private:
             }
           }
         }
+
+        parsePluginPortLayout(entry.path(), plugins);
       }
     }
 

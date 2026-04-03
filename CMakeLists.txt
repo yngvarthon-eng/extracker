@@ -72,6 +72,11 @@ if(BUILD_TESTING)
   target_link_libraries(extracker_effect_regression_test PRIVATE extracker_core)
   add_test(NAME extracker_effect_regression_test COMMAND extracker_effect_regression_test)
 
+  add_executable(extracker_lv2_port_map_scaffold_test tests/lv2_port_map_scaffold_test.cpp)
+  target_include_directories(extracker_lv2_port_map_scaffold_test PRIVATE include)
+  target_link_libraries(extracker_lv2_port_map_scaffold_test PRIVATE extracker_core)
+  add_test(NAME extracker_lv2_port_map_scaffold_test COMMAND extracker_lv2_port_map_scaffold_test)
+
   add_executable(extracker_midi_clock_cli_logic_test
     tests/midi_clock_cli_logic_test.cpp
     src/midi_cli.cpp
