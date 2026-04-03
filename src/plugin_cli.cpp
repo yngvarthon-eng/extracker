@@ -1,5 +1,6 @@
 #include "extracker/plugin_cli.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -74,8 +75,21 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
         std::cout << "  event in:     " << info.eventInCount << '\n';
       }
     }
+  } else if (subcommand == "status") {
+    std::cout << "Instrument assignments:" << '\n';
+    bool hasAny = false;
+    for (std::size_t i = 0; i < PluginHost::kMaxInstrumentSlots; ++i) {
+      if (plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(i))) {
+        std::cout << "  " << i << ": "
+                  << plugins.pluginForInstrument(static_cast<std::uint8_t>(i)) << '\n';
+        hasAny = true;
+      }
+    }
+    if (!hasAny) {
+      std::cout << "  (none)" << '\n';
+    }
   } else {
-    std::cout << "Usage: plugin <scan|list|load|assign|info> ..." << '\n';
+    std::cout << "Usage: plugin <scan|list|load|assign|info|status> ..." << '\n';
   }
 }
 
@@ -110,6 +124,7 @@ void handleHelpCommand() {
   std::cout << "plugin load <id>           load plugin by id (e.g. builtin.sine)" << '\n';
   std::cout << "plugin assign <i> <id>     assign loaded plugin to instrument slot" << '\n';
   std::cout << "plugin info <id>           show port layout for a plugin" << '\n';
+  std::cout << "plugin status              show instrument->plugin assignments" << '\n';
   std::cout << "sine <instrument>          convenience command for builtin.sine" << '\n';
   std::cout << "note set r c n i [v fx fv] set note in pattern (optional vel/effect)" << '\n';
   std::cout << "note set dry ...           parse and preview note set without writing" << '\n';

@@ -194,4 +194,8 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_plugin_info_test tests/cli_plugin_info_test.cpp)
   add_dependencies(extracker_cli_plugin_info_test extracker)
   add_test(NAME extracker_cli_plugin_info_test COMMAND extracker_cli_plugin_info_test)
+
+  add_executable(extracker_cli_plugin_status_test tests/cli_plugin_status_test.cpp)
+  add_dependencies(extracker_cli_plugin_status_test extracker)
+  add_test(NAME extracker_cli_plugin_status_test COMMAND extracker_cli_plugin_status_test)
 endif()
