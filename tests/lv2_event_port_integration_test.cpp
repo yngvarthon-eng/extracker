@@ -40,13 +40,14 @@ int main() {
 
   {
     std::ofstream pluginTtl(pluginTtlPath);
-    pluginTtl << "@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n";
+    pluginTtl << "@prefix lv2:  <http://lv2plug.in/ns/lv2core#> .\n";
+    pluginTtl << "@prefix atom: <http://lv2plug.in/ns/ext/atom#> .\n";
     pluginTtl << "<urn:extracker:test:runtime> a lv2:Plugin ;\n";
     pluginTtl << "  lv2:port [ a lv2:InputPort , lv2:AudioPort ; lv2:index 0 ] ,\n";
     pluginTtl << "           [ a lv2:OutputPort , lv2:AudioPort ; lv2:index 1 ] ,\n";
     pluginTtl << "           [ a lv2:InputPort , lv2:ControlPort ; lv2:index 2 ] ,\n";
     pluginTtl << "           [ a lv2:OutputPort , lv2:ControlPort ; lv2:index 3 ] ,\n";
-    pluginTtl << "           [ a lv2:InputPort , lv2:EventPort ; lv2:index 4 ] .\n";
+    pluginTtl << "           [ a lv2:InputPort , atom:AtomPort ; lv2:index 4 ] .\n";
   }
 
   if (setenv("LV2_PATH", tmpRoot.string().c_str(), 1) != 0) {

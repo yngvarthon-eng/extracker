@@ -197,6 +197,58 @@ struct NoteEvent {
   bool isNoteOn = false;
 };
 
+// ── LV2 Atom / MIDI structs (mirrors official lv2/atom.h & midi.h) ──────────
+
+using Lv2Urid = std::uint32_t;
+
+struct Lv2Atom {
+  std::uint32_t size;  // payload size, not including this header
+  Lv2Urid      type;
+};
+
+struct Lv2AtomSequenceBody {
+  Lv2Urid unit;  // time unit URID (0 = frames)
+  Lv2Urid pad;   // unused
+};
+
+struct Lv2AtomSequence {
+  Lv2Atom             atom;  // type = kUridAtomSequence, size = sizeof(body) + events
+  Lv2AtomSequenceBody body;
+};
+
+// Each event in the sequence is prefixed by this header.
+// The MIDI bytes follow immediately after body.
+struct Lv2AtomEvent {
+  std::int64_t frames;  // event timestamp in frames from block start
+  Lv2Atom      body;   // body.size = 3 for 3-byte MIDI; body.type = kUridMidiEvent
+};
+
+// Well-known URIDs – we assign them statically.  A real host would call
+// the LV2_URID_Map feature; plugins must accept whatever values are given.
+constexpr Lv2Urid kUridAtomSequence = 1;
+constexpr Lv2Urid kUridMidiEvent    = 2;
+constexpr std::size_t kAtomEventSize = sizeof(Lv2AtomEvent) + 3; // 8+8+4 + 3 bytes midi
+
+// URID map feature tables (passed to plugin on instantiate).
+struct Lv2UridMapData {
+  void*     handle;
+  Lv2Urid (*map)(void* handle, const char* uri);
+};
+
+static Lv2Urid staticUridMap(void* /*handle*/, const char* uri) {
+  if (std::string_view(uri) == "http://lv2plug.in/ns/ext/atom#Sequence") {
+    return kUridAtomSequence;
+  }
+  if (std::string_view(uri) == "http://lv2plug.in/ns/ext/midi#MidiEvent") {
+    return kUridMidiEvent;
+  }
+  return 0;
+}
+
+static Lv2UridMapData kStaticUridMapData{nullptr, staticUridMap};
+
+// ────────────────────────────────────────────────────────────────────────────
+
 struct Lv2Feature {
   const char* uri;
   const void* data;
@@ -254,7 +306,7 @@ public:
         loaded_(false) {
       controlInputValues_.assign(controlInputPorts_.size(), 0.0f);
       controlOutputValues_.assign(controlOutputPorts_.size(), 0.0f);
-      eventInputBuffer_.assign(4096, 0);
+      resizeAtomSequenceBuffer(4096);
       pendingNoteEvents_.clear();
     loaded_ = tryLoadDescriptor();
   }
@@ -402,7 +454,9 @@ private:
       return false;
     }
 
-    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), nullptr, nullptr);
+    Lv2Feature uridMapFeature{"http://lv2plug.in/ns/ext/urid#map", &kStaticUridMapData};
+    const Lv2Feature* features[] = {&uridMapFeature, nullptr};
+    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), nullptr, features);
     if (instance_ == nullptr) {
       return false;
     }
@@ -416,7 +470,7 @@ private:
       controlOutputValues_.resize(controlOutputPorts_.size(), 0.0f);
     }
     if (eventInputBuffer_.size() < 4096) {
-      eventInputBuffer_.assign(4096, 0);
+      resizeAtomSequenceBuffer(4096);
     }
 
     if (audioInputPort_ >= 0) {
@@ -489,46 +543,52 @@ private:
     return sawNonZero;
   }
 
+  void resizeAtomSequenceBuffer(std::size_t capacityBytes) {
+    eventInputBuffer_.assign(capacityBytes, 0);
+    // Write an empty LV2_Atom_Sequence header so the buffer is always valid.
+    if (eventInputBuffer_.size() >= sizeof(Lv2AtomSequence)) {
+      auto* seq = reinterpret_cast<Lv2AtomSequence*>(eventInputBuffer_.data());
+      seq->atom.type = kUridAtomSequence;
+      seq->atom.size = static_cast<std::uint32_t>(sizeof(Lv2AtomSequenceBody));
+      seq->body.unit = 0;  // 0 = audio frames
+      seq->body.pad  = 0;
+    }
+  }
+
   void populateEventBuffer() {
-    std::fill(eventInputBuffer_.begin(), eventInputBuffer_.end(), 0);
+    // Reset to an empty sequence.
+    resizeAtomSequenceBuffer(eventInputBuffer_.size());
+
+    auto* seq = reinterpret_cast<Lv2AtomSequence*>(eventInputBuffer_.data());
+    const std::size_t headerSize = sizeof(Lv2AtomSequence);
+    std::size_t writeOffset = headerSize;  // bytes written past the sequence header
 
     for (const auto& event : pendingNoteEvents_) {
-      if (event.isNoteOn) {
-        uint8_t midiData[] = {0x90, static_cast<uint8_t>(event.midiNote), event.velocity};
-        if (!writeToMidiBuffer(midiData, 3)) {
-          break;
-        }
-      } else {
-        uint8_t midiData[] = {0x80, static_cast<uint8_t>(event.midiNote), 0};
-        if (!writeToMidiBuffer(midiData, 3)) {
-          break;
-        }
+      if (writeOffset + kAtomEventSize > eventInputBuffer_.size()) {
+        break;
       }
+
+      const std::uint8_t status = event.isNoteOn ? 0x90 : 0x80;
+      const std::uint8_t note   = static_cast<std::uint8_t>(event.midiNote);
+      const std::uint8_t vel    = event.isNoteOn ? event.velocity : 0;
+
+      auto* atomEvent = reinterpret_cast<Lv2AtomEvent*>(eventInputBuffer_.data() + writeOffset);
+      atomEvent->frames      = 0;
+      atomEvent->body.type   = kUridMidiEvent;
+      atomEvent->body.size   = 3;
+      uint8_t* midiBytes = eventInputBuffer_.data() + writeOffset + sizeof(Lv2AtomEvent);
+      midiBytes[0] = status;
+      midiBytes[1] = note;
+      midiBytes[2] = vel;
+
+      // Pad to 8-byte alignment as per LV2 atom spec.
+      const std::size_t alignedEventSize = (sizeof(Lv2AtomEvent) + 3 + 7) & ~static_cast<std::size_t>(7);
+      writeOffset += alignedEventSize;
+
+      seq->atom.size += static_cast<std::uint32_t>(alignedEventSize);
     }
 
     pendingNoteEvents_.clear();
-  }
-
-  bool writeToMidiBuffer(const uint8_t* data, size_t size) {
-    if (eventInputBuffer_.size() < size + 1) {
-      return false;
-    }
-
-    auto idx = eventInputBuffer_.begin();
-    while (idx != eventInputBuffer_.end() && *idx != 0) {
-      ++idx;
-    }
-
-    if (std::distance(idx, eventInputBuffer_.end()) < static_cast<long>(size + 1)) {
-      return false;
-    }
-
-    for (size_t i = 0; i < size; ++i) {
-      *idx++ = data[i];
-    }
-    *idx = 0;
-
-    return true;
   }
 
   bool tryLoadDescriptor() {
@@ -581,7 +641,7 @@ private:
   std::vector<float> audioOutputBuffer_;
   std::vector<float> controlInputValues_;
   std::vector<float> controlOutputValues_;
-  std::vector<uint8_t> eventInputBuffer_;
+  std::vector<std::uint8_t> eventInputBuffer_;
   std::vector<NoteEvent> pendingNoteEvents_;
   bool loaded_;
   bool runtimeActive_ = false;
@@ -775,7 +835,13 @@ private:
              line.find("lv2:OutputPort") != std::string::npos ||
              line.find("lv2:AudioPort") != std::string::npos ||
              line.find("lv2:ControlPort") != std::string::npos ||
-             line.find("lv2:EventPort") != std::string::npos);
+             line.find("lv2:EventPort") != std::string::npos ||
+             line.find("atom:AtomPort") != std::string::npos);
+
+        const auto lineIsEventPort = [](const std::string& l) {
+          return l.find("lv2:EventPort") != std::string::npos ||
+                 l.find("atom:AtomPort") != std::string::npos;
+        };
 
         if (!inPortBlock && !currentUri.empty() && hasPortBlockStart) {
           inPortBlock = true;
@@ -784,7 +850,7 @@ private:
           isOutput = (line.find("lv2:OutputPort") != std::string::npos);
           isAudio = (line.find("lv2:AudioPort") != std::string::npos);
           isControl = (line.find("lv2:ControlPort") != std::string::npos);
-          isEvent = (line.find("lv2:EventPort") != std::string::npos);
+          isEvent = lineIsEventPort(line);
         } else if (inPortBlock) {
           int parsedIndex = parsePortIndexValue(line);
           if (parsedIndex >= 0) {
@@ -794,7 +860,7 @@ private:
           isOutput = isOutput || (line.find("lv2:OutputPort") != std::string::npos);
           isAudio = isAudio || (line.find("lv2:AudioPort") != std::string::npos);
           isControl = isControl || (line.find("lv2:ControlPort") != std::string::npos);
-          isEvent = isEvent || (line.find("lv2:EventPort") != std::string::npos);
+          isEvent = isEvent || lineIsEventPort(line);
         }
 
         if (inPortBlock && line.find(']') != std::string::npos) {

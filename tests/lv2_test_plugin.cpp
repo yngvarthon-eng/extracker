@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cmath>
+#include <cstring>
 
 namespace {
 
@@ -10,6 +11,29 @@ struct Lv2Feature {
 };
 
 using Lv2Handle = void*;
+
+// Mirror of LV2 atom structs (must match host definition)
+struct Lv2Atom {
+  std::uint32_t size;
+  std::uint32_t type;
+};
+
+struct Lv2AtomSequenceBody {
+  std::uint32_t unit;
+  std::uint32_t pad;
+};
+
+struct Lv2AtomSequence {
+  Lv2Atom atom;
+  Lv2AtomSequenceBody body;
+};
+
+struct Lv2AtomEvent {
+  std::int64_t  frames;
+  Lv2Atom       body;
+};
+
+static constexpr std::uint32_t kUridMidiEvent = 2;  // matches host assignment
 
 struct Lv2Descriptor {
   const char* uri;
@@ -27,15 +51,15 @@ struct Lv2Descriptor {
 };
 
 struct PluginState {
-  float* in = nullptr;
-  float* out = nullptr;
-  float* gain = nullptr;
-  float* meter = nullptr;
-  uint8_t* events = nullptr;
-  float phase = 0.0f;
-  float frequency = 0.0f;
-  bool noteActive = false;
-  float eventBoost = 0.0f;
+  float*   in = nullptr;
+  float*   out = nullptr;
+  float*   gain = nullptr;
+  float*   meter = nullptr;
+  void*    atomSeq = nullptr;  // LV2_Atom_Sequence*
+  float    phase = 0.0f;
+  float    frequency = 0.0f;
+  bool     noteActive = false;
+  float    eventBoost = 0.0f;
 };
 
 Lv2Handle instantiate(const Lv2Descriptor*, double, const char*, const Lv2Feature* const*) {
@@ -57,7 +81,7 @@ void connectPort(Lv2Handle instance, std::uint32_t port, void* data) {
   } else if (port == 3) {
     state->meter = static_cast<float*>(data);
   } else if (port == 4) {
-    state->events = static_cast<uint8_t*>(data);
+    state->atomSeq = data;  // LV2_Atom_Sequence*
   }
 }
 
@@ -69,24 +93,31 @@ void run(Lv2Handle instance, std::uint32_t sampleCount) {
     return;
   }
 
-  if (state->events != nullptr) {
-    std::uint8_t* eventPtr = state->events;
-    while (*eventPtr != 0 && eventPtr < state->events + 256) {
-      std::uint8_t status = *eventPtr;
-      std::uint8_t note = *(eventPtr + 1);
-      std::uint8_t velocity = *(eventPtr + 2);
-
-      if ((status & 0xF0) == 0x90 && velocity > 0) {
-        state->noteActive = true;
-        state->frequency = 440.0f * std::pow(2.0f, static_cast<float>(note - 69) / 12.0f);
-        state->phase = 0.0f;
-        state->eventBoost = 0.3f;
-      } else if ((status & 0xF0) == 0x80 || ((status & 0xF0) == 0x90 && velocity == 0)) {
-        state->noteActive = false;
-        state->eventBoost = 0.0f;
+  if (state->atomSeq != nullptr) {
+    const auto* seq = static_cast<const Lv2AtomSequence*>(state->atomSeq);
+    const char* iter = reinterpret_cast<const char*>(seq) + sizeof(Lv2AtomSequence);
+    const char* end  = reinterpret_cast<const char*>(seq) + sizeof(Lv2Atom) + seq->atom.size;
+    while (iter < end) {
+      const auto* ev = reinterpret_cast<const Lv2AtomEvent*>(iter);
+      if (ev->body.type == kUridMidiEvent && ev->body.size >= 3) {
+        const auto* midi = reinterpret_cast<const std::uint8_t*>(ev) + sizeof(Lv2AtomEvent);
+        const std::uint8_t status   = midi[0];
+        const std::uint8_t note     = midi[1];
+        const std::uint8_t velocity = midi[2];
+        if ((status & 0xF0) == 0x90 && velocity > 0) {
+          state->noteActive = true;
+          state->frequency  = 440.0f * std::pow(2.0f, static_cast<float>(note - 69) / 12.0f);
+          state->phase      = 0.0f;
+          state->eventBoost = 0.3f;
+        } else if ((status & 0xF0) == 0x80 || ((status & 0xF0) == 0x90 && velocity == 0)) {
+          state->noteActive = false;
+          state->eventBoost = 0.0f;
+        }
       }
-
-      eventPtr += 3;
+      // Advance by sizeof(Lv2AtomEvent) + body.size, padded to 8-byte boundary.
+      const std::size_t eventBytes = sizeof(Lv2AtomEvent) + ev->body.size;
+      const std::size_t aligned    = (eventBytes + 7) & ~static_cast<std::size_t>(7);
+      iter += aligned;
     }
   }
 
