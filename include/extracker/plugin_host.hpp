@@ -75,6 +75,7 @@ struct PluginPortInfo {
   int controlOutCount = 0;
   int eventInCount = 0;
   std::vector<PluginControlPortMeta> controlInMeta;
+  std::vector<int> controlOutPorts;
 };
 
 class PluginHost {

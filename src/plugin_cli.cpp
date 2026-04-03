@@ -78,6 +78,50 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
         }
       }
     }
+  } else if (subcommand == "get") {
+    int instrument = -1;
+    int controlPortIndex = -1;
+    pluginInput >> instrument >> controlPortIndex;
+    if (instrument < 0 || controlPortIndex < 0 || !pluginInput) {
+      std::cout << "Usage: plugin get <instrument> <control-port-index>" << '\n';
+    } else if (!plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument))) {
+      std::cout << "Failed to get plugin control; instrument " << instrument << " has no assigned plugin" << '\n';
+    } else {
+      const std::string pluginId = plugins.pluginForInstrument(static_cast<std::uint8_t>(instrument));
+      PluginPortInfo info;
+      if (!plugins.getPluginPortInfo(pluginId, info)) {
+        std::cout << "Failed to get plugin control; assigned plugin has no LV2 control metadata" << '\n';
+      } else {
+        bool found = false;
+        for (std::size_t index = 0; index < info.controlInMeta.size(); ++index) {
+          if (info.controlInMeta[index].index == controlPortIndex) {
+            const std::string parameterName = "lv2_control_in_" + std::to_string(index);
+            const double value = plugins.getInstrumentParameter(static_cast<std::uint8_t>(instrument), parameterName);
+            std::cout << "Instrument " << instrument << " control port "
+                      << controlPortIndex << " = " << value << " (input)" << '\n';
+            found = true;
+            break;
+          }
+        }
+
+        if (!found) {
+          for (std::size_t index = 0; index < info.controlOutPorts.size(); ++index) {
+            if (info.controlOutPorts[index] == controlPortIndex) {
+              const std::string parameterName = "lv2_control_out_" + std::to_string(index);
+              const double value = plugins.getInstrumentParameter(static_cast<std::uint8_t>(instrument), parameterName);
+              std::cout << "Instrument " << instrument << " control port "
+                        << controlPortIndex << " = " << value << " (output)" << '\n';
+              found = true;
+              break;
+            }
+          }
+        }
+
+        if (!found) {
+          std::cout << "Unknown control port index: " << controlPortIndex << '\n';
+        }
+      }
+    }
   } else if (subcommand == "scan") {
     const std::size_t found = plugins.rescanExternalPlugins();
     if (found > 0) {
@@ -126,7 +170,7 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       std::cout << "  (none)" << '\n';
     }
   } else {
-    std::cout << "Usage: plugin <scan|list|load|assign|set|info|status> ..." << '\n';
+    std::cout << "Usage: plugin <scan|list|load|assign|set|get|info|status> ..." << '\n';
   }
 }
 
@@ -161,6 +205,7 @@ void handleHelpCommand() {
   std::cout << "plugin load <id>           load plugin by id (e.g. builtin.sine)" << '\n';
   std::cout << "plugin assign <i> <id>     assign loaded plugin to instrument slot" << '\n';
   std::cout << "plugin set <i> <p> <v>     set LV2 control input port index to value" << '\n';
+  std::cout << "plugin get <i> <p>         get LV2 control port value by port index" << '\n';
   std::cout << "plugin info <id>           show port layout for a plugin" << '\n';
   std::cout << "plugin status              show instrument->plugin assignments" << '\n';
   std::cout << "sine <instrument>          convenience command for builtin.sine" << '\n';

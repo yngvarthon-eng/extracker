@@ -363,6 +363,17 @@ public:
   }
 
   double getParameter(const std::string& name) const override {
+    const std::string controlInputPrefix = "lv2_control_in_";
+    if (name.rfind(controlInputPrefix, 0) == 0) {
+      std::size_t portOrdinal = 0;
+      std::istringstream parse(name.substr(controlInputPrefix.size()));
+      parse >> portOrdinal;
+      if (!parse || !parse.eof() || portOrdinal >= controlInputValues_.size()) {
+        return 0.0;
+      }
+      return static_cast<double>(controlInputValues_[portOrdinal]);
+    }
+
     const std::string controlOutputPrefix = "lv2_control_out_";
     if (name.rfind(controlOutputPrefix, 0) == 0) {
       std::size_t portOrdinal = 0;
@@ -678,7 +689,8 @@ public:
         portInfo.controlInCount = static_cast<int>(plugin.controlInputPorts.size());
         portInfo.controlOutCount= static_cast<int>(plugin.controlOutputPorts.size());
         portInfo.eventInCount   = static_cast<int>(plugin.eventInputPorts.size());
-        portInfo.controlInMeta   = plugin.controlInputMeta;
+        portInfo.controlInMeta  = plugin.controlInputMeta;
+        portInfo.controlOutPorts = plugin.controlOutputPorts;
         host.registerPluginPortInfo(pluginId, portInfo);
         discovered += 1;
       }
