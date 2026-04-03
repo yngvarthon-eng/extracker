@@ -43,7 +43,9 @@ int main() {
     pluginTtl << "@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n";
     pluginTtl << "<urn:extracker:test:runtime> a lv2:Plugin ;\n";
     pluginTtl << "  lv2:port [ a lv2:InputPort , lv2:AudioPort ; lv2:index 0 ] ,\n";
-    pluginTtl << "           [ a lv2:OutputPort , lv2:AudioPort ; lv2:index 1 ] .\n";
+    pluginTtl << "           [ a lv2:OutputPort , lv2:AudioPort ; lv2:index 1 ] ,\n";
+    pluginTtl << "           [ a lv2:InputPort , lv2:ControlPort ; lv2:index 2 ] ,\n";
+    pluginTtl << "           [ a lv2:OutputPort , lv2:ControlPort ; lv2:index 3 ] .\n";
   }
 
   if (setenv("LV2_PATH", tmpRoot.string().c_str(), 1) != 0) {
@@ -68,6 +70,17 @@ int main() {
     return 1;
   }
 
+  if (plugins.getInstrumentParameter(7, "lv2_control_input_count") != 1.0 ||
+      plugins.getInstrumentParameter(7, "lv2_control_output_count") != 1.0) {
+    std::cerr << "LV2 control port discovery counts are incorrect" << '\n';
+    return 1;
+  }
+
+  if (!plugins.setInstrumentParameter(7, "lv2_control_in_0", 0.5)) {
+    std::cerr << "Failed to set LV2 control input parameter" << '\n';
+    return 1;
+  }
+
   if (!plugins.triggerNoteOn(7, 60, 120, true)) {
     std::cerr << "Runtime test plugin did not accept note-on" << '\n';
     return 1;
@@ -79,6 +92,12 @@ int main() {
   const double runtimeActive = plugins.getInstrumentParameter(7, "lv2_runtime_active");
   if (runtimeActive < 0.5) {
     std::cerr << "LV2 runtime did not activate during render" << '\n';
+    return 1;
+  }
+
+  const double meterValue = plugins.getInstrumentParameter(7, "lv2_control_out_0");
+  if (meterValue <= 0.0) {
+    std::cerr << "LV2 control output parameter did not update during render" << '\n';
     return 1;
   }
 

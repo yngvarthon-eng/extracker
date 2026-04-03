@@ -220,6 +220,8 @@ struct Lv2DiscoveredPlugin {
   std::filesystem::path binaryPath;
   int audioInputPort = -1;
   int audioOutputPort = -1;
+  std::vector<int> controlInputPorts;
+  std::vector<int> controlOutputPorts;
 };
 
 class Lv2DynamicInstrumentPlugin final : public extracker::IInstrumentPlugin {
@@ -227,16 +229,22 @@ public:
   Lv2DynamicInstrumentPlugin(const std::string& uri,
                              const std::filesystem::path& binaryPath,
                              int audioInputPort,
-                             int audioOutputPort)
+                             int audioOutputPort,
+                             std::vector<int> controlInputPorts,
+                             std::vector<int> controlOutputPorts)
       : uri_(uri),
         binaryPath_(binaryPath),
         audioInputPort_(audioInputPort),
         audioOutputPort_(audioOutputPort),
+        controlInputPorts_(std::move(controlInputPorts)),
+        controlOutputPorts_(std::move(controlOutputPorts)),
         fallbackSynth_(),
         moduleHandle_(nullptr),
         descriptor_(nullptr),
         instance_(nullptr),
         loaded_(false) {
+      controlInputValues_.assign(controlInputPorts_.size(), 0.0f);
+      controlOutputValues_.assign(controlOutputPorts_.size(), 0.0f);
     loaded_ = tryLoadDescriptor();
   }
 
@@ -269,6 +277,18 @@ public:
   }
 
   bool setParameter(const std::string& name, double value) override {
+    const std::string controlInputPrefix = "lv2_control_in_";
+    if (name.rfind(controlInputPrefix, 0) == 0) {
+      std::size_t portOrdinal = 0;
+      std::istringstream parse(name.substr(controlInputPrefix.size()));
+      parse >> portOrdinal;
+      if (!parse || !parse.eof() || portOrdinal >= controlInputValues_.size()) {
+        return false;
+      }
+      controlInputValues_[portOrdinal] = static_cast<float>(value);
+      return true;
+    }
+
     if (name == "lv2_loaded") {
       return false;
     }
@@ -276,6 +296,17 @@ public:
   }
 
   double getParameter(const std::string& name) const override {
+    const std::string controlOutputPrefix = "lv2_control_out_";
+    if (name.rfind(controlOutputPrefix, 0) == 0) {
+      std::size_t portOrdinal = 0;
+      std::istringstream parse(name.substr(controlOutputPrefix.size()));
+      parse >> portOrdinal;
+      if (!parse || !parse.eof() || portOrdinal >= controlOutputValues_.size()) {
+        return 0.0;
+      }
+      return static_cast<double>(controlOutputValues_[portOrdinal]);
+    }
+
     if (name == "lv2_loaded") {
       return loaded_ ? 1.0 : 0.0;
     }
@@ -287,6 +318,12 @@ public:
     }
     if (name == "lv2_audio_output_port") {
       return static_cast<double>(audioOutputPort_);
+    }
+    if (name == "lv2_control_input_count") {
+      return static_cast<double>(controlInputPorts_.size());
+    }
+    if (name == "lv2_control_output_count") {
+      return static_cast<double>(controlOutputPorts_.size());
     }
     if (name == "lv2_runtime_active") {
       return runtimeActive_ ? 1.0 : 0.0;
@@ -345,11 +382,23 @@ private:
 
     audioInputBuffer_.assign(frameCount, 0.0f);
     audioOutputBuffer_.assign(frameCount, 0.0f);
+    if (controlInputValues_.size() < controlInputPorts_.size()) {
+      controlInputValues_.resize(controlInputPorts_.size(), 0.0f);
+    }
+    if (controlOutputValues_.size() < controlOutputPorts_.size()) {
+      controlOutputValues_.resize(controlOutputPorts_.size(), 0.0f);
+    }
 
     if (audioInputPort_ >= 0) {
       descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioInputPort_), audioInputBuffer_.data());
     }
     descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioOutputPort_), audioOutputBuffer_.data());
+    for (std::size_t i = 0; i < controlInputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlInputPorts_[i]), &controlInputValues_[i]);
+    }
+    for (std::size_t i = 0; i < controlOutputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlOutputPorts_[i]), &controlOutputValues_[i]);
+    }
 
     if (descriptor_->activate != nullptr) {
       descriptor_->activate(instance_);
@@ -375,6 +424,12 @@ private:
       descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioInputPort_), audioInputBuffer_.data());
     }
     descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioOutputPort_), audioOutputBuffer_.data());
+    for (std::size_t i = 0; i < controlInputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlInputPorts_[i]), &controlInputValues_[i]);
+    }
+    for (std::size_t i = 0; i < controlOutputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlOutputPorts_[i]), &controlOutputValues_[i]);
+    }
     descriptor_->run(instance_, static_cast<std::uint32_t>(monoBuffer.size()));
 
     bool sawNonZero = false;
@@ -432,12 +487,16 @@ private:
   std::filesystem::path binaryPath_;
   int audioInputPort_;
   int audioOutputPort_;
+  std::vector<int> controlInputPorts_;
+  std::vector<int> controlOutputPorts_;
   Lv2PlaceholderInstrumentPlugin fallbackSynth_;
   void* moduleHandle_;
   const Lv2Descriptor* descriptor_;
   Lv2Handle instance_;
   std::vector<float> audioInputBuffer_;
   std::vector<float> audioOutputBuffer_;
+  std::vector<float> controlInputValues_;
+  std::vector<float> controlOutputValues_;
   bool loaded_;
   bool runtimeActive_ = false;
 };
@@ -460,7 +519,9 @@ public:
                   plugin.uri,
                   plugin.binaryPath,
                   plugin.audioInputPort,
-                  plugin.audioOutputPort);
+                  plugin.audioOutputPort,
+                  plugin.controlInputPorts,
+                  plugin.controlOutputPorts);
             });
         discovered += 1;
       }
@@ -554,8 +615,9 @@ private:
                                    bool isInput,
                                    bool isOutput,
                                    bool isAudio,
+                                   bool isControl,
                                    std::vector<Lv2DiscoveredPlugin>& plugins) {
-    if (uri.empty() || index < 0 || !isAudio) {
+    if (uri.empty() || index < 0 || (!isAudio && !isControl)) {
       return;
     }
 
@@ -563,11 +625,22 @@ private:
       if (plugin.uri != uri) {
         continue;
       }
-      if (isInput && plugin.audioInputPort < 0) {
-        plugin.audioInputPort = index;
+      if (isAudio) {
+        if (isInput && plugin.audioInputPort < 0) {
+          plugin.audioInputPort = index;
+        }
+        if (isOutput && plugin.audioOutputPort < 0) {
+          plugin.audioOutputPort = index;
+        }
       }
-      if (isOutput && plugin.audioOutputPort < 0) {
-        plugin.audioOutputPort = index;
+
+      if (isControl) {
+        if (isInput && std::find(plugin.controlInputPorts.begin(), plugin.controlInputPorts.end(), index) == plugin.controlInputPorts.end()) {
+          plugin.controlInputPorts.push_back(index);
+        }
+        if (isOutput && std::find(plugin.controlOutputPorts.begin(), plugin.controlOutputPorts.end(), index) == plugin.controlOutputPorts.end()) {
+          plugin.controlOutputPorts.push_back(index);
+        }
       }
       break;
     }
@@ -591,6 +664,7 @@ private:
       bool isInput = false;
       bool isOutput = false;
       bool isAudio = false;
+      bool isControl = false;
 
       std::string line;
       while (std::getline(ttl, line)) {
@@ -606,7 +680,8 @@ private:
             (line.find("lv2:port") != std::string::npos ||
              line.find("lv2:InputPort") != std::string::npos ||
              line.find("lv2:OutputPort") != std::string::npos ||
-             line.find("lv2:AudioPort") != std::string::npos);
+             line.find("lv2:AudioPort") != std::string::npos ||
+             line.find("lv2:ControlPort") != std::string::npos);
 
         if (!inPortBlock && !currentUri.empty() && hasPortBlockStart) {
           inPortBlock = true;
@@ -614,6 +689,7 @@ private:
           isInput = (line.find("lv2:InputPort") != std::string::npos);
           isOutput = (line.find("lv2:OutputPort") != std::string::npos);
           isAudio = (line.find("lv2:AudioPort") != std::string::npos);
+          isControl = (line.find("lv2:ControlPort") != std::string::npos);
         } else if (inPortBlock) {
           int parsedIndex = parsePortIndexValue(line);
           if (parsedIndex >= 0) {
@@ -622,17 +698,24 @@ private:
           isInput = isInput || (line.find("lv2:InputPort") != std::string::npos);
           isOutput = isOutput || (line.find("lv2:OutputPort") != std::string::npos);
           isAudio = isAudio || (line.find("lv2:AudioPort") != std::string::npos);
+          isControl = isControl || (line.find("lv2:ControlPort") != std::string::npos);
         }
 
         if (inPortBlock && line.find(']') != std::string::npos) {
-          applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, plugins);
+          applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, isControl, plugins);
           inPortBlock = false;
           portIndex = -1;
           isInput = false;
           isOutput = false;
           isAudio = false;
+          isControl = false;
         }
       }
+    }
+
+    for (auto& plugin : plugins) {
+      std::sort(plugin.controlInputPorts.begin(), plugin.controlInputPorts.end());
+      std::sort(plugin.controlOutputPorts.begin(), plugin.controlOutputPorts.end());
     }
   }
 

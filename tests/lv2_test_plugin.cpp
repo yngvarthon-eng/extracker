@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
 
 namespace {
 
@@ -28,6 +29,8 @@ struct Lv2Descriptor {
 struct PluginState {
   float* in = nullptr;
   float* out = nullptr;
+  float* gain = nullptr;
+  float* meter = nullptr;
 };
 
 Lv2Handle instantiate(const Lv2Descriptor*, double, const char*, const Lv2Feature* const*) {
@@ -44,6 +47,10 @@ void connectPort(Lv2Handle instance, std::uint32_t port, void* data) {
     state->in = static_cast<float*>(data);
   } else if (port == 1) {
     state->out = static_cast<float*>(data);
+  } else if (port == 2) {
+    state->gain = static_cast<float*>(data);
+  } else if (port == 3) {
+    state->meter = static_cast<float*>(data);
   }
 }
 
@@ -55,9 +62,17 @@ void run(Lv2Handle instance, std::uint32_t sampleCount) {
     return;
   }
 
+  const float gain = (state->gain != nullptr) ? *state->gain : 1.0f;
+  float sumAbs = 0.0f;
+
   for (std::uint32_t i = 0; i < sampleCount; ++i) {
     const float inSample = state->in != nullptr ? state->in[i] : 0.0f;
-    state->out[i] = inSample + 0.25f;
+    state->out[i] = (inSample + 0.25f) * gain;
+    sumAbs += std::abs(state->out[i]);
+  }
+
+  if (state->meter != nullptr && sampleCount > 0) {
+    *state->meter = sumAbs / static_cast<float>(sampleCount);
   }
 }
 
