@@ -59,8 +59,9 @@ int main() {
   const double mapReady = plugins.getInstrumentParameter(6, "lv2_port_map_ready");
   const double inputPort = plugins.getInstrumentParameter(6, "lv2_audio_input_port");
   const double outputPort = plugins.getInstrumentParameter(6, "lv2_audio_output_port");
+  const double runtimeActive = plugins.getInstrumentParameter(6, "lv2_runtime_active");
 
-  if (mapReady < 0.5 || inputPort != 0.0 || outputPort != 1.0) {
+  if (mapReady < 0.5 || inputPort != 0.0 || outputPort != 1.0 || runtimeActive != 0.0) {
     std::cerr << "LV2 port map scaffold parameters did not match expected values" << '\n';
     return 1;
   }

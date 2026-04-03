@@ -235,11 +235,13 @@ public:
         fallbackSynth_(),
         moduleHandle_(nullptr),
         descriptor_(nullptr),
+        instance_(nullptr),
         loaded_(false) {
     loaded_ = tryLoadDescriptor();
   }
 
   ~Lv2DynamicInstrumentPlugin() override {
+    shutdownRuntimeInstance();
     if (moduleHandle_ != nullptr) {
       dlclose(moduleHandle_);
       moduleHandle_ = nullptr;
@@ -255,8 +257,15 @@ public:
   }
 
   void renderAdd(std::vector<double>& monoBuffer, std::uint32_t sampleRate) override {
-    // Until full LV2 port mapping is implemented, route audio through fallback synth.
-    fallbackSynth_.renderAdd(monoBuffer, sampleRate);
+    bool renderedLv2 = false;
+    if (sampleRate > 0) {
+      renderedLv2 = renderLv2Runtime(monoBuffer, sampleRate);
+    }
+
+    // Guarded fallback keeps existing behavior intact when runtime bridge isn't active yet.
+    if (!renderedLv2) {
+      fallbackSynth_.renderAdd(monoBuffer, sampleRate);
+    }
   }
 
   bool setParameter(const std::string& name, double value) override {
@@ -279,6 +288,9 @@ public:
     if (name == "lv2_audio_output_port") {
       return static_cast<double>(audioOutputPort_);
     }
+    if (name == "lv2_runtime_active") {
+      return runtimeActive_ ? 1.0 : 0.0;
+    }
     return fallbackSynth_.getParameter(name);
   }
 
@@ -291,6 +303,96 @@ public:
   }
 
 private:
+  void shutdownRuntimeInstance() {
+    if (instance_ == nullptr || descriptor_ == nullptr) {
+      runtimeActive_ = false;
+      return;
+    }
+
+    if (runtimeActive_ && descriptor_->deactivate != nullptr) {
+      descriptor_->deactivate(instance_);
+    }
+
+    if (descriptor_->cleanup != nullptr) {
+      descriptor_->cleanup(instance_);
+    }
+
+    instance_ = nullptr;
+    runtimeActive_ = false;
+  }
+
+  bool ensureRuntimeInstance(std::uint32_t sampleRate, std::size_t frameCount) {
+    if (runtimeActive_) {
+      if (audioInputBuffer_.size() != frameCount) {
+        audioInputBuffer_.assign(frameCount, 0.0f);
+      }
+      if (audioOutputBuffer_.size() != frameCount) {
+        audioOutputBuffer_.assign(frameCount, 0.0f);
+      }
+      return true;
+    }
+
+    if (!loaded_ || descriptor_ == nullptr || audioOutputPort_ < 0 ||
+        descriptor_->instantiate == nullptr || descriptor_->run == nullptr ||
+        descriptor_->connectPort == nullptr) {
+      return false;
+    }
+
+    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), nullptr, nullptr);
+    if (instance_ == nullptr) {
+      return false;
+    }
+
+    audioInputBuffer_.assign(frameCount, 0.0f);
+    audioOutputBuffer_.assign(frameCount, 0.0f);
+
+    if (audioInputPort_ >= 0) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioInputPort_), audioInputBuffer_.data());
+    }
+    descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioOutputPort_), audioOutputBuffer_.data());
+
+    if (descriptor_->activate != nullptr) {
+      descriptor_->activate(instance_);
+    }
+
+    runtimeActive_ = true;
+    return true;
+  }
+
+  bool renderLv2Runtime(std::vector<double>& monoBuffer, std::uint32_t sampleRate) {
+    if (monoBuffer.empty()) {
+      return false;
+    }
+
+    if (!ensureRuntimeInstance(sampleRate, monoBuffer.size())) {
+      return false;
+    }
+
+    std::fill(audioInputBuffer_.begin(), audioInputBuffer_.end(), 0.0f);
+    std::fill(audioOutputBuffer_.begin(), audioOutputBuffer_.end(), 0.0f);
+
+    if (audioInputPort_ >= 0) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioInputPort_), audioInputBuffer_.data());
+    }
+    descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioOutputPort_), audioOutputBuffer_.data());
+    descriptor_->run(instance_, static_cast<std::uint32_t>(monoBuffer.size()));
+
+    bool sawNonZero = false;
+    for (std::size_t i = 0; i < monoBuffer.size(); ++i) {
+      double sample = static_cast<double>(audioOutputBuffer_[i]);
+      if (!std::isfinite(sample)) {
+        shutdownRuntimeInstance();
+        return false;
+      }
+      if (!sawNonZero && std::abs(sample) > 1e-12) {
+        sawNonZero = true;
+      }
+      monoBuffer[i] += sample;
+    }
+
+    return sawNonZero;
+  }
+
   bool tryLoadDescriptor() {
     if (binaryPath_.empty()) {
       return false;
@@ -333,7 +435,11 @@ private:
   Lv2PlaceholderInstrumentPlugin fallbackSynth_;
   void* moduleHandle_;
   const Lv2Descriptor* descriptor_;
+  Lv2Handle instance_;
+  std::vector<float> audioInputBuffer_;
+  std::vector<float> audioOutputBuffer_;
   bool loaded_;
+  bool runtimeActive_ = false;
 };
 
 class Lv2ManifestAdapter final : public extracker::IExternalPluginAdapter {
