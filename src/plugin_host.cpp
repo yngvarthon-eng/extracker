@@ -518,6 +518,20 @@ private:
     return line.substr(start + 1, end - start - 1);
   }
 
+  static std::string angleTokenAfterKey(const std::string& line, const std::string& key) {
+    std::size_t keyPos = line.find(key);
+    if (keyPos == std::string::npos) {
+      return "";
+    }
+
+    std::size_t start = line.find('<', keyPos + key.size());
+    std::size_t end = line.find('>', start == std::string::npos ? 0 : start + 1);
+    if (start == std::string::npos || end == std::string::npos || end <= start + 1) {
+      return "";
+    }
+    return line.substr(start + 1, end - start - 1);
+  }
+
   static int parsePortIndexValue(const std::string& line) {
     const std::string key = "lv2:index";
     std::size_t keyPos = line.find(key);
@@ -663,7 +677,7 @@ private:
             continue;
           }
 
-          const std::string binaryToken = firstAngleToken(line);
+          const std::string binaryToken = angleTokenAfterKey(line, "lv2:binary");
           auto binaryPath = resolveManifestBinaryPath(binaryToken, entry.path());
           if (binaryPath.empty()) {
             continue;

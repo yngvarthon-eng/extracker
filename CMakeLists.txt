@@ -77,6 +77,18 @@ if(BUILD_TESTING)
   target_link_libraries(extracker_lv2_port_map_scaffold_test PRIVATE extracker_core)
   add_test(NAME extracker_lv2_port_map_scaffold_test COMMAND extracker_lv2_port_map_scaffold_test)
 
+  add_library(extracker_lv2_test_plugin MODULE tests/lv2_test_plugin.cpp)
+  set_target_properties(extracker_lv2_test_plugin PROPERTIES PREFIX "")
+
+  add_executable(extracker_lv2_runtime_activation_test tests/lv2_runtime_activation_test.cpp)
+  target_include_directories(extracker_lv2_runtime_activation_test PRIVATE include)
+  target_link_libraries(extracker_lv2_runtime_activation_test PRIVATE extracker_core)
+  add_dependencies(extracker_lv2_runtime_activation_test extracker_lv2_test_plugin)
+  target_compile_definitions(
+    extracker_lv2_runtime_activation_test
+    PRIVATE EXTRACKER_LV2_TEST_PLUGIN_PATH="$<TARGET_FILE:extracker_lv2_test_plugin>")
+  add_test(NAME extracker_lv2_runtime_activation_test COMMAND extracker_lv2_runtime_activation_test)
+
   add_executable(extracker_midi_clock_cli_logic_test
     tests/midi_clock_cli_logic_test.cpp
     src/midi_cli.cpp
