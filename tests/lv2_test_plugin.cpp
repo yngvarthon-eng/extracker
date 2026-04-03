@@ -31,6 +31,11 @@ struct PluginState {
   float* out = nullptr;
   float* gain = nullptr;
   float* meter = nullptr;
+  uint8_t* events = nullptr;
+  float phase = 0.0f;
+  float frequency = 0.0f;
+  bool noteActive = false;
+  float eventBoost = 0.0f;
 };
 
 Lv2Handle instantiate(const Lv2Descriptor*, double, const char*, const Lv2Feature* const*) {
@@ -51,6 +56,8 @@ void connectPort(Lv2Handle instance, std::uint32_t port, void* data) {
     state->gain = static_cast<float*>(data);
   } else if (port == 3) {
     state->meter = static_cast<float*>(data);
+  } else if (port == 4) {
+    state->events = static_cast<uint8_t*>(data);
   }
 }
 
@@ -62,12 +69,44 @@ void run(Lv2Handle instance, std::uint32_t sampleCount) {
     return;
   }
 
+  if (state->events != nullptr) {
+    std::uint8_t* eventPtr = state->events;
+    while (*eventPtr != 0 && eventPtr < state->events + 256) {
+      std::uint8_t status = *eventPtr;
+      std::uint8_t note = *(eventPtr + 1);
+      std::uint8_t velocity = *(eventPtr + 2);
+
+      if ((status & 0xF0) == 0x90 && velocity > 0) {
+        state->noteActive = true;
+        state->frequency = 440.0f * std::pow(2.0f, static_cast<float>(note - 69) / 12.0f);
+        state->phase = 0.0f;
+        state->eventBoost = 0.3f;
+      } else if ((status & 0xF0) == 0x80 || ((status & 0xF0) == 0x90 && velocity == 0)) {
+        state->noteActive = false;
+        state->eventBoost = 0.0f;
+      }
+
+      eventPtr += 3;
+    }
+  }
+
   const float gain = (state->gain != nullptr) ? *state->gain : 1.0f;
   float sumAbs = 0.0f;
+  constexpr float twoPi = 6.28318530717958f;
 
   for (std::uint32_t i = 0; i < sampleCount; ++i) {
+    float outSample = 0.0f;
+
+    if (state->noteActive && state->frequency > 0.0f) {
+      outSample = std::sin(state->phase);
+      state->phase += twoPi * state->frequency / 44100.0f;
+      if (state->phase >= twoPi) {
+        state->phase -= twoPi;
+      }
+    }
+
     const float inSample = state->in != nullptr ? state->in[i] : 0.0f;
-    state->out[i] = (inSample + 0.25f) * gain;
+    state->out[i] = (inSample + 0.25f + state->eventBoost + outSample) * gain;
     sumAbs += std::abs(state->out[i]);
   }
 

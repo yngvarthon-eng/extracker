@@ -191,6 +191,12 @@ protected:
   }
 };
 
+struct NoteEvent {
+  int midiNote = 0;
+  std::uint8_t velocity = 0;
+  bool isNoteOn = false;
+};
+
 struct Lv2Feature {
   const char* uri;
   const void* data;
@@ -222,6 +228,7 @@ struct Lv2DiscoveredPlugin {
   int audioOutputPort = -1;
   std::vector<int> controlInputPorts;
   std::vector<int> controlOutputPorts;
+  std::vector<int> eventInputPorts;
 };
 
 class Lv2DynamicInstrumentPlugin final : public extracker::IInstrumentPlugin {
@@ -231,13 +238,15 @@ public:
                              int audioInputPort,
                              int audioOutputPort,
                              std::vector<int> controlInputPorts,
-                             std::vector<int> controlOutputPorts)
+                             std::vector<int> controlOutputPorts,
+                             std::vector<int> eventInputPorts = {})
       : uri_(uri),
         binaryPath_(binaryPath),
         audioInputPort_(audioInputPort),
         audioOutputPort_(audioOutputPort),
         controlInputPorts_(std::move(controlInputPorts)),
         controlOutputPorts_(std::move(controlOutputPorts)),
+        eventInputPorts_(std::move(eventInputPorts)),
         fallbackSynth_(),
         moduleHandle_(nullptr),
         descriptor_(nullptr),
@@ -245,6 +254,8 @@ public:
         loaded_(false) {
       controlInputValues_.assign(controlInputPorts_.size(), 0.0f);
       controlOutputValues_.assign(controlOutputPorts_.size(), 0.0f);
+      eventInputBuffer_.assign(4096, 0);
+      pendingNoteEvents_.clear();
     loaded_ = tryLoadDescriptor();
   }
 
@@ -258,10 +269,12 @@ public:
 
   void noteOn(int midiNote, std::uint8_t velocity, bool retrigger) override {
     fallbackSynth_.noteOn(midiNote, velocity, retrigger);
+    queueEventNote(midiNote, velocity, true);
   }
 
   void noteOff(int midiNote) override {
     fallbackSynth_.noteOff(midiNote);
+    queueEventNote(midiNote, 0, false);
   }
 
   void renderAdd(std::vector<double>& monoBuffer, std::uint32_t sampleRate) override {
@@ -325,6 +338,9 @@ public:
     if (name == "lv2_control_output_count") {
       return static_cast<double>(controlOutputPorts_.size());
     }
+    if (name == "lv2_event_input_count") {
+      return static_cast<double>(eventInputPorts_.size());
+    }
     if (name == "lv2_runtime_active") {
       return runtimeActive_ ? 1.0 : 0.0;
     }
@@ -358,6 +374,17 @@ private:
     runtimeActive_ = false;
   }
 
+  void queueEventNote(int midiNote, std::uint8_t velocity, bool isNoteOn) {
+    if (eventInputPorts_.empty()) {
+      return;
+    }
+    NoteEvent event;
+    event.midiNote = midiNote;
+    event.velocity = velocity;
+    event.isNoteOn = isNoteOn;
+    pendingNoteEvents_.push_back(event);
+  }
+
   bool ensureRuntimeInstance(std::uint32_t sampleRate, std::size_t frameCount) {
     if (runtimeActive_) {
       if (audioInputBuffer_.size() != frameCount) {
@@ -388,6 +415,9 @@ private:
     if (controlOutputValues_.size() < controlOutputPorts_.size()) {
       controlOutputValues_.resize(controlOutputPorts_.size(), 0.0f);
     }
+    if (eventInputBuffer_.size() < 4096) {
+      eventInputBuffer_.assign(4096, 0);
+    }
 
     if (audioInputPort_ >= 0) {
       descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioInputPort_), audioInputBuffer_.data());
@@ -398,6 +428,9 @@ private:
     }
     for (std::size_t i = 0; i < controlOutputPorts_.size(); ++i) {
       descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlOutputPorts_[i]), &controlOutputValues_[i]);
+    }
+    for (std::size_t i = 0; i < eventInputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(eventInputPorts_[i]), eventInputBuffer_.data());
     }
 
     if (descriptor_->activate != nullptr) {
@@ -430,6 +463,14 @@ private:
     for (std::size_t i = 0; i < controlOutputPorts_.size(); ++i) {
       descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlOutputPorts_[i]), &controlOutputValues_[i]);
     }
+    for (std::size_t i = 0; i < eventInputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(eventInputPorts_[i]), eventInputBuffer_.data());
+    }
+
+    if (!eventInputPorts_.empty()) {
+      populateEventBuffer();
+    }
+
     descriptor_->run(instance_, static_cast<std::uint32_t>(monoBuffer.size()));
 
     bool sawNonZero = false;
@@ -446,6 +487,48 @@ private:
     }
 
     return sawNonZero;
+  }
+
+  void populateEventBuffer() {
+    std::fill(eventInputBuffer_.begin(), eventInputBuffer_.end(), 0);
+
+    for (const auto& event : pendingNoteEvents_) {
+      if (event.isNoteOn) {
+        uint8_t midiData[] = {0x90, static_cast<uint8_t>(event.midiNote), event.velocity};
+        if (!writeToMidiBuffer(midiData, 3)) {
+          break;
+        }
+      } else {
+        uint8_t midiData[] = {0x80, static_cast<uint8_t>(event.midiNote), 0};
+        if (!writeToMidiBuffer(midiData, 3)) {
+          break;
+        }
+      }
+    }
+
+    pendingNoteEvents_.clear();
+  }
+
+  bool writeToMidiBuffer(const uint8_t* data, size_t size) {
+    if (eventInputBuffer_.size() < size + 1) {
+      return false;
+    }
+
+    auto idx = eventInputBuffer_.begin();
+    while (idx != eventInputBuffer_.end() && *idx != 0) {
+      ++idx;
+    }
+
+    if (std::distance(idx, eventInputBuffer_.end()) < static_cast<long>(size + 1)) {
+      return false;
+    }
+
+    for (size_t i = 0; i < size; ++i) {
+      *idx++ = data[i];
+    }
+    *idx = 0;
+
+    return true;
   }
 
   bool tryLoadDescriptor() {
@@ -489,6 +572,7 @@ private:
   int audioOutputPort_;
   std::vector<int> controlInputPorts_;
   std::vector<int> controlOutputPorts_;
+  std::vector<int> eventInputPorts_;
   Lv2PlaceholderInstrumentPlugin fallbackSynth_;
   void* moduleHandle_;
   const Lv2Descriptor* descriptor_;
@@ -497,6 +581,8 @@ private:
   std::vector<float> audioOutputBuffer_;
   std::vector<float> controlInputValues_;
   std::vector<float> controlOutputValues_;
+  std::vector<uint8_t> eventInputBuffer_;
+  std::vector<NoteEvent> pendingNoteEvents_;
   bool loaded_;
   bool runtimeActive_ = false;
 };
@@ -521,7 +607,8 @@ public:
                   plugin.audioInputPort,
                   plugin.audioOutputPort,
                   plugin.controlInputPorts,
-                  plugin.controlOutputPorts);
+                  plugin.controlOutputPorts,
+                  plugin.eventInputPorts);
             });
         discovered += 1;
       }
@@ -616,8 +703,9 @@ private:
                                    bool isOutput,
                                    bool isAudio,
                                    bool isControl,
+                                   bool isEvent,
                                    std::vector<Lv2DiscoveredPlugin>& plugins) {
-    if (uri.empty() || index < 0 || (!isAudio && !isControl)) {
+    if (uri.empty() || index < 0 || (!isAudio && !isControl && !isEvent)) {
       return;
     }
 
@@ -642,6 +730,10 @@ private:
           plugin.controlOutputPorts.push_back(index);
         }
       }
+
+      if (isEvent && isInput && std::find(plugin.eventInputPorts.begin(), plugin.eventInputPorts.end(), index) == plugin.eventInputPorts.end()) {
+        plugin.eventInputPorts.push_back(index);
+      }
       break;
     }
   }
@@ -665,6 +757,7 @@ private:
       bool isOutput = false;
       bool isAudio = false;
       bool isControl = false;
+      bool isEvent = false;
 
       std::string line;
       while (std::getline(ttl, line)) {
@@ -681,7 +774,8 @@ private:
              line.find("lv2:InputPort") != std::string::npos ||
              line.find("lv2:OutputPort") != std::string::npos ||
              line.find("lv2:AudioPort") != std::string::npos ||
-             line.find("lv2:ControlPort") != std::string::npos);
+             line.find("lv2:ControlPort") != std::string::npos ||
+             line.find("lv2:EventPort") != std::string::npos);
 
         if (!inPortBlock && !currentUri.empty() && hasPortBlockStart) {
           inPortBlock = true;
@@ -690,6 +784,7 @@ private:
           isOutput = (line.find("lv2:OutputPort") != std::string::npos);
           isAudio = (line.find("lv2:AudioPort") != std::string::npos);
           isControl = (line.find("lv2:ControlPort") != std::string::npos);
+          isEvent = (line.find("lv2:EventPort") != std::string::npos);
         } else if (inPortBlock) {
           int parsedIndex = parsePortIndexValue(line);
           if (parsedIndex >= 0) {
@@ -699,16 +794,18 @@ private:
           isOutput = isOutput || (line.find("lv2:OutputPort") != std::string::npos);
           isAudio = isAudio || (line.find("lv2:AudioPort") != std::string::npos);
           isControl = isControl || (line.find("lv2:ControlPort") != std::string::npos);
+          isEvent = isEvent || (line.find("lv2:EventPort") != std::string::npos);
         }
 
         if (inPortBlock && line.find(']') != std::string::npos) {
-          applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, isControl, plugins);
+          applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, isControl, isEvent, plugins);
           inPortBlock = false;
           portIndex = -1;
           isInput = false;
           isOutput = false;
           isAudio = false;
           isControl = false;
+          isEvent = false;
         }
       }
     }
@@ -716,6 +813,7 @@ private:
     for (auto& plugin : plugins) {
       std::sort(plugin.controlInputPorts.begin(), plugin.controlInputPorts.end());
       std::sort(plugin.controlOutputPorts.begin(), plugin.controlOutputPorts.end());
+      std::sort(plugin.eventInputPorts.begin(), plugin.eventInputPorts.end());
     }
   }
 
@@ -751,7 +849,8 @@ private:
             if (!uri.empty()) {
               currentUri = uri;
               if (dedup.insert(uri).second) {
-                plugins.push_back({uri, {}});
+                plugins.emplace_back();
+                plugins.back().uri = uri;
               }
             }
           }
