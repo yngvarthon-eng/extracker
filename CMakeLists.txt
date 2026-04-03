@@ -198,4 +198,11 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_plugin_status_test tests/cli_plugin_status_test.cpp)
   add_dependencies(extracker_cli_plugin_status_test extracker)
   add_test(NAME extracker_cli_plugin_status_test COMMAND extracker_cli_plugin_status_test)
+
+  add_executable(extracker_cli_plugin_set_test tests/cli_plugin_set_test.cpp)
+  add_dependencies(extracker_cli_plugin_set_test extracker extracker_lv2_test_plugin)
+  target_compile_definitions(
+    extracker_cli_plugin_set_test
+    PRIVATE EXTRACKER_LV2_TEST_PLUGIN_PATH="$<TARGET_FILE:extracker_lv2_test_plugin>")
+  add_test(NAME extracker_cli_plugin_set_test COMMAND extracker_cli_plugin_set_test)
 endif()
