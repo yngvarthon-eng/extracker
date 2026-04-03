@@ -58,12 +58,23 @@ public:
   virtual std::size_t registerDiscoveredPlugins(class PluginHost& host) = 0;
 };
 
+struct PluginControlPortMeta {
+  int index = -1;
+  float minVal = 0.0f;
+  float maxVal = 1.0f;
+  float defaultVal = 0.0f;
+  bool hasMin = false;
+  bool hasMax = false;
+  bool hasDefault = false;
+};
+
 struct PluginPortInfo {
   int audioIn = -1;
   int audioOut = -1;
   int controlInCount = 0;
   int controlOutCount = 0;
   int eventInCount = 0;
+  std::vector<PluginControlPortMeta> controlInMeta;
 };
 
 class PluginHost {

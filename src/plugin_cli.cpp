@@ -62,6 +62,14 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
         std::cout << "  audio in:     " << info.audioIn << '\n';
         std::cout << "  audio out:    " << info.audioOut << '\n';
         std::cout << "  control in:   " << info.controlInCount << '\n';
+        for (const auto& meta : info.controlInMeta) {
+          std::cout << "    port " << meta.index << ":";
+          if (meta.hasMin)     { std::cout << " min=" << meta.minVal; }
+          if (meta.hasMax)     { std::cout << " max=" << meta.maxVal; }
+          if (meta.hasDefault) { std::cout << " default=" << meta.defaultVal; }
+          if (!meta.hasMin && !meta.hasMax && !meta.hasDefault) { std::cout << " (no range)"; }
+          std::cout << '\n';
+        }
         std::cout << "  control out:  " << info.controlOutCount << '\n';
         std::cout << "  event in:     " << info.eventInCount << '\n';
       }

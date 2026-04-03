@@ -77,6 +77,11 @@ if(BUILD_TESTING)
   target_link_libraries(extracker_lv2_port_map_scaffold_test PRIVATE extracker_core)
   add_test(NAME extracker_lv2_port_map_scaffold_test COMMAND extracker_lv2_port_map_scaffold_test)
 
+  add_executable(extracker_lv2_control_port_meta_test tests/lv2_control_port_meta_test.cpp)
+  target_include_directories(extracker_lv2_control_port_meta_test PRIVATE include)
+  target_link_libraries(extracker_lv2_control_port_meta_test PRIVATE extracker_core)
+  add_test(NAME extracker_lv2_control_port_meta_test COMMAND extracker_lv2_control_port_meta_test)
+
   add_library(extracker_lv2_test_plugin MODULE tests/lv2_test_plugin.cpp)
   set_target_properties(extracker_lv2_test_plugin PROPERTIES PREFIX "")
 
