@@ -113,29 +113,77 @@ void handleRecordCommand(std::istringstream& recordInput,
       }
     }
   } else if (subcommand == "cursor") {
+    const auto printCursorUsage = [&]() {
+      std::cout << "Usage: record cursor <0.." << (editor.rows() - 1)
+                << "|+n|-n|+ [count]|- [count]|start|end|next [count]|prev [count]|status>" << '\n';
+      std::cout << "exTracker> " << std::flush;
+    };
+
     std::string rowArg;
     recordInput >> rowArg;
     if (rowArg.empty() || rowArg == "status") {
+      if (hasTrailingTokens(recordInput)) {
+        printCursorUsage();
+        return;
+      }
       std::cout << "Record cursor row: " << recordCursorRow << '\n';
     } else {
       int row = -1;
+      auto parseStepRepeatCount = [&](int& repeatCount) {
+        repeatCount = 1;
+        std::string countArg;
+        if (!(recordInput >> countArg)) {
+          return true;
+        }
+
+        if (!parseStrictIntToken(countArg, repeatCount) || repeatCount < 1) {
+          return false;
+        }
+
+        return !hasTrailingTokens(recordInput);
+      };
+
       if (rowArg == "start") {
+        if (hasTrailingTokens(recordInput)) {
+          printCursorUsage();
+          return;
+        }
         row = 0;
       } else if (rowArg == "end") {
+        if (hasTrailingTokens(recordInput)) {
+          printCursorUsage();
+          return;
+        }
         row = static_cast<int>(editor.rows()) - 1;
       } else if (rowArg == "next") {
-        row = recordCursorRow + std::max(recordInsertJump, 1);
+        int repeatCount = 1;
+        if (!parseStepRepeatCount(repeatCount)) {
+          printCursorUsage();
+          return;
+        }
+        row = recordCursorRow + (std::max(recordInsertJump, 1) * repeatCount);
       } else if (rowArg == "prev") {
-        row = recordCursorRow - std::max(recordInsertJump, 1);
+        int repeatCount = 1;
+        if (!parseStepRepeatCount(repeatCount)) {
+          printCursorUsage();
+          return;
+        }
+        row = recordCursorRow - (std::max(recordInsertJump, 1) * repeatCount);
+      } else if (rowArg == "+" || rowArg == "-") {
+        int repeatCount = 1;
+        if (!parseStepRepeatCount(repeatCount)) {
+          printCursorUsage();
+          return;
+        }
+        int delta = std::max(recordInsertJump, 1) * repeatCount;
+        row = (rowArg == "+") ? (recordCursorRow + delta) : (recordCursorRow - delta);
       } else {
         bool isRelative = (rowArg.size() > 1 && (rowArg.front() == '+' || rowArg.front() == '-'));
         int value = 0;
         std::istringstream parse(rowArg);
         parse >> value;
-        if (!parse || !parse.eof()) {
-          std::cout << "Usage: record cursor <0.." << (editor.rows() - 1)
-                    << "|+n|-n|start|end|next|prev|status>" << '\n';
-          std::cout << "exTracker> " << std::flush;
+        if (!parse || !parse.eof() || hasTrailingTokens(recordInput)) {
+          printCursorUsage();
           return;
         }
         row = isRelative ? (recordCursorRow + value) : value;
