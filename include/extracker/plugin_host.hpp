@@ -58,6 +58,14 @@ public:
   virtual std::size_t registerDiscoveredPlugins(class PluginHost& host) = 0;
 };
 
+struct PluginPortInfo {
+  int audioIn = -1;
+  int audioOut = -1;
+  int controlInCount = 0;
+  int controlOutCount = 0;
+  int eventInCount = 0;
+};
+
 class PluginHost {
 public:
   static constexpr std::size_t kMaxInstrumentSlots = 16;
@@ -71,6 +79,8 @@ public:
   std::size_t rescanExternalPlugins();
   std::vector<std::string> externalAdapterNames() const;
   bool registerPluginFactory(const std::string& pluginId, PluginFactory factory);
+  void registerPluginPortInfo(const std::string& pluginId, PluginPortInfo info);
+  bool getPluginPortInfo(const std::string& pluginId, PluginPortInfo& out) const;
   bool loadPlugin(const std::string& id);
   bool assignInstrument(std::uint8_t instrument, const std::string& pluginId);
   bool hasInstrumentAssignment(std::uint8_t instrument) const;
@@ -94,6 +104,7 @@ private:
   std::array<std::unique_ptr<IInstrumentPlugin>, kMaxInstrumentSlots> instrumentPlugins_;
   std::unordered_set<std::string> loadedPluginIds_;
   std::vector<std::string> availablePluginIds_;
+  std::unordered_map<std::string, PluginPortInfo> pluginPortInfoMap_;
   std::unordered_map<std::string, PluginFactory> pluginFactories_;
   std::vector<std::unique_ptr<IExternalPluginAdapter>> externalAdapters_;
   std::size_t loadedPluginCount_;

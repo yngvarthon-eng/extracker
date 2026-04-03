@@ -181,4 +181,12 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_note_modifiers_dry_test tests/cli_note_modifiers_dry_test.cpp)
   add_dependencies(extracker_cli_note_modifiers_dry_test extracker)
   add_test(NAME extracker_cli_note_modifiers_dry_test COMMAND extracker_cli_note_modifiers_dry_test)
+
+  add_executable(extracker_cli_plugin_scan_test tests/cli_plugin_scan_test.cpp)
+  add_dependencies(extracker_cli_plugin_scan_test extracker)
+  add_test(NAME extracker_cli_plugin_scan_test COMMAND extracker_cli_plugin_scan_test)
+
+  add_executable(extracker_cli_plugin_info_test tests/cli_plugin_info_test.cpp)
+  add_dependencies(extracker_cli_plugin_info_test extracker)
+  add_test(NAME extracker_cli_plugin_info_test COMMAND extracker_cli_plugin_info_test)
 endif()

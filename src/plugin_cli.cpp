@@ -40,8 +40,34 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     } else {
       std::cout << "Failed to assign plugin; ensure it is loaded and instrument index is valid" << '\n';
     }
+  } else if (subcommand == "scan") {
+    const std::size_t found = plugins.rescanExternalPlugins();
+    if (found > 0) {
+      std::cout << "Scan found " << found << " new plugin(s)" << '\n';
+    } else {
+      std::cout << "Scan complete, no new plugins discovered" << '\n';
+    }
+    std::cout << plugins.discoverAvailablePlugins().size() << " plugin(s) available" << '\n';
+  } else if (subcommand == "info") {
+    std::string pluginId;
+    pluginInput >> pluginId;
+    if (pluginId.empty()) {
+      std::cout << "Usage: plugin info <id>" << '\n';
+    } else {
+      PluginPortInfo info;
+      if (!plugins.getPluginPortInfo(pluginId, info)) {
+        std::cout << "Unknown plugin: " << pluginId << '\n';
+      } else {
+        std::cout << "Plugin: " << pluginId << '\n';
+        std::cout << "  audio in:     " << info.audioIn << '\n';
+        std::cout << "  audio out:    " << info.audioOut << '\n';
+        std::cout << "  control in:   " << info.controlInCount << '\n';
+        std::cout << "  control out:  " << info.controlOutCount << '\n';
+        std::cout << "  event in:     " << info.eventInCount << '\n';
+      }
+    }
   } else {
-    std::cout << "Usage: plugin <list|load|assign> ..." << '\n';
+    std::cout << "Usage: plugin <scan|list|load|assign|info> ..." << '\n';
   }
 }
 
@@ -71,9 +97,11 @@ void handleHelpCommand() {
   std::cout << "reset                      stop playback and reset counters" << '\n';
   std::cout << "save <file>                save module to file (defaults to .ex)" << '\n';
   std::cout << "load <file>                load module from file (defaults to .ex)" << '\n';
+  std::cout << "plugin scan                rescan LV2 paths for available plugins" << '\n';
   std::cout << "plugin list                list discovered plugins" << '\n';
   std::cout << "plugin load <id>           load plugin by id (e.g. builtin.sine)" << '\n';
   std::cout << "plugin assign <i> <id>     assign loaded plugin to instrument slot" << '\n';
+  std::cout << "plugin info <id>           show port layout for a plugin" << '\n';
   std::cout << "sine <instrument>          convenience command for builtin.sine" << '\n';
   std::cout << "note set r c n i [v fx fv] set note in pattern (optional vel/effect)" << '\n';
   std::cout << "note set dry ...           parse and preview note set without writing" << '\n';

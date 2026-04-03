@@ -670,6 +670,13 @@ public:
                   plugin.controlOutputPorts,
                   plugin.eventInputPorts);
             });
+        extracker::PluginPortInfo portInfo;
+        portInfo.audioIn        = plugin.audioInputPort;
+        portInfo.audioOut       = plugin.audioOutputPort;
+        portInfo.controlInCount = static_cast<int>(plugin.controlInputPorts.size());
+        portInfo.controlOutCount= static_cast<int>(plugin.controlOutputPorts.size());
+        portInfo.eventInCount   = static_cast<int>(plugin.eventInputPorts.size());
+        host.registerPluginPortInfo(pluginId, portInfo);
         discovered += 1;
       }
     }
@@ -970,6 +977,7 @@ PluginHost::PluginHost()
       instrumentPlugins_{},
       loadedPluginIds_{},
       availablePluginIds_{},
+      pluginPortInfoMap_{},
       pluginFactories_{},
       externalAdapters_{},
       loadedPluginCount_(0),
@@ -1027,6 +1035,21 @@ std::vector<std::string> PluginHost::externalAdapterNames() const {
     names.push_back(adapter->adapterName());
   }
   return names;
+}
+
+void PluginHost::registerPluginPortInfo(const std::string& pluginId, PluginPortInfo info) {
+  if (!pluginId.empty()) {
+    pluginPortInfoMap_[pluginId] = info;
+  }
+}
+
+bool PluginHost::getPluginPortInfo(const std::string& pluginId, PluginPortInfo& out) const {
+  auto it = pluginPortInfoMap_.find(pluginId);
+  if (it == pluginPortInfoMap_.end()) {
+    return false;
+  }
+  out = it->second;
+  return true;
 }
 
 bool PluginHost::registerPluginFactory(const std::string& pluginId, PluginFactory factory) {
