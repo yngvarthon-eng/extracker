@@ -14,6 +14,9 @@ int main() {
   const std::string command =
       "printf 'tempo 120foo\n"
       "tempo 130\n"
+      "loop on\n"
+      "loop off\n"
+      "loop nope\n"
       "loop range 4 5x\n"
       "loop range 8 4\n"
       "quit\n' | " + appPath;
@@ -42,8 +45,12 @@ int main() {
   const bool sawTempoSet = output.find("Tempo set to 130 BPM") != std::string::npos;
   const bool sawLoopRangeUsage = output.find("Usage: loop range <from> <to>") != std::string::npos;
   const bool sawLoopRangeSet = output.find("Loop/play range set to 4..8") != std::string::npos;
+  const bool sawLoopEnabled  = output.find("Loop enabled") != std::string::npos;
+  const bool sawLoopDisabled = output.find("Loop disabled") != std::string::npos;
+  const bool sawLoopUsage    = output.find("Usage: loop <on|off|range>") != std::string::npos;
 
-  if (!sawTempoUsage || !sawTempoSet || !sawLoopRangeUsage || !sawLoopRangeSet) {
+  if (!sawTempoUsage || !sawTempoSet || !sawLoopRangeUsage || !sawLoopRangeSet ||
+      !sawLoopEnabled || !sawLoopDisabled || !sawLoopUsage) {
     std::cerr << "Missing expected core numeric parsing output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
