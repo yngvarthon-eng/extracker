@@ -14,6 +14,7 @@ int main() {
   const std::string command =
       "printf 'midi map status\\n"
       "midi map status extra\\n"
+      "midi map 16 1\n"
       "midi map 2 6\\n"
       "midi map status\\n"
       "midi map 2 6 extra\\n"
@@ -48,6 +49,7 @@ int main() {
   }
 
   const bool sawInitialEmpty = output.find("MIDI channel map: (empty)") != std::string::npos;
+  const bool sawRangeError = output.find("MIDI channel must be in range 0..15") != std::string::npos;
   const bool sawSetMapping = output.find("Mapped MIDI channel 2 to instrument 6") != std::string::npos;
   const bool sawMapUsage = output.find("Usage: midi map <channel> <instr|clear>") != std::string::npos;
   const bool sawStatusMapped = output.find("MIDI channel map: ch2->6") != std::string::npos;
@@ -55,7 +57,7 @@ int main() {
   const bool sawMapClearUsage = output.find("Usage: midi map clear all") != std::string::npos;
   const bool sawGlobalClear = output.find("Cleared all MIDI channel mappings") != std::string::npos;
 
-  if (!sawInitialEmpty || !sawSetMapping || !sawMapUsage || !sawStatusMapped ||
+  if (!sawInitialEmpty || !sawRangeError || !sawSetMapping || !sawMapUsage || !sawStatusMapped ||
       !sawChannelClear || !sawMapClearUsage || !sawGlobalClear) {
     std::cerr << "Missing expected MIDI map output markers" << '\n';
     std::cerr << output << '\n';
