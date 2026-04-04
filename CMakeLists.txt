@@ -159,6 +159,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_note_write_commit_test extracker)
   add_test(NAME extracker_cli_note_write_commit_test COMMAND extracker_cli_note_write_commit_test)
 
+  add_executable(extracker_cli_record_no_empty_rows_test tests/cli_record_no_empty_rows_test.cpp)
+  add_dependencies(extracker_cli_record_no_empty_rows_test extracker)
+  add_test(NAME extracker_cli_record_no_empty_rows_test COMMAND extracker_cli_record_no_empty_rows_test)
+
   add_executable(extracker_cli_pattern_numeric_parse_test tests/cli_pattern_numeric_parse_test.cpp)
   add_dependencies(extracker_cli_pattern_numeric_parse_test extracker)
   add_test(NAME extracker_cli_pattern_numeric_parse_test COMMAND extracker_cli_pattern_numeric_parse_test)
