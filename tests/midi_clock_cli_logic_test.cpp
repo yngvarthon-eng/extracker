@@ -28,6 +28,14 @@ struct TestState {
   std::chrono::steady_clock::time_point lastMidiClockTimestamp{};
   double midiClockEstimatedBpm = 0.0;
   std::vector<extracker::MidiPortEntry> ports;
+  bool midiInputRunning = false;
+  std::string midiLastError;
+  std::string midiEndpointHint = "ALSA target: invalid";
+  bool parseHintSucceeds = false;
+  int parsedClient = -1;
+  int parsedPort = -1;
+  int executeSystemStatus = 0;
+  std::string lastSystemCommand;
 };
 
 std::string runMidiCommand(TestState& state, const std::string& command) {
@@ -57,7 +65,32 @@ std::string runMidiCommand(TestState& state, const std::string& command) {
   };
 
   std::function<bool(const std::string&, int&, int&)> parseHintEndpoint =
-      [](const std::string&, int&, int&) { return false; };
+      [&state](const std::string&, int& client, int& port) {
+        if (!state.parseHintSucceeds) {
+          return false;
+        }
+        client = state.parsedClient;
+        port = state.parsedPort;
+        return true;
+      };
+
+  std::function<bool()> midiInputRunning = [&state]() {
+    return state.midiInputRunning;
+  };
+
+  std::function<std::string()> midiLastError = [&state]() {
+    return state.midiLastError;
+  };
+
+  std::function<std::string()> midiEndpointHint = [&state]() {
+    return state.midiEndpointHint;
+  };
+
+  std::function<int(const std::string&)> executeSystemCommand =
+      [&state](const std::string& command) {
+        state.lastSystemCommand = command;
+        return state.executeSystemStatus;
+      };
 
   extracker::MidiCommandContext context{
       state.midiInput,
@@ -79,7 +112,11 @@ std::string runMidiCommand(TestState& state, const std::string& command) {
       readCommandOutput,
       parseAconnectPorts,
       toLower,
-      parseHintEndpoint};
+      parseHintEndpoint,
+      midiInputRunning,
+      midiLastError,
+      midiEndpointHint,
+      executeSystemCommand};
 
   std::istringstream input(command);
   extracker::handleMidiCommand(input, context);
@@ -125,6 +162,59 @@ bool testStaleClockDiagnostics() {
          contains(output, "Suggestion: run 'midi transport reset' if clock source changed.");
 }
 
+bool testAutoconnectOutOfRangeIndex() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock A", "Main"}};
+
+  const std::string output = runMidiCommand(state, "clock autoconnect clock 4");
+  return contains(output, "Selected index 4 is out of range for 1 match(es).") &&
+         contains(output, "Use: midi clock sources clock");
+}
+
+bool testAutoconnectEndpointParseFailure() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock A", "Main"}};
+  state.midiEndpointHint = "ALSA target: malformed";
+  state.parseHintSucceeds = false;
+
+  const std::string output = runMidiCommand(state, "clock autoconnect clock 0");
+  return contains(output, "Could not parse exTracker MIDI target endpoint.") &&
+         contains(output, "ALSA target: malformed");
+}
+
+bool testAutoconnectSuccessConnectsSelectedSource() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.parseHintSucceeds = true;
+  state.parsedClient = 128;
+  state.parsedPort = 0;
+  state.executeSystemStatus = 0;
+  state.ports = {
+      extracker::MidiPortEntry{24, 0, "Clock A", "Main"},
+      extracker::MidiPortEntry{25, 1, "Clock B", "Out"}};
+
+  const std::string output = runMidiCommand(state, "clock autoconnect clock 1");
+  return state.lastSystemCommand == "aconnect 25:1 128:0" &&
+         contains(output, "Connected MIDI clock source 'Clock B / Out' -> 128:0") &&
+         contains(output, "Matched 2 source(s); selected index 1.");
+}
+
+bool testAutoconnectConnectFailureReportsCommand() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.parseHintSucceeds = true;
+  state.parsedClient = 128;
+  state.parsedPort = 0;
+  state.executeSystemStatus = 1;
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock A", "Main"}};
+
+  const std::string output = runMidiCommand(state, "clock autoconnect clock 0");
+  return state.lastSystemCommand == "aconnect 24:0 128:0" &&
+         contains(output, "Failed to connect with command: aconnect 24:0 128:0");
+}
+
 }  // namespace
 
 int main() {
@@ -140,6 +230,26 @@ int main() {
 
   if (!testStaleClockDiagnostics()) {
     std::cerr << "Stale-clock diagnostic behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testAutoconnectOutOfRangeIndex()) {
+    std::cerr << "Autoconnect out-of-range behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testAutoconnectEndpointParseFailure()) {
+    std::cerr << "Autoconnect endpoint parse behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testAutoconnectSuccessConnectsSelectedSource()) {
+    std::cerr << "Autoconnect success behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testAutoconnectConnectFailureReportsCommand()) {
+    std::cerr << "Autoconnect connect failure behavior regression" << '\n';
     return 1;
   }
 

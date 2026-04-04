@@ -45,6 +45,10 @@ struct MidiCommandContext {
   const std::function<std::vector<MidiPortEntry>(const std::string&)>& parseAconnectPorts;
   const std::function<std::string(std::string)>& toLower;
   const std::function<bool(const std::string&, int&, int&)>& parseHintEndpoint;
+  const std::function<bool()>& midiInputRunning;
+  const std::function<std::string()>& midiLastError;
+  const std::function<std::string()>& midiEndpointHint;
+  const std::function<int(const std::string&)>& executeSystemCommand;
 };
 
 struct MidiEventContext {
@@ -80,6 +84,6 @@ void handleMidiEventLocked(const MidiEvent& event,
                            MidiEventContext context);
 
 void handleMidiCommand(std::istringstream& midiInputStream,
-                       MidiCommandContext context);
+                       const MidiCommandContext& context);
 
 }  // namespace extracker

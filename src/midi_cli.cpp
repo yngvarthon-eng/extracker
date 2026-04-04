@@ -20,7 +20,7 @@ std::string trimLeadingSpaces(std::string value) {
   return value;
 }
 
-bool readMatchingClockSources(MidiCommandContext context,
+bool readMatchingClockSources(const MidiCommandContext& context,
                               const std::string& needle,
                               std::vector<MidiPortEntry>& matches) {
   std::string listing;
@@ -121,7 +121,7 @@ ClockAutoconnectArgs parseClockAutoconnectArgs(const std::string& rest) {
   return args;
 }
 
-void runMidiClockLiveProbe(MidiCommandContext context) {
+void runMidiClockLiveProbe(const MidiCommandContext& context) {
   bool beforeHasClock = false;
   std::chrono::steady_clock::time_point beforeClockTimestamp{};
   {
@@ -164,7 +164,7 @@ void runMidiClockLiveProbe(MidiCommandContext context) {
 }
 
 void handleMidiMapCommand(std::istringstream& midiInputStream,
-                          MidiCommandContext context) {
+                          const MidiCommandContext& context) {
   auto& midiChannelMap = context.midiChannelMap;
   std::string firstArg;
   midiInputStream >> firstArg;
@@ -223,7 +223,7 @@ void handleMidiMapCommand(std::istringstream& midiInputStream,
 }
 
 void handleMidiTransportCommand(std::istringstream& midiInputStream,
-                                MidiCommandContext context) {
+                                const MidiCommandContext& context) {
   auto& midiTransportSyncEnabled = context.midiTransportSyncEnabled;
   auto& midiTransportRunning = context.midiTransportRunning;
   auto& stateMutex = context.stateMutex;
@@ -269,7 +269,7 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
       int timeoutMs = -1;
       std::istringstream parse(timeoutArg);
       parse >> timeoutMs;
-      if (!parse || timeoutMs < 100 || timeoutMs > 10000) {
+      if (!parse || !parse.eof() || timeoutMs < 100 || timeoutMs > 10000) {
         std::cout << "Usage: midi transport timeout <100..10000|status>" << '\n';
       } else {
         {
@@ -307,10 +307,13 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
 }
 
 void handleMidiClockCommand(std::istringstream& midiInputStream,
-                            MidiCommandContext context) {
-  auto& midiInput = context.midiInput;
+                            const MidiCommandContext& context) {
   const auto& toLower = context.toLower;
   const auto& parseHintEndpoint = context.parseHintEndpoint;
+  const auto& midiInputRunning = context.midiInputRunning;
+  const auto& midiLastError = context.midiLastError;
+  const auto& midiEndpointHint = context.midiEndpointHint;
+  const auto& executeSystemCommand = context.executeSystemCommand;
 
   std::string mode;
   midiInputStream >> mode;
@@ -361,14 +364,14 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
     if (args.liveProbe) {
       std::cout << "  Mode: live health probe (1 second)" << '\n';
     }
-    std::cout << "  MIDI input running: " << (midiInput.isRunning() ? "yes" : "no") << '\n';
-    if (!midiInput.lastError().empty()) {
-      std::cout << "  MIDI last error: " << midiInput.lastError() << '\n';
+    std::cout << "  MIDI input running: " << (midiInputRunning() ? "yes" : "no") << '\n';
+    if (!midiLastError().empty()) {
+      std::cout << "  MIDI last error: " << midiLastError() << '\n';
     }
 
     int targetClient = -1;
     int targetPort = -1;
-    bool hasTargetEndpoint = parseHintEndpoint(midiInput.endpointHint(), targetClient, targetPort);
+    bool hasTargetEndpoint = parseHintEndpoint(midiEndpointHint(), targetClient, targetPort);
     if (hasTargetEndpoint) {
       std::cout << "  exTracker endpoint: " << targetClient << ":" << targetPort << '\n';
     } else {
@@ -438,7 +441,7 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
       }
     }
   } else if (mode == "autoconnect") {
-    if (!midiInput.isRunning()) {
+    if (!midiInputRunning()) {
       std::cout << "MIDI input is not running. Start it with: midi on" << '\n';
     } else {
       std::string rest;
@@ -464,15 +467,15 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
       } else {
         int targetClient = -1;
         int targetPort = -1;
-        if (!parseHintEndpoint(midiInput.endpointHint(), targetClient, targetPort)) {
+        if (!parseHintEndpoint(midiEndpointHint(), targetClient, targetPort)) {
           std::cout << "Could not parse exTracker MIDI target endpoint." << '\n';
-          std::cout << midiInput.endpointHint() << '\n';
+          std::cout << midiEndpointHint() << '\n';
         } else {
           const auto& source = matches[static_cast<std::size_t>(args.selectedIndex)];
           std::ostringstream command;
           command << "aconnect " << source.client << ":" << source.port
                   << " " << targetClient << ":" << targetPort;
-          int status = std::system(command.str().c_str());
+          int status = executeSystemCommand(command.str());
           if (status == 0) {
             std::cout << "Connected MIDI clock source '" << source.clientName << " / "
                       << source.portName << "' -> "
@@ -611,7 +614,7 @@ void handleMidiEventLocked(const MidiEvent& event,
 }
 
 void handleMidiCommand(std::istringstream& midiInputStream,
-                       MidiCommandContext context) {
+                       const MidiCommandContext& context) {
   auto& midiInput = context.midiInput;
   const auto& onMidiEvent = context.onMidiEvent;
   auto& midiThruEnabled = context.midiThruEnabled;
@@ -653,7 +656,16 @@ void handleMidiCommand(std::istringstream& midiInputStream,
     }
   } else if (subcommand == "instrument") {
     int instrument = -1;
-    if (!(midiInputStream >> instrument)) {
+    std::string instrumentArg;
+    midiInputStream >> instrumentArg;
+    if (instrumentArg.empty()) {
+      std::cout << "Usage: midi instrument <index>" << '\n';
+      return;
+    }
+
+    std::istringstream instrumentParse(instrumentArg);
+    instrumentParse >> instrument;
+    if (!instrumentParse || !instrumentParse.eof()) {
       std::cout << "Usage: midi instrument <index>" << '\n';
     } else {
       midiInstrument = std::clamp(instrument, 0, 255);

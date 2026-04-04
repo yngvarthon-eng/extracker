@@ -13,6 +13,7 @@
 #include <vector>
 #include <cstdio>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 
 #include "extracker/audio_engine.hpp"
@@ -462,6 +463,19 @@ int main() {
   std::function<std::vector<extracker::MidiPortEntry>(const std::string&)> parseAconnectPortsFn = parseAconnectPorts;
   std::function<std::string(std::string)> toLowerFn = toLower;
   std::function<bool(const std::string&, int&, int&)> parseHintEndpointFn = parseHintEndpoint;
+  std::function<bool()> midiInputRunningFn = [&midiInput]() {
+    return midiInput.isRunning();
+  };
+  std::function<std::string()> midiLastErrorFn = [&midiInput]() {
+    return midiInput.lastError();
+  };
+  std::function<std::string()> midiEndpointHintFn = [&midiInput]() {
+    return midiInput.endpointHint();
+  };
+  std::function<int(const std::string&)> executeSystemCommandFn =
+      [](const std::string& command) {
+        return std::system(command.c_str());
+      };
 
   std::thread sequencerThread([&]() {
     while (running.load()) {
@@ -580,7 +594,11 @@ int main() {
                                  readCommandOutputFn,
                                  parseAconnectPortsFn,
                                  toLowerFn,
-                                 parseHintEndpointFn};
+                                 parseHintEndpointFn,
+                                 midiInputRunningFn,
+                                 midiLastErrorFn,
+                                   midiEndpointHintFn,
+                                   executeSystemCommandFn};
 
   extracker::PatternCommandContext patternContext{editor,
                                                    stateMutex,
