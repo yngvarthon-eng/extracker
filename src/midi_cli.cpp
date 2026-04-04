@@ -268,6 +268,29 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
       std::cout << "MIDI clock active: no" << '\n';
       std::cout << "MIDI clock BPM (estimated): n/a" << '\n';
     }
+  } else if (mode == "quick") {
+    bool hasClockSnapshot = false;
+    bool clockFresh = false;
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      hasClockSnapshot = hasMidiClockTimestamp;
+      if (hasClockSnapshot) {
+        auto now = std::chrono::steady_clock::now();
+        clockFresh = (now - context.lastMidiClockTimestamp) <= midiClockTimeout;
+      }
+    }
+
+    std::cout << "MIDI transport quick:" << '\n';
+    std::cout << "  sync: " << (midiTransportSyncEnabled ? "on" : "off") << '\n';
+    std::cout << "  running: " << (midiTransportRunning ? "yes" : "no") << '\n';
+    std::cout << "  source: " << transportSource() << '\n';
+    if (!hasClockSnapshot) {
+      std::cout << "  clock: none" << '\n';
+    } else {
+      std::cout << "  clock: " << (clockFresh ? "fresh" : "stale") << '\n';
+    }
+    std::cout << "  timeout ms: " << midiClockTimeout.count() << '\n';
+    std::cout << "  fallback lock: " << (midiFallbackLockTempo ? "on" : "off") << '\n';
   } else if (mode == "timeout") {
     std::string timeoutArg;
     midiInputStream >> timeoutArg;
@@ -310,7 +333,7 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
     }
     std::cout << "MIDI transport state reset" << '\n';
   } else {
-    std::cout << "Usage: midi transport <on|off|toggle|status|timeout|lock|reset>" << '\n';
+    std::cout << "Usage: midi transport <on|off|toggle|status|quick|timeout|lock|reset>" << '\n';
   }
 }
 

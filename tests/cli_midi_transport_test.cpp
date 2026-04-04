@@ -13,6 +13,7 @@ int main() {
 
   const std::string command =
       "printf 'midi transport status\\n"
+      "midi transport quick\\n"
       "midi transport toggle\\n"
       "midi transport status\\n"
       "midi transport toggle\\n"
@@ -48,6 +49,8 @@ int main() {
   }
 
   const bool sawInitialStatus = output.find("MIDI transport sync: off") != std::string::npos;
+  const bool sawQuickHeader = output.find("MIDI transport quick:") != std::string::npos;
+  const bool sawQuickSource = output.find("source: internal") != std::string::npos;
   const bool sawToggleOn = output.find("MIDI transport sync enabled") != std::string::npos;
   const bool sawToggleOff = output.find("MIDI transport sync disabled") != std::string::npos;
   const bool sawStatusOn = output.find("MIDI transport sync: on") != std::string::npos;
@@ -59,7 +62,8 @@ int main() {
   const bool sawLockStatus = output.find("MIDI fallback tempo lock: off") != std::string::npos;
   const bool sawReset = output.find("MIDI transport state reset") != std::string::npos;
 
-    if (!sawInitialStatus || !sawToggleOn || !sawToggleOff || !sawStatusOn ||
+      if (!sawInitialStatus || !sawQuickHeader || !sawQuickSource ||
+        !sawToggleOn || !sawToggleOff || !sawStatusOn ||
       !sawMalformedTimeoutUsage || !sawTimeoutSet || !sawTimeoutStatus ||
       !sawLockOff || !sawLockStatus || !sawReset) {
     std::cerr << "Missing expected MIDI transport output markers" << '\n';
