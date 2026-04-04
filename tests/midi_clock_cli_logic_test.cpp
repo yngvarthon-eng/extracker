@@ -206,6 +206,17 @@ bool testAutoconnectNeedleWithDigitSuffix() {
          contains(output, "Could not parse exTracker MIDI target endpoint.");
 }
 
+bool testAutoconnectSingleTokenDigitPrefixNeedle() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.parseHintSucceeds = false;
+  state.ports = {extracker::MidiPortEntry{24, 0, "24Clock", "Main"}};
+
+  const std::string output = runMidiCommand(state, "clock autoconnect 24Clock");
+  return !contains(output, "Usage: midi clock autoconnect [name] [index]") &&
+         contains(output, "Could not parse exTracker MIDI target endpoint.");
+}
+
 bool testAutoconnectEndpointParseFailure() {
   TestState state;
   state.midiInputRunning = true;
@@ -416,6 +427,11 @@ int main() {
 
   if (!testAutoconnectNeedleWithDigitSuffix()) {
     std::cerr << "Autoconnect digit-suffix needle behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testAutoconnectSingleTokenDigitPrefixNeedle()) {
+    std::cerr << "Autoconnect single-token digit-prefix needle behavior regression" << '\n';
     return 1;
   }
 

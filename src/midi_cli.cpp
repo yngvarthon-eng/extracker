@@ -121,7 +121,7 @@ ClockAutoconnectArgs parseClockAutoconnectArgs(const std::string& rest) {
       // Treat token as malformed index only when it starts like an integer
       // but contains trailing junk (e.g. "1foo"). Names like "clock2" remain valid.
       std::istringstream partialIndexStream(tokens.back());
-      if (partialIndexStream >> parsedIndex) {
+      if (tokens.size() > 1 && (partialIndexStream >> parsedIndex)) {
         args.malformedIndexToken = true;
       }
     }
