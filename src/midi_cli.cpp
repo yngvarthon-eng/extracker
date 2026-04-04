@@ -237,14 +237,32 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
 
   std::string mode;
   midiInputStream >> mode;
+
+  auto hasTrailingArgs = [&]() {
+    midiInputStream >> std::ws;
+    return midiInputStream.peek() != EOF;
+  };
+
   if (mode == "on") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi transport <on|off|toggle|status|quick|timeout|lock|reset>" << '\n';
+      return;
+    }
     midiTransportSyncEnabled = true;
     std::cout << "MIDI transport sync enabled" << '\n';
   } else if (mode == "off") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi transport <on|off|toggle|status|quick|timeout|lock|reset>" << '\n';
+      return;
+    }
     midiTransportSyncEnabled = false;
     midiTransportRunning = false;
     std::cout << "MIDI transport sync disabled" << '\n';
   } else if (mode == "toggle") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi transport <on|off|toggle|status|quick|timeout|lock|reset>" << '\n';
+      return;
+    }
     midiTransportSyncEnabled = !midiTransportSyncEnabled;
     if (!midiTransportSyncEnabled) {
       midiTransportRunning = false;
@@ -253,6 +271,10 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
       std::cout << "MIDI transport sync enabled" << '\n';
     }
   } else if (mode == "status") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi transport <on|off|toggle|status|quick|timeout|lock|reset>" << '\n';
+      return;
+    }
     {
       std::lock_guard<std::mutex> lock(stateMutex);
       midiClockAlive();
@@ -270,6 +292,10 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
       std::cout << "MIDI clock BPM (estimated): n/a" << '\n';
     }
   } else if (mode == "quick") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi transport <on|off|toggle|status|quick|timeout|lock|reset>" << '\n';
+      return;
+    }
     bool hasClockSnapshot = false;
     bool clockFresh = false;
     {
@@ -296,12 +322,16 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
     std::string timeoutArg;
     midiInputStream >> timeoutArg;
     if (timeoutArg.empty() || timeoutArg == "status") {
+      if (hasTrailingArgs()) {
+        std::cout << "Usage: midi transport timeout <100..10000|status>" << '\n';
+        return;
+      }
       std::cout << "MIDI clock timeout ms: " << midiClockTimeout.count() << '\n';
     } else {
       int timeoutMs = -1;
       std::istringstream parse(timeoutArg);
       parse >> timeoutMs;
-      if (!parse || !parse.eof() || timeoutMs < 100 || timeoutMs > 10000) {
+      if (!parse || !parse.eof() || timeoutMs < 100 || timeoutMs > 10000 || hasTrailingArgs()) {
         std::cout << "Usage: midi transport timeout <100..10000|status>" << '\n';
       } else {
         {
@@ -315,17 +345,33 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
     std::string lockMode;
     midiInputStream >> lockMode;
     if (lockMode == "on") {
+      if (hasTrailingArgs()) {
+        std::cout << "Usage: midi transport lock <on|off|status>" << '\n';
+        return;
+      }
       midiFallbackLockTempo = true;
       std::cout << "MIDI fallback tempo lock enabled" << '\n';
     } else if (lockMode == "off") {
+      if (hasTrailingArgs()) {
+        std::cout << "Usage: midi transport lock <on|off|status>" << '\n';
+        return;
+      }
       midiFallbackLockTempo = false;
       std::cout << "MIDI fallback tempo lock disabled" << '\n';
     } else if (lockMode.empty() || lockMode == "status") {
+      if (hasTrailingArgs()) {
+        std::cout << "Usage: midi transport lock <on|off|status>" << '\n';
+        return;
+      }
       std::cout << "MIDI fallback tempo lock: " << (midiFallbackLockTempo ? "on" : "off") << '\n';
     } else {
       std::cout << "Usage: midi transport lock <on|off|status>" << '\n';
     }
   } else if (mode == "reset") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi transport <on|off|toggle|status|quick|timeout|lock|reset>" << '\n';
+      return;
+    }
     {
       std::lock_guard<std::mutex> lock(stateMutex);
       midiTransportRunning = false;
