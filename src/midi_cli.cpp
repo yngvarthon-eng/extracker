@@ -113,8 +113,13 @@ ClockAutoconnectArgs parseClockAutoconnectArgs(const std::string& rest) {
       args.selectedIndex = parsedIndex;
       args.selectedIndexExplicit = true;
       tokens.pop_back();
-    } else if (tokens.back().find_first_of("0123456789") != std::string::npos) {
-      args.malformedIndexToken = true;
+    } else {
+      // Treat token as malformed index only when it starts like an integer
+      // but contains trailing junk (e.g. "1foo"). Names like "clock2" remain valid.
+      std::istringstream partialIndexStream(tokens.back());
+      if (partialIndexStream >> parsedIndex) {
+        args.malformedIndexToken = true;
+      }
     }
   }
 

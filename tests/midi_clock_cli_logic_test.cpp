@@ -185,6 +185,17 @@ bool testAutoconnectMalformedIndexToken() {
   return contains(output, "Usage: midi clock autoconnect [name] [index]");
 }
 
+bool testAutoconnectNeedleWithDigitSuffix() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.parseHintSucceeds = false;
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock2", "Main"}};
+
+  const std::string output = runMidiCommand(state, "clock autoconnect clock2");
+  return !contains(output, "Usage: midi clock autoconnect [name] [index]") &&
+         contains(output, "Could not parse exTracker MIDI target endpoint.");
+}
+
 bool testAutoconnectEndpointParseFailure() {
   TestState state;
   state.midiInputRunning = true;
@@ -285,6 +296,11 @@ int main() {
 
   if (!testAutoconnectMalformedIndexToken()) {
     std::cerr << "Autoconnect malformed-index behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testAutoconnectNeedleWithDigitSuffix()) {
+    std::cerr << "Autoconnect digit-suffix needle behavior regression" << '\n';
     return 1;
   }
 
