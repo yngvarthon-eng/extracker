@@ -17,6 +17,7 @@ int main() {
       "midi thru nope\n"
       "midi learn\n"
       "midi learn nope\n"
+      "midi map\n"
       "midi map nope\n"
       "midi map clear\n"
       "quit\n' | " + appPath;
@@ -44,10 +45,11 @@ int main() {
   const bool sawInstrumentUsage = output.find("Usage: midi instrument <index>") != std::string::npos;
   const bool sawThruUsage = output.find("Usage: midi thru <on|off>") != std::string::npos;
   const bool sawLearnUsage = output.find("Usage: midi learn <on|off|status>") != std::string::npos;
+  const bool sawMapStatus = output.find("MIDI channel map: (empty)") != std::string::npos;
   const bool sawMapUsage = output.find("Usage: midi map <channel> <instr|clear>") != std::string::npos;
   const bool sawMapClearUsage = output.find("Usage: midi map clear all") != std::string::npos;
 
-  if (!sawInstrumentUsage || !sawThruUsage || !sawLearnUsage || !sawMapUsage || !sawMapClearUsage) {
+  if (!sawInstrumentUsage || !sawThruUsage || !sawLearnUsage || !sawMapStatus || !sawMapUsage || !sawMapClearUsage) {
     std::cerr << "Missing expected MIDI subcommand usage output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
