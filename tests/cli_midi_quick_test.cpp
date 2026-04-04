@@ -13,6 +13,7 @@ int main() {
 
   const std::string command =
       "printf 'midi quick\n"
+      "midi quick nope\n"
       "midi transport on\n"
       "midi quick all\n"
       "midi quick compact\n"
@@ -40,6 +41,7 @@ int main() {
   }
 
   const bool sawHeader = output.find("MIDI quick:") != std::string::npos;
+  const bool sawQuickUsage = output.find("Usage: midi quick [all|compact [name]]") != std::string::npos;
   const bool sawAllHeader = output.find("MIDI quick all:") != std::string::npos;
   const bool sawCompactHeader = output.find("MIDI quick compact:") != std::string::npos;
   const bool sawCompactClockFilter = output.find("filter='Clock'") != std::string::npos;
@@ -50,7 +52,7 @@ int main() {
   const bool sawClock = output.find("clock: none") != std::string::npos;
   const bool sawEndpoint = output.find("endpoint:") != std::string::npos;
 
-  if (!sawHeader || !sawAllHeader || !sawCompactHeader ||
+  if (!sawHeader || !sawQuickUsage || !sawAllHeader || !sawCompactHeader ||
       !sawTransportQuickHeader || !sawClockQuickHeader ||
       !sawRunning || !sawTransportOn || !sawClock || !sawEndpoint || !sawCompactClockFilter) {
     std::cerr << "Missing expected MIDI quick output markers" << '\n';
