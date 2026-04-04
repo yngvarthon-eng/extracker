@@ -36,6 +36,7 @@ struct TestState {
   int parsedPort = -1;
   int executeSystemStatus = 0;
   std::string lastSystemCommand;
+  bool readCommandOutputSucceeds = true;
 };
 
 std::string runMidiCommand(TestState& state, const std::string& command) {
@@ -47,7 +48,10 @@ std::string runMidiCommand(TestState& state, const std::string& command) {
   std::function<const char*()> transportSource = []() { return "internal"; };
 
   std::function<bool(const std::string&, std::string&)> readCommandOutput =
-      [](const std::string&, std::string& output) {
+      [&state](const std::string&, std::string& output) {
+        if (!state.readCommandOutputSucceeds) {
+          return false;
+        }
         output = "mock";
         return true;
       };
@@ -234,6 +238,19 @@ bool testQuickStatusSummary() {
          contains(output, "source matches: 1 (first 24:0)");
 }
 
+bool testQuickStatusListingFailure() {
+  TestState state;
+  state.midiInputRunning = false;
+  state.parseHintSucceeds = false;
+  state.readCommandOutputSucceeds = false;
+
+  const std::string output = runMidiCommand(state, "clock quick");
+  return contains(output, "MIDI clock quick:") &&
+         contains(output, "running: no") &&
+         contains(output, "endpoint: unavailable") &&
+         contains(output, "source matches: n/a (aconnect failed)");
+}
+
 }  // namespace
 
 int main() {
@@ -274,6 +291,11 @@ int main() {
 
   if (!testQuickStatusSummary()) {
     std::cerr << "Quick status behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testQuickStatusListingFailure()) {
+    std::cerr << "Quick status listing failure behavior regression" << '\n';
     return 1;
   }
 
