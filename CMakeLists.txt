@@ -211,6 +211,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_midi_transport_basic_parse_test extracker)
   add_test(NAME extracker_cli_midi_transport_basic_parse_test COMMAND extracker_cli_midi_transport_basic_parse_test)
 
+  add_executable(extracker_cli_midi_transport_invalid_mode_test tests/cli_midi_transport_invalid_mode_test.cpp)
+  add_dependencies(extracker_cli_midi_transport_invalid_mode_test extracker)
+  add_test(NAME extracker_cli_midi_transport_invalid_mode_test COMMAND extracker_cli_midi_transport_invalid_mode_test)
+
   add_executable(extracker_cli_record_on_cursor_test tests/cli_record_on_cursor_test.cpp)
   add_dependencies(extracker_cli_record_on_cursor_test extracker)
   add_test(NAME extracker_cli_record_on_cursor_test COMMAND extracker_cli_record_on_cursor_test)
