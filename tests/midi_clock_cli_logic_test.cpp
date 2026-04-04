@@ -176,6 +176,16 @@ bool testAutoconnectOutOfRangeIndex() {
          contains(output, "Use: midi clock sources clock");
 }
 
+bool testAutoconnectNegativeIndexOutOfRange() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock A", "Main"}};
+
+  const std::string output = runMidiCommand(state, "clock autoconnect clock -1");
+  return contains(output, "Selected index -1 is out of range for 1 match(es).") &&
+         contains(output, "Use: midi clock sources clock");
+}
+
 bool testAutoconnectMalformedIndexToken() {
   TestState state;
   state.midiInputRunning = true;
@@ -312,6 +322,11 @@ int main() {
 
   if (!testAutoconnectOutOfRangeIndex()) {
     std::cerr << "Autoconnect out-of-range behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testAutoconnectNegativeIndexOutOfRange()) {
+    std::cerr << "Autoconnect negative-index behavior regression" << '\n';
     return 1;
   }
 

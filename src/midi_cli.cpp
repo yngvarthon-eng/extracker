@@ -113,7 +113,7 @@ ClockAutoconnectArgs parseClockAutoconnectArgs(const std::string& rest) {
   if (!tokens.empty()) {
     int parsedIndex = -1;
     std::istringstream indexStream(tokens.back());
-    if (indexStream >> parsedIndex && indexStream.eof() && parsedIndex >= 0) {
+    if (indexStream >> parsedIndex && indexStream.eof()) {
       args.selectedIndex = parsedIndex;
       args.selectedIndexExplicit = true;
       tokens.pop_back();
