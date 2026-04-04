@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace extracker {
@@ -733,30 +734,102 @@ void handleMidiCommand(std::istringstream& midiInputStream,
     }
     std::cout << midiInput.endpointHint() << '\n';
   } else if (subcommand == "quick") {
-    bool hasClockSnapshot = false;
-    bool clockFresh = false;
-    {
-      std::lock_guard<std::mutex> lock(context.stateMutex);
-      hasClockSnapshot = context.hasMidiClockTimestamp;
-      if (hasClockSnapshot) {
-        auto now = std::chrono::steady_clock::now();
-        clockFresh = (now - context.lastMidiClockTimestamp) <= context.midiClockTimeout;
+    auto computeClockState = [&]() {
+      bool hasClockSnapshot = false;
+      bool clockFresh = false;
+      {
+        std::lock_guard<std::mutex> lock(context.stateMutex);
+        hasClockSnapshot = context.hasMidiClockTimestamp;
+        if (hasClockSnapshot) {
+          auto now = std::chrono::steady_clock::now();
+          clockFresh = (now - context.lastMidiClockTimestamp) <= context.midiClockTimeout;
+        }
       }
-    }
+      return std::make_pair(hasClockSnapshot, clockFresh);
+    };
 
-    std::cout << "MIDI quick:" << '\n';
-    std::cout << "  running: " << (midiInput.isRunning() ? "yes" : "no") << '\n';
-    std::cout << "  thru: " << (midiThruEnabled ? "on" : "off") << '\n';
-    std::cout << "  instrument: " << midiInstrument << '\n';
-    std::cout << "  learn: " << (midiLearnEnabled ? "on" : "off") << '\n';
-    std::cout << "  transport sync: " << (context.midiTransportSyncEnabled ? "on" : "off") << '\n';
-    std::cout << "  transport running: " << (context.midiTransportRunning ? "yes" : "no") << '\n';
-    if (!hasClockSnapshot) {
-      std::cout << "  clock: none" << '\n';
+    auto printMidiQuickSummary = [&]() {
+      const auto [hasClockSnapshot, clockFresh] = computeClockState();
+      std::cout << "MIDI quick:" << '\n';
+      std::cout << "  running: " << (midiInput.isRunning() ? "yes" : "no") << '\n';
+      std::cout << "  thru: " << (midiThruEnabled ? "on" : "off") << '\n';
+      std::cout << "  instrument: " << midiInstrument << '\n';
+      std::cout << "  learn: " << (midiLearnEnabled ? "on" : "off") << '\n';
+      std::cout << "  transport sync: " << (context.midiTransportSyncEnabled ? "on" : "off") << '\n';
+      std::cout << "  transport running: " << (context.midiTransportRunning ? "yes" : "no") << '\n';
+      if (!hasClockSnapshot) {
+        std::cout << "  clock: none" << '\n';
+      } else {
+        std::cout << "  clock: " << (clockFresh ? "fresh" : "stale") << '\n';
+      }
+      std::cout << "  endpoint: " << midiInput.endpointHint() << '\n';
+    };
+
+    auto printMidiQuickCompactSummary = [&](const std::string& needle) {
+      const auto [hasClockSnapshot, clockFresh] = computeClockState();
+      std::vector<MidiPortEntry> matches;
+      bool listedSources = readMatchingClockSources(context, needle, matches);
+
+      int targetClient = -1;
+      int targetPort = -1;
+      bool hasTargetEndpoint = context.parseHintEndpoint(midiInput.endpointHint(), targetClient, targetPort);
+
+      std::cout << "MIDI quick compact:" << '\n';
+      std::cout << "  midi: running=" << (midiInput.isRunning() ? "yes" : "no")
+                << " thru=" << (midiThruEnabled ? "on" : "off")
+                << " instrument=" << midiInstrument
+                << " learn=" << (midiLearnEnabled ? "on" : "off") << '\n';
+      std::cout << "  transport: sync=" << (context.midiTransportSyncEnabled ? "on" : "off")
+                << " running=" << (context.midiTransportRunning ? "yes" : "no")
+                << " source=" << context.transportSource()
+                << " clock=" << (!hasClockSnapshot ? "none" : (clockFresh ? "fresh" : "stale"))
+                << " timeout_ms=" << context.midiClockTimeout.count()
+                << " fallback_lock=" << (context.midiFallbackLockTempo ? "on" : "off") << '\n';
+      std::cout << "  clock: endpoint=";
+      if (hasTargetEndpoint) {
+        std::cout << targetClient << ":" << targetPort;
+      } else {
+        std::cout << "unavailable";
+      }
+      std::cout << " filter='" << needle << "' matches=";
+      if (!listedSources) {
+        std::cout << "n/a";
+      } else {
+        std::cout << matches.size();
+      }
+      std::cout << '\n';
+    };
+
+    std::string quickMode;
+    midiInputStream >> quickMode;
+    if (quickMode.empty()) {
+      printMidiQuickSummary();
+    } else if (quickMode == "all") {
+      std::string clockNeedle;
+      std::getline(midiInputStream, clockNeedle);
+      clockNeedle = trimLeadingSpaces(clockNeedle);
+      if (clockNeedle.empty()) {
+        clockNeedle = "exTracker Virtual Clock";
+      }
+
+      std::cout << "MIDI quick all:" << '\n';
+      printMidiQuickSummary();
+      std::istringstream transportQuickInput("quick");
+      handleMidiTransportCommand(transportQuickInput, context);
+
+      std::istringstream clockQuickInput("quick " + clockNeedle);
+      handleMidiClockCommand(clockQuickInput, context);
+    } else if (quickMode == "compact") {
+      std::string clockNeedle;
+      std::getline(midiInputStream, clockNeedle);
+      clockNeedle = trimLeadingSpaces(clockNeedle);
+      if (clockNeedle.empty()) {
+        clockNeedle = "exTracker Virtual Clock";
+      }
+      printMidiQuickCompactSummary(clockNeedle);
     } else {
-      std::cout << "  clock: " << (clockFresh ? "fresh" : "stale") << '\n';
+      std::cout << "Usage: midi quick [all|compact [name]]" << '\n';
     }
-    std::cout << "  endpoint: " << midiInput.endpointHint() << '\n';
   } else if (subcommand == "thru") {
     std::string mode;
     midiInputStream >> mode;

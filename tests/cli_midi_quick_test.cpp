@@ -14,7 +14,8 @@ int main() {
   const std::string command =
       "printf 'midi quick\n"
       "midi transport on\n"
-      "midi quick\n"
+      "midi quick all\n"
+      "midi quick compact\n"
       "quit\n' | " + appPath;
 
   std::array<char, 512> buffer{};
@@ -38,12 +39,18 @@ int main() {
   }
 
   const bool sawHeader = output.find("MIDI quick:") != std::string::npos;
+  const bool sawAllHeader = output.find("MIDI quick all:") != std::string::npos;
+  const bool sawCompactHeader = output.find("MIDI quick compact:") != std::string::npos;
+  const bool sawTransportQuickHeader = output.find("MIDI transport quick:") != std::string::npos;
+  const bool sawClockQuickHeader = output.find("MIDI clock quick:") != std::string::npos;
   const bool sawRunning = output.find("running: no") != std::string::npos;
   const bool sawTransportOn = output.find("transport sync: on") != std::string::npos;
   const bool sawClock = output.find("clock: none") != std::string::npos;
   const bool sawEndpoint = output.find("endpoint:") != std::string::npos;
 
-  if (!sawHeader || !sawRunning || !sawTransportOn || !sawClock || !sawEndpoint) {
+  if (!sawHeader || !sawAllHeader || !sawCompactHeader ||
+      !sawTransportQuickHeader || !sawClockQuickHeader ||
+      !sawRunning || !sawTransportOn || !sawClock || !sawEndpoint) {
     std::cerr << "Missing expected MIDI quick output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
