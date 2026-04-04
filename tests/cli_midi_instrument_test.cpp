@@ -13,9 +13,16 @@ int main() {
 
   const std::string command =
       "printf 'midi instrument 12foo\\n"
+      "midi instrument 64 extra\\n"
       "midi instrument 64\\n"
       "midi instrument -2\\n"
       "midi instrument 999\\n"
+      "midi thru on extra\\n"
+      "midi thru on\\n"
+      "midi learn status extra\\n"
+      "midi learn on extra\\n"
+      "midi learn on\\n"
+      "midi learn status\\n"
       "quit\\n' | " + appPath;
 
   std::array<char, 512> buffer{};
@@ -42,8 +49,14 @@ int main() {
   const bool sawSet64 = output.find("MIDI instrument set to 64") != std::string::npos;
   const bool sawClampLow = output.find("MIDI instrument set to 0") != std::string::npos;
   const bool sawClampHigh = output.find("MIDI instrument set to 255") != std::string::npos;
+  const bool sawThruUsage = output.find("Usage: midi thru <on|off>") != std::string::npos;
+  const bool sawThruEnabled = output.find("MIDI thru enabled") != std::string::npos;
+  const bool sawLearnUsage = output.find("Usage: midi learn <on|off|status>") != std::string::npos;
+  const bool sawLearnEnabled = output.find("MIDI learn enabled") != std::string::npos;
+  const bool sawLearnStatus = output.find("MIDI learn: on") != std::string::npos;
 
-  if (!sawUsage || !sawSet64 || !sawClampLow || !sawClampHigh) {
+  if (!sawUsage || !sawSet64 || !sawClampLow || !sawClampHigh ||
+      !sawThruUsage || !sawThruEnabled || !sawLearnUsage || !sawLearnEnabled || !sawLearnStatus) {
     std::cerr << "Missing expected MIDI instrument output markers" << '\n';
     std::cerr << output << '\n';
     return 1;

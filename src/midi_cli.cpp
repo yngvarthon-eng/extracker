@@ -758,6 +758,12 @@ void handleMidiCommand(std::istringstream& midiInputStream,
   auto& midiInstrument = context.midiInstrument;
   auto& midiLearnEnabled = context.midiLearnEnabled;
   auto& midiChannelMap = context.midiChannelMap;
+
+  auto hasTrailingArgs = [&]() {
+    midiInputStream >> std::ws;
+    return midiInputStream.peek() != EOF;
+  };
+
   std::string subcommand;
   midiInputStream >> subcommand;
   if (subcommand == "on") {
@@ -880,9 +886,17 @@ void handleMidiCommand(std::istringstream& midiInputStream,
     std::string mode;
     midiInputStream >> mode;
     if (mode == "on") {
+      if (hasTrailingArgs()) {
+        std::cout << "Usage: midi thru <on|off>" << '\n';
+        return;
+      }
       midiThruEnabled = true;
       std::cout << "MIDI thru enabled" << '\n';
     } else if (mode == "off") {
+      if (hasTrailingArgs()) {
+        std::cout << "Usage: midi thru <on|off>" << '\n';
+        return;
+      }
       midiThruEnabled = false;
       std::cout << "MIDI thru disabled" << '\n';
     } else {
@@ -899,7 +913,7 @@ void handleMidiCommand(std::istringstream& midiInputStream,
 
     std::istringstream instrumentParse(instrumentArg);
     instrumentParse >> instrument;
-    if (!instrumentParse || !instrumentParse.eof()) {
+    if (!instrumentParse || !instrumentParse.eof() || hasTrailingArgs()) {
       std::cout << "Usage: midi instrument <index>" << '\n';
     } else {
       midiInstrument = std::clamp(instrument, 0, 255);
@@ -909,12 +923,24 @@ void handleMidiCommand(std::istringstream& midiInputStream,
     std::string mode;
     midiInputStream >> mode;
     if (mode == "on") {
+      if (hasTrailingArgs()) {
+        std::cout << "Usage: midi learn <on|off|status>" << '\n';
+        return;
+      }
       midiLearnEnabled = true;
       std::cout << "MIDI learn enabled" << '\n';
     } else if (mode == "off") {
+      if (hasTrailingArgs()) {
+        std::cout << "Usage: midi learn <on|off|status>" << '\n';
+        return;
+      }
       midiLearnEnabled = false;
       std::cout << "MIDI learn disabled" << '\n';
     } else if (mode == "status") {
+      if (hasTrailingArgs()) {
+        std::cout << "Usage: midi learn <on|off|status>" << '\n';
+        return;
+      }
       std::cout << "MIDI learn: " << (midiLearnEnabled ? "on" : "off") << '\n';
       std::cout << "Channel map:" << '\n';
       for (std::size_t ch = 0; ch < midiChannelMap.size(); ++ch) {
