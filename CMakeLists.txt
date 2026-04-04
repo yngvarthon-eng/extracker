@@ -143,6 +143,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_pattern_numeric_parse_test extracker)
   add_test(NAME extracker_cli_pattern_numeric_parse_test COMMAND extracker_cli_pattern_numeric_parse_test)
 
+  add_executable(extracker_cli_pattern_template_apply_test tests/cli_pattern_template_apply_test.cpp)
+  add_dependencies(extracker_cli_pattern_template_apply_test extracker)
+  add_test(NAME extracker_cli_pattern_template_apply_test COMMAND extracker_cli_pattern_template_apply_test)
+
   add_executable(extracker_cli_plugin_numeric_parse_test tests/cli_plugin_numeric_parse_test.cpp)
   add_dependencies(extracker_cli_plugin_numeric_parse_test extracker)
   add_test(NAME extracker_cli_plugin_numeric_parse_test COMMAND extracker_cli_plugin_numeric_parse_test)
