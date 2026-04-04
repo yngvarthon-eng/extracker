@@ -345,6 +345,17 @@ bool testDiagnoseLivePrefixIsFilterText() {
          contains(output, "Source filter: 'liveclock'");
 }
 
+bool testDiagnoseLiveProbeRunsWhenListingFails() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.readCommandOutputSucceeds = false;
+
+  const std::string output = runMidiCommand(state, "clock diagnose live");
+  return contains(output, "Mode: live health probe (1 second)") &&
+         contains(output, "ALSA port listing: failed (is aconnect installed?)") &&
+         contains(output, "Live probe result:");
+}
+
 }  // namespace
 
 int main() {
@@ -370,6 +381,11 @@ int main() {
 
   if (!testDiagnoseLivePrefixIsFilterText()) {
     std::cerr << "Diagnose live-prefix filter behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testDiagnoseLiveProbeRunsWhenListingFails()) {
+    std::cerr << "Diagnose live probe listing-failure behavior regression" << '\n';
     return 1;
   }
 

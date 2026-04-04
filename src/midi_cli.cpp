@@ -608,10 +608,10 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
       if (hasClockSnapshot && !clockFresh) {
         std::cout << "  Suggestion: run 'midi transport reset' if clock source changed." << '\n';
       }
+    }
 
-      if (args.liveProbe) {
-        runMidiClockLiveProbe(context);
-      }
+    if (args.liveProbe) {
+      runMidiClockLiveProbe(context);
     }
   } else if (mode == "autoconnect") {
     if (!midiInputRunning()) {
