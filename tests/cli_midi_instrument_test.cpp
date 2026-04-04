@@ -19,9 +19,12 @@ int main() {
       "midi instrument 999\\n"
       "midi thru on extra\\n"
       "midi thru on\\n"
+      "midi thru off\\n"
       "midi learn status extra\\n"
       "midi learn on extra\\n"
       "midi learn on\\n"
+      "midi learn status\\n"
+      "midi learn off\\n"
       "midi learn status\\n"
       "quit\\n' | " + appPath;
 
@@ -51,12 +54,16 @@ int main() {
   const bool sawClampHigh = output.find("MIDI instrument set to 255") != std::string::npos;
   const bool sawThruUsage = output.find("Usage: midi thru <on|off>") != std::string::npos;
   const bool sawThruEnabled = output.find("MIDI thru enabled") != std::string::npos;
+  const bool sawThruDisabled = output.find("MIDI thru disabled") != std::string::npos;
   const bool sawLearnUsage = output.find("Usage: midi learn <on|off|status>") != std::string::npos;
   const bool sawLearnEnabled = output.find("MIDI learn enabled") != std::string::npos;
+  const bool sawLearnDisabled = output.find("MIDI learn disabled") != std::string::npos;
   const bool sawLearnStatus = output.find("MIDI learn: on") != std::string::npos;
+  const bool sawLearnStatusOff = output.find("MIDI learn: off") != std::string::npos;
 
   if (!sawUsage || !sawSet64 || !sawClampLow || !sawClampHigh ||
-      !sawThruUsage || !sawThruEnabled || !sawLearnUsage || !sawLearnEnabled || !sawLearnStatus) {
+      !sawThruUsage || !sawThruEnabled || !sawThruDisabled || !sawLearnUsage ||
+      !sawLearnEnabled || !sawLearnDisabled || !sawLearnStatus || !sawLearnStatusOff) {
     std::cerr << "Missing expected MIDI instrument output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
