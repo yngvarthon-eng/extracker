@@ -131,9 +131,29 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_record_cursor_test extracker)
   add_test(NAME extracker_cli_record_cursor_test COMMAND extracker_cli_record_cursor_test)
 
+  add_executable(extracker_cli_core_numeric_parse_test tests/cli_core_numeric_parse_test.cpp)
+  add_dependencies(extracker_cli_core_numeric_parse_test extracker)
+  add_test(NAME extracker_cli_core_numeric_parse_test COMMAND extracker_cli_core_numeric_parse_test)
+
+  add_executable(extracker_cli_pattern_numeric_parse_test tests/cli_pattern_numeric_parse_test.cpp)
+  add_dependencies(extracker_cli_pattern_numeric_parse_test extracker)
+  add_test(NAME extracker_cli_pattern_numeric_parse_test COMMAND extracker_cli_pattern_numeric_parse_test)
+
+  add_executable(extracker_cli_plugin_numeric_parse_test tests/cli_plugin_numeric_parse_test.cpp)
+  add_dependencies(extracker_cli_plugin_numeric_parse_test extracker)
+  add_test(NAME extracker_cli_plugin_numeric_parse_test COMMAND extracker_cli_plugin_numeric_parse_test)
+
+  add_executable(extracker_cli_record_on_parse_test tests/cli_record_on_parse_test.cpp)
+  add_dependencies(extracker_cli_record_on_parse_test extracker)
+  add_test(NAME extracker_cli_record_on_parse_test COMMAND extracker_cli_record_on_parse_test)
+
   add_executable(extracker_cli_midi_map_test tests/cli_midi_map_test.cpp)
   add_dependencies(extracker_cli_midi_map_test extracker)
   add_test(NAME extracker_cli_midi_map_test COMMAND extracker_cli_midi_map_test)
+
+  add_executable(extracker_cli_midi_instrument_test tests/cli_midi_instrument_test.cpp)
+  add_dependencies(extracker_cli_midi_instrument_test extracker)
+  add_test(NAME extracker_cli_midi_instrument_test COMMAND extracker_cli_midi_instrument_test)
 
   add_executable(extracker_cli_midi_transport_test tests/cli_midi_transport_test.cpp)
   add_dependencies(extracker_cli_midi_transport_test extracker)

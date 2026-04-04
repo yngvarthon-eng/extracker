@@ -6,14 +6,10 @@
 #include <sstream>
 #include <string>
 
+#include "extracker/cli_parse_utils.hpp"
+
 namespace extracker {
 namespace {
-
-bool parseStrictIntToken(const std::string& token, int& outValue) {
-  std::istringstream parse(token);
-  parse >> outValue;
-  return static_cast<bool>(parse) && parse.eof();
-}
 
 bool parseOptionalDryAndLeadingInt(std::istringstream& input, bool& dryRun, int& firstValue) {
   std::string firstArg;
@@ -29,11 +25,7 @@ bool parseOptionalDryAndLeadingInt(std::istringstream& input, bool& dryRun, int&
     }
   }
 
-  return parseStrictIntToken(firstArg, firstValue);
-}
-
-bool hasTrailingTokens(std::istringstream& input) {
-  return !input.eof();
+  return cli::parseStrictIntToken(firstArg, firstValue);
 }
 
 }  // namespace
@@ -58,7 +50,7 @@ void handleNoteCommand(PatternEditor& editor,
   };
 
   auto ensureNoTrailing = [&](const std::string& usage) {
-    if (hasTrailingTokens(noteInput)) {
+    if (cli::hasExtraTokens(noteInput)) {
       printNoteUsage(usage);
       return false;
     }

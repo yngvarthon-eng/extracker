@@ -1,10 +1,11 @@
 #include "extracker/core_cli.hpp"
 
+#include "extracker/cli_parse_utils.hpp"
+
 #include <algorithm>
 #include <iostream>
 
 namespace extracker {
-
 bool handleCoreCommand(const std::string& command,
                        std::istringstream& coreInput,
                        CoreCommandContext context) {
@@ -59,7 +60,7 @@ bool handleCoreCommand(const std::string& command,
 
   if (command == "tempo") {
     double bpm = 0.0;
-    if (coreInput >> bpm && bpm > 0.0) {
+    if (cli::parseStrictDoubleFromStream(coreInput, bpm) && bpm > 0.0 && !cli::hasExtraTokens(coreInput)) {
       transport.setTempoBpm(bpm);
       std::cout << "Tempo set to " << transport.tempoBpm() << " BPM" << '\n';
     } else {
@@ -80,7 +81,9 @@ bool handleCoreCommand(const std::string& command,
     } else if (mode == "range") {
       int from = -1;
       int to = -1;
-      if (!(coreInput >> from >> to)) {
+      if (!cli::parseStrictIntFromStream(coreInput, from) ||
+          !cli::parseStrictIntFromStream(coreInput, to) ||
+          cli::hasExtraTokens(coreInput)) {
         std::cout << "Usage: loop range <from> <to>" << '\n';
       } else {
         if (from > to) {

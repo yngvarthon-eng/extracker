@@ -1,5 +1,7 @@
 #include "extracker/record_cli.hpp"
 
+#include "extracker/cli_parse_utils.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -9,12 +11,6 @@
 
 namespace extracker {
 namespace {
-
-bool parseStrictIntToken(const std::string& token, int& outValue) {
-  std::istringstream parse(token);
-  parse >> outValue;
-  return static_cast<bool>(parse) && parse.eof();
-}
 
 bool parseOptionalDryAndLeadingInt(std::istringstream& input, bool& dryRun, int& firstValue) {
   std::string firstArg;
@@ -30,11 +26,7 @@ bool parseOptionalDryAndLeadingInt(std::istringstream& input, bool& dryRun, int&
     }
   }
 
-  return parseStrictIntToken(firstArg, firstValue);
-}
-
-bool hasTrailingTokens(std::istringstream& input) {
-  return !input.eof();
+  return cli::parseStrictIntToken(firstArg, firstValue);
 }
 
 }  // namespace
@@ -74,7 +66,7 @@ void handleRecordCommand(std::istringstream& recordInput,
   };
 
   auto ensureRecordNoTrailing = [&]() {
-    if (hasTrailingTokens(recordInput)) {
+    if (cli::hasExtraTokens(recordInput)) {
       printRecordNoteUsage();
       return false;
     }
@@ -83,7 +75,12 @@ void handleRecordCommand(std::istringstream& recordInput,
 
   if (subcommand == "on") {
     int channel = recordChannel;
-    if (recordInput >> channel) {
+    std::string channelToken;
+    if (recordInput >> channelToken) {
+      if (!cli::parseStrictIntToken(channelToken, channel) || cli::hasExtraTokens(recordInput)) {
+        std::cout << "Usage: record on [channel]" << '\n';
+        return;
+      }
       channel = std::clamp(channel, 0, static_cast<int>(editor.channels()) - 1);
       recordChannel = channel;
     }
@@ -99,12 +96,16 @@ void handleRecordCommand(std::istringstream& recordInput,
     std::string channelArg;
     recordInput >> channelArg;
     if (channelArg.empty() || channelArg == "status") {
+      if (cli::hasExtraTokens(recordInput)) {
+        std::cout << "Usage: record channel <0.." << (editor.channels() - 1) << "|status>" << '\n';
+        return;
+      }
       std::cout << "Record channel: " << recordChannel << '\n';
     } else {
       int channel = -1;
       std::istringstream parse(channelArg);
       parse >> channel;
-      if (!parse || !parse.eof()) {
+      if (!parse || !parse.eof() || cli::hasExtraTokens(recordInput)) {
         std::cout << "Usage: record channel <0.." << (editor.channels() - 1) << "|status>" << '\n';
       } else {
         channel = std::clamp(channel, 0, static_cast<int>(editor.channels()) - 1);
@@ -122,7 +123,7 @@ void handleRecordCommand(std::istringstream& recordInput,
     std::string rowArg;
     recordInput >> rowArg;
     if (rowArg.empty() || rowArg == "status") {
-      if (hasTrailingTokens(recordInput)) {
+      if (cli::hasExtraTokens(recordInput)) {
         printCursorUsage();
         return;
       }
@@ -136,21 +137,21 @@ void handleRecordCommand(std::istringstream& recordInput,
           return true;
         }
 
-        if (!parseStrictIntToken(countArg, repeatCount) || repeatCount < 1) {
+        if (!cli::parseStrictIntToken(countArg, repeatCount) || repeatCount < 1) {
           return false;
         }
 
-        return !hasTrailingTokens(recordInput);
+        return !cli::hasExtraTokens(recordInput);
       };
 
       if (rowArg == "start") {
-        if (hasTrailingTokens(recordInput)) {
+        if (cli::hasExtraTokens(recordInput)) {
           printCursorUsage();
           return;
         }
         row = 0;
       } else if (rowArg == "end") {
-        if (hasTrailingTokens(recordInput)) {
+        if (cli::hasExtraTokens(recordInput)) {
           printCursorUsage();
           return;
         }
@@ -182,7 +183,7 @@ void handleRecordCommand(std::istringstream& recordInput,
         int value = 0;
         std::istringstream parse(rowArg);
         parse >> value;
-        if (!parse || !parse.eof() || hasTrailingTokens(recordInput)) {
+        if (!parse || !parse.eof() || cli::hasExtraTokens(recordInput)) {
           printCursorUsage();
           return;
         }
@@ -237,13 +238,13 @@ void handleRecordCommand(std::istringstream& recordInput,
         if (args.size() != 2 && args.size() != 4) {
           parsedOk = false;
         } else {
-          parsedOk = parseStrictIntToken(args[1], velocity);
+          parsedOk = cli::parseStrictIntToken(args[1], velocity);
           if (parsedOk && args.size() == 4) {
-            parsedOk = parseStrictIntToken(args[2], fx) && parseStrictIntToken(args[3], fxValue);
+            parsedOk = cli::parseStrictIntToken(args[2], fx) && cli::parseStrictIntToken(args[3], fxValue);
           }
         }
       } else if (args[0] == "fx" && args.size() == 3) {
-        parsedOk = parseStrictIntToken(args[1], fx) && parseStrictIntToken(args[2], fxValue);
+        parsedOk = cli::parseStrictIntToken(args[1], fx) && cli::parseStrictIntToken(args[2], fxValue);
       } else if (hasKeywordArgs) {
         bool seenInstr = false;
         bool seenVel = false;
@@ -256,21 +257,21 @@ void handleRecordCommand(std::istringstream& recordInput,
               break;
             }
             seenInstr = true;
-            parsedOk = parseStrictIntToken(args[++i], instrument);
+            parsedOk = cli::parseStrictIntToken(args[++i], instrument);
           } else if (key == "vel") {
             if (seenVel || (i + 1) >= args.size()) {
               parsedOk = false;
               break;
             }
             seenVel = true;
-            parsedOk = parseStrictIntToken(args[++i], velocity);
+            parsedOk = cli::parseStrictIntToken(args[++i], velocity);
           } else if (key == "fx") {
             if (seenFx || (i + 2) >= args.size()) {
               parsedOk = false;
               break;
             }
             seenFx = true;
-            parsedOk = parseStrictIntToken(args[i + 1], fx) && parseStrictIntToken(args[i + 2], fxValue);
+            parsedOk = cli::parseStrictIntToken(args[i + 1], fx) && cli::parseStrictIntToken(args[i + 2], fxValue);
             i += 2;
           } else {
             parsedOk = false;
@@ -278,14 +279,14 @@ void handleRecordCommand(std::istringstream& recordInput,
           }
         }
       } else if (args.size() == 1) {
-        parsedOk = parseStrictIntToken(args[0], instrument);
+        parsedOk = cli::parseStrictIntToken(args[0], instrument);
       } else if (args.size() == 2) {
-        parsedOk = parseStrictIntToken(args[0], instrument) && parseStrictIntToken(args[1], velocity);
+        parsedOk = cli::parseStrictIntToken(args[0], instrument) && cli::parseStrictIntToken(args[1], velocity);
       } else if (args.size() == 4) {
-        parsedOk = parseStrictIntToken(args[0], instrument) &&
-                   parseStrictIntToken(args[1], velocity) &&
-                   parseStrictIntToken(args[2], fx) &&
-                   parseStrictIntToken(args[3], fxValue);
+        parsedOk = cli::parseStrictIntToken(args[0], instrument) &&
+                   cli::parseStrictIntToken(args[1], velocity) &&
+                   cli::parseStrictIntToken(args[2], fx) &&
+                   cli::parseStrictIntToken(args[3], fxValue);
       } else {
         parsedOk = false;
       }

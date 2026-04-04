@@ -2,9 +2,25 @@
 
 #include <algorithm>
 #include <iostream>
+
+#include "extracker/cli_parse_utils.hpp"
 #include "extracker/pattern_templates.hpp"
 
 namespace extracker {
+namespace {
+
+bool readOptionalStrictInt(std::istringstream& input, bool& provided, int& value) {
+  std::string token;
+  if (!(input >> token)) {
+    provided = false;
+    return true;
+  }
+
+  provided = true;
+  return cli::parseStrictIntToken(token, value);
+}
+
+}  // namespace
 
 void handlePatternCommand(PatternCommandContext context,
                           std::istringstream& patternInput) {
@@ -26,15 +42,24 @@ void handlePatternCommand(PatternCommandContext context,
   if (subcommand == "print") {
     int from = 0;
     int to = 15;
-    patternInput >> from;
-    if (patternInput.fail()) {
-      patternInput.clear();
-      from = 0;
+    bool hasFrom = false;
+    bool hasTo = false;
+    if (!readOptionalStrictInt(patternInput, hasFrom, from)) {
+      std::cout << "Usage: pattern print [from] [to]" << '\n';
+      return;
     }
-    patternInput >> to;
-    if (patternInput.fail()) {
-      patternInput.clear();
-      to = from + 15;
+    if (hasFrom) {
+      if (!readOptionalStrictInt(patternInput, hasTo, to)) {
+        std::cout << "Usage: pattern print [from] [to]" << '\n';
+        return;
+      }
+      if (!hasTo) {
+        to = from + 15;
+      }
+    }
+    if (cli::hasExtraTokens(patternInput)) {
+      std::cout << "Usage: pattern print [from] [to]" << '\n';
+      return;
     }
 
     if (from > to) {
@@ -64,10 +89,24 @@ void handlePatternCommand(PatternCommandContext context,
   } else if (subcommand == "play") {
     int from = 0;
     int to = static_cast<int>(editor.rows()) - 1;
-    if (patternInput >> from) {
-      if (!(patternInput >> to)) {
+    bool hasFrom = false;
+    bool hasTo = false;
+    if (!readOptionalStrictInt(patternInput, hasFrom, from)) {
+      std::cout << "Usage: pattern play [from] [to]" << '\n';
+      return;
+    }
+    if (hasFrom) {
+      if (!readOptionalStrictInt(patternInput, hasTo, to)) {
+        std::cout << "Usage: pattern play [from] [to]" << '\n';
+        return;
+      }
+      if (!hasTo) {
         to = from;
       }
+    }
+    if (cli::hasExtraTokens(patternInput)) {
+      std::cout << "Usage: pattern play [from] [to]" << '\n';
+      return;
     }
 
     if (from > to) {
@@ -93,11 +132,11 @@ void handlePatternCommand(PatternCommandContext context,
   } else if (subcommand == "template") {
     std::string templateName;
     patternInput >> templateName;
-    if (templateName.empty()) {
+    if (templateName.empty() || cli::hasExtraTokens(patternInput)) {
       std::cout << "Usage: pattern template <blank|house|electro>" << '\n';
     } else {
       std::lock_guard<std::mutex> lock(stateMutex);
-        if (!applyPatternTemplate(editor, templateName)) {
+      if (!applyPatternTemplate(editor, templateName)) {
         std::cout << "Unknown pattern template: " << templateName << '\n';
       } else {
         sequencer.reset();

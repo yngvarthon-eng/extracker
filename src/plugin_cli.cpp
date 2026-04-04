@@ -1,5 +1,7 @@
 #include "extracker/plugin_cli.hpp"
 
+#include "extracker/cli_parse_utils.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -20,6 +22,19 @@ bool tryParseControlIndex(const std::string& token, int& outIndex) {
     return false;
   }
   outIndex = static_cast<int>(value);
+  return true;
+}
+
+bool tryParseInstrumentToken(const std::string& token, int& outInstrument) {
+  if (token.empty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const long value = std::strtol(token.c_str(), &end, 10);
+  if (end == nullptr || *end != '\0' || value < 0 || value > 255) {
+    return false;
+  }
+  outInstrument = static_cast<int>(value);
   return true;
 }
 
@@ -64,6 +79,10 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
   std::string subcommand;
   pluginInput >> subcommand;
   if (subcommand == "list") {
+    if (cli::hasExtraTokens(pluginInput)) {
+      std::cout << "Usage: plugin list" << '\n';
+      return;
+    }
     const auto available = plugins.discoverAvailablePlugins();
     if (available.empty()) {
       std::cout << "No plugins discovered" << '\n';
@@ -76,7 +95,7 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
   } else if (subcommand == "load") {
     std::string pluginId;
     pluginInput >> pluginId;
-    if (pluginId.empty()) {
+    if (pluginId.empty() || cli::hasExtraTokens(pluginInput)) {
       std::cout << "Usage: plugin load <id>" << '\n';
     } else if (plugins.loadPlugin(pluginId)) {
       std::cout << "Loaded plugin: " << pluginId << '\n';
@@ -84,10 +103,14 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       std::cout << "Failed to load plugin: " << pluginId << '\n';
     }
   } else if (subcommand == "assign") {
-    int instrument = -1;
+    std::string instrumentToken;
     std::string pluginId;
-    pluginInput >> instrument >> pluginId;
-    if (instrument < 0 || pluginId.empty()) {
+    pluginInput >> instrumentToken >> pluginId;
+
+    int instrument = -1;
+    if (!tryParseInstrumentToken(instrumentToken, instrument) ||
+      pluginId.empty() ||
+        cli::hasExtraTokens(pluginInput)) {
       std::cout << "Usage: plugin assign <instrument> <id>" << '\n';
     } else if (plugins.assignInstrument(static_cast<std::uint8_t>(instrument), pluginId)) {
       std::cout << "Assigned " << pluginId << " to instrument " << instrument << '\n';
@@ -95,11 +118,16 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       std::cout << "Failed to assign plugin; ensure it is loaded and instrument index is valid" << '\n';
     }
   } else if (subcommand == "set") {
-    int instrument = -1;
+    std::string instrumentToken;
     std::string controlPortToken;
     double value = 0.0;
-    pluginInput >> instrument >> controlPortToken >> value;
-    if (instrument < 0 || controlPortToken.empty() || !pluginInput) {
+    pluginInput >> instrumentToken >> controlPortToken >> value;
+
+    int instrument = -1;
+    if (!tryParseInstrumentToken(instrumentToken, instrument) ||
+        controlPortToken.empty() ||
+        !pluginInput ||
+        cli::hasExtraTokens(pluginInput)) {
       std::cout << "Usage: plugin set <instrument> <control-port-index|symbol> <value>" << '\n';
     } else if (!plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument))) {
       std::cout << "Failed to set plugin control; instrument " << instrument << " has no assigned plugin" << '\n';
@@ -126,10 +154,15 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       }
     }
   } else if (subcommand == "get") {
-    int instrument = -1;
+    std::string instrumentToken;
     std::string controlPortToken;
-    pluginInput >> instrument >> controlPortToken;
-    if (instrument < 0 || controlPortToken.empty() || !pluginInput) {
+    pluginInput >> instrumentToken >> controlPortToken;
+
+    int instrument = -1;
+    if (!tryParseInstrumentToken(instrumentToken, instrument) ||
+        controlPortToken.empty() ||
+        !pluginInput ||
+        cli::hasExtraTokens(pluginInput)) {
       std::cout << "Usage: plugin get <instrument> <control-port-index|symbol>" << '\n';
     } else if (!plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument))) {
       std::cout << "Failed to get plugin control; instrument " << instrument << " has no assigned plugin" << '\n';
@@ -156,6 +189,10 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       }
     }
   } else if (subcommand == "scan") {
+    if (cli::hasExtraTokens(pluginInput)) {
+      std::cout << "Usage: plugin scan" << '\n';
+      return;
+    }
     const std::size_t found = plugins.rescanExternalPlugins();
     if (found > 0) {
       std::cout << "Scan found " << found << " new plugin(s)" << '\n';
@@ -166,7 +203,7 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
   } else if (subcommand == "info") {
     std::string pluginId;
     pluginInput >> pluginId;
-    if (pluginId.empty()) {
+    if (pluginId.empty() || cli::hasExtraTokens(pluginInput)) {
       std::cout << "Usage: plugin info <id>" << '\n';
     } else {
       PluginPortInfo info;
@@ -201,6 +238,10 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       }
     }
   } else if (subcommand == "status") {
+    if (cli::hasExtraTokens(pluginInput)) {
+      std::cout << "Usage: plugin status" << '\n';
+      return;
+    }
     std::cout << "Instrument assignments:" << '\n';
     bool hasAny = false;
     for (std::size_t i = 0; i < PluginHost::kMaxInstrumentSlots; ++i) {
@@ -219,9 +260,11 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
 }
 
 void handleSineCommand(PluginHost& plugins, std::istringstream& sineInput) {
+  std::string instrumentToken;
+  sineInput >> instrumentToken;
+
   int instrument = -1;
-  sineInput >> instrument;
-  if (instrument < 0) {
+  if (!tryParseInstrumentToken(instrumentToken, instrument) || cli::hasExtraTokens(sineInput)) {
     std::cout << "Usage: sine <instrument>" << '\n';
   } else {
     if (!plugins.loadPlugin("builtin.sine")) {
