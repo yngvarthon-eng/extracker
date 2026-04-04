@@ -179,6 +179,16 @@ ctest --test-dir build --output-on-failure
 - `note gate dry <row> <ch> <ticks>` previews a gate edit without writing.
 - `note fx dry <row> <ch> <fx> <fxval>` previews an effect edit without writing.
 
+## CLI MIDI Quick Reference
+
+- `midi quick` shows a short overview of instrument, transport, and clock state.
+- `midi quick all` prints the overview and then expands transport and clock quick sections.
+- `midi quick compact` prints one-line compact transport/clock summaries.
+- `midi quick compact <name>` prints compact output for a named MIDI endpoint when available.
+- `midi transport quick` shows transport state plus timeout and source endpoint.
+- `midi clock quick` shows clock source and autoconnect status.
+- `midi transport toggle` toggles between running/stopped MIDI transport.
+
 ## Next milestones
 
 1. Implement full LV2 port mapping and DSP bridge for discovered plugin IDs.
