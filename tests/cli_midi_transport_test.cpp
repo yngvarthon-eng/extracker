@@ -23,8 +23,9 @@ int main() {
       "midi transport status\\n"
       "midi transport timeout 2750ms\\n"
       "midi transport timeout 50\\n"
-      "midi transport timeout 100\n"
-      "midi transport timeout 10000\n"
+      "midi transport timeout 100\\n"
+      "midi transport timeout 10000\\n"
+      "midi transport timeout 10001\\n"
       "midi transport timeout 2750\\n"
       "midi transport timeout 2750 extra\\n"
       "midi transport timeout\\n"
@@ -63,8 +64,13 @@ int main() {
   const bool sawToggleOn = output.find("MIDI transport sync enabled") != std::string::npos;
   const bool sawToggleOff = output.find("MIDI transport sync disabled") != std::string::npos;
   const bool sawStatusOn = output.find("MIDI transport sync: on") != std::string::npos;
-  const bool sawMalformedTimeoutUsage =
-      output.find("Usage: midi transport timeout <100..10000|status>") != std::string::npos;
+  const std::string timeoutUsage = "Usage: midi transport timeout <100..10000|status>";
+  const bool sawMalformedTimeoutUsage = output.find(timeoutUsage) != std::string::npos;
+  std::size_t timeoutUsageCount = 0;
+  for (std::size_t pos = output.find(timeoutUsage); pos != std::string::npos;
+       pos = output.find(timeoutUsage, pos + timeoutUsage.size())) {
+    ++timeoutUsageCount;
+  }
     const bool sawTransportUsage =
       output.find("Usage: midi transport <on|off|toggle|status|quick|timeout|lock|reset>") != std::string::npos;
   const bool sawTimeoutSetMin = output.find("MIDI clock timeout set to 100 ms") != std::string::npos;
@@ -80,6 +86,7 @@ int main() {
       if (!sawInitialStatus || !sawQuickHeader || !sawQuickSource ||
         !sawToggleOn || !sawToggleOff || !sawStatusOn ||
       !sawMalformedTimeoutUsage || !sawTransportUsage || !sawTimeoutSetMin || !sawTimeoutSetMax ||
+      timeoutUsageCount < 5 ||
       !sawTimeoutSet || !sawTimeoutStatus ||
       !sawLockOff || !sawLockUsage || !sawLockStatus || !sawReset) {
     std::cerr << "Missing expected MIDI transport output markers" << '\n';
