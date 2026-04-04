@@ -12,7 +12,9 @@ int main() {
   }
 
   const std::string command =
-      "printf 'record on 0\\n"
+      "printf 'record undo\\n"
+      "record redo\\n"
+      "record on 0\\n"
       "record note 65 0 100\\n"
       "record undo\\n"
       "save /tmp/xt_cli_roundtrip_test\\n"
@@ -40,12 +42,15 @@ int main() {
     return 1;
   }
 
+  const bool sawUndoEmpty = output.find("No record action to undo") != std::string::npos;
+  const bool sawRedoEmpty = output.find("No record action to redo") != std::string::npos;
   const bool sawUndo = output.find("Undid record write") != std::string::npos;
   const bool sawLoad = output.find("Module loaded from /tmp/xt_cli_roundtrip_test.xtp") != std::string::npos;
   const bool sawRedo = output.find("Redid record write") != std::string::npos;
 
-  if (!sawUndo || !sawLoad || !sawRedo) {
+  if (!sawUndoEmpty || !sawRedoEmpty || !sawUndo || !sawLoad || !sawRedo) {
     std::cerr << "Missing expected CLI output markers for undo/save-load/redo flow" << '\n';
+    std::cerr << "  sawUndoEmpty=" << sawUndoEmpty << " sawRedoEmpty=" << sawRedoEmpty << '\n';
     std::cerr << output << '\n';
     return 1;
   }
