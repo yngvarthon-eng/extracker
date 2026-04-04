@@ -204,6 +204,10 @@ if(BUILD_TESTING)
     add_dependencies(extracker_cli_midi_clock_diagnose_test extracker)
     add_test(NAME extracker_cli_midi_clock_diagnose_test COMMAND extracker_cli_midi_clock_diagnose_test)
 
+    add_executable(extracker_cli_midi_clock_diagnose_live_probe_failure_test tests/cli_midi_clock_diagnose_live_probe_failure_test.cpp)
+    add_dependencies(extracker_cli_midi_clock_diagnose_live_probe_failure_test extracker)
+    add_test(NAME extracker_cli_midi_clock_diagnose_live_probe_failure_test COMMAND extracker_cli_midi_clock_diagnose_live_probe_failure_test)
+
   add_dependencies(extracker_cli_midi_transport_test extracker)
   add_test(NAME extracker_cli_midi_transport_test COMMAND extracker_cli_midi_transport_test)
 
