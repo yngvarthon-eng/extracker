@@ -23,6 +23,7 @@ int main() {
       "midi learn status extra\\n"
       "midi learn on extra\\n"
       "midi learn on\\n"
+      "midi map 3 7\\n"
       "midi learn status\\n"
       "midi learn off\\n"
       "midi learn status\\n"
@@ -60,10 +61,13 @@ int main() {
   const bool sawLearnDisabled = output.find("MIDI learn disabled") != std::string::npos;
   const bool sawLearnStatus = output.find("MIDI learn: on") != std::string::npos;
   const bool sawLearnStatusOff = output.find("MIDI learn: off") != std::string::npos;
+  const bool sawLearnChannelMapHeader = output.find("Channel map:") != std::string::npos;
+  const bool sawLearnChannelEntry = output.find("ch 3 -> instr 7") != std::string::npos;
 
   if (!sawUsage || !sawSet64 || !sawClampLow || !sawClampHigh ||
       !sawThruUsage || !sawThruEnabled || !sawThruDisabled || !sawLearnUsage ||
-      !sawLearnEnabled || !sawLearnDisabled || !sawLearnStatus || !sawLearnStatusOff) {
+      !sawLearnEnabled || !sawLearnDisabled || !sawLearnStatus || !sawLearnStatusOff ||
+      !sawLearnChannelMapHeader || !sawLearnChannelEntry) {
     std::cerr << "Missing expected MIDI instrument output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
