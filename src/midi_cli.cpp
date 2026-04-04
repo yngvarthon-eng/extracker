@@ -89,6 +89,7 @@ ClockDiagnoseArgs parseClockDiagnoseArgs(
 struct ClockAutoconnectArgs {
   int selectedIndex = 0;
   bool selectedIndexExplicit = false;
+  bool malformedIndexToken = false;
   std::string needle = "exTracker Virtual Clock";
 };
 
@@ -112,6 +113,8 @@ ClockAutoconnectArgs parseClockAutoconnectArgs(const std::string& rest) {
       args.selectedIndex = parsedIndex;
       args.selectedIndexExplicit = true;
       tokens.pop_back();
+    } else if (tokens.back().find_first_of("0123456789") != std::string::npos) {
+      args.malformedIndexToken = true;
     }
   }
 
@@ -599,6 +602,11 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
       std::getline(midiInputStream, rest);
       rest = trimLeadingSpaces(rest);
       ClockAutoconnectArgs args = parseClockAutoconnectArgs(rest);
+
+      if (args.malformedIndexToken) {
+        std::cout << "Usage: midi clock autoconnect [name] [index]" << '\n';
+        return;
+      }
 
       std::vector<MidiPortEntry> matches;
       if (!readMatchingClockSources(context, args.needle, matches)) {

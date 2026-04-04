@@ -176,6 +176,15 @@ bool testAutoconnectOutOfRangeIndex() {
          contains(output, "Use: midi clock sources clock");
 }
 
+bool testAutoconnectMalformedIndexToken() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock A", "Main"}};
+
+  const std::string output = runMidiCommand(state, "clock autoconnect clock 1foo");
+  return contains(output, "Usage: midi clock autoconnect [name] [index]");
+}
+
 bool testAutoconnectEndpointParseFailure() {
   TestState state;
   state.midiInputRunning = true;
@@ -271,6 +280,11 @@ int main() {
 
   if (!testAutoconnectOutOfRangeIndex()) {
     std::cerr << "Autoconnect out-of-range behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testAutoconnectMalformedIndexToken()) {
+    std::cerr << "Autoconnect malformed-index behavior regression" << '\n';
     return 1;
   }
 
