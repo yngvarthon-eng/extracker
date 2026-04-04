@@ -159,6 +159,13 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_midi_quick_test extracker)
   add_test(NAME extracker_cli_midi_quick_test COMMAND extracker_cli_midi_quick_test)
 
+  add_test(
+    NAME extracker_cli_midi_quick_smoke_test
+    COMMAND /bin/sh -c
+      "set -e; out=$(printf 'midi quick\nmidi transport toggle\nmidi quick all\nmidi quick compact\nquit\n' | ./extracker); printf '%s\n' \"$out\" | grep -F 'MIDI quick:' >/dev/null; printf '%s\n' \"$out\" | grep -F 'MIDI quick all:' >/dev/null; printf '%s\n' \"$out\" | grep -F 'MIDI quick compact:' >/dev/null; printf '%s\n' \"$out\" | grep -F 'MIDI transport quick:' >/dev/null; printf '%s\n' \"$out\" | grep -F 'MIDI clock quick:' >/dev/null"
+  )
+  set_tests_properties(extracker_cli_midi_quick_smoke_test PROPERTIES DEPENDS extracker_cli_midi_quick_test)
+
   add_executable(extracker_cli_midi_clock_quick_test tests/cli_midi_clock_quick_test.cpp)
   add_dependencies(extracker_cli_midi_clock_quick_test extracker)
   add_test(NAME extracker_cli_midi_clock_quick_test COMMAND extracker_cli_midi_clock_quick_test)
