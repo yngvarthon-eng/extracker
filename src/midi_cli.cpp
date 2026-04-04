@@ -732,6 +732,31 @@ void handleMidiCommand(std::istringstream& midiInputStream,
       std::cout << "MIDI last error: " << midiInput.lastError() << '\n';
     }
     std::cout << midiInput.endpointHint() << '\n';
+  } else if (subcommand == "quick") {
+    bool hasClockSnapshot = false;
+    bool clockFresh = false;
+    {
+      std::lock_guard<std::mutex> lock(context.stateMutex);
+      hasClockSnapshot = context.hasMidiClockTimestamp;
+      if (hasClockSnapshot) {
+        auto now = std::chrono::steady_clock::now();
+        clockFresh = (now - context.lastMidiClockTimestamp) <= context.midiClockTimeout;
+      }
+    }
+
+    std::cout << "MIDI quick:" << '\n';
+    std::cout << "  running: " << (midiInput.isRunning() ? "yes" : "no") << '\n';
+    std::cout << "  thru: " << (midiThruEnabled ? "on" : "off") << '\n';
+    std::cout << "  instrument: " << midiInstrument << '\n';
+    std::cout << "  learn: " << (midiLearnEnabled ? "on" : "off") << '\n';
+    std::cout << "  transport sync: " << (context.midiTransportSyncEnabled ? "on" : "off") << '\n';
+    std::cout << "  transport running: " << (context.midiTransportRunning ? "yes" : "no") << '\n';
+    if (!hasClockSnapshot) {
+      std::cout << "  clock: none" << '\n';
+    } else {
+      std::cout << "  clock: " << (clockFresh ? "fresh" : "stale") << '\n';
+    }
+    std::cout << "  endpoint: " << midiInput.endpointHint() << '\n';
   } else if (subcommand == "thru") {
     std::string mode;
     midiInputStream >> mode;
@@ -788,7 +813,7 @@ void handleMidiCommand(std::istringstream& midiInputStream,
   } else if (subcommand == "clock") {
     handleMidiClockCommand(midiInputStream, context);
   } else {
-    std::cout << "Usage: midi <on|off|status|thru|instrument|learn|map|transport|clock> ..." << '\n';
+    std::cout << "Usage: midi <on|off|status|quick|thru|instrument|learn|map|transport|clock> ..." << '\n';
   }
 }
 

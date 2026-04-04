@@ -323,6 +323,7 @@ void handleHelpCommand() {
   std::cout << "midi on                    start ALSA MIDI input" << '\n';
   std::cout << "midi off                   stop ALSA MIDI input" << '\n';
   std::cout << "midi status                show MIDI backend/connection hint" << '\n';
+  std::cout << "midi quick                 compact MIDI routing/clock summary" << '\n';
   std::cout << "midi thru <on|off>         enable/disable live MIDI audition" << '\n';
   std::cout << "midi instrument <index>    set instrument slot for MIDI thru/record" << '\n';
   std::cout << "midi learn <on|off|status> auto-map incoming MIDI channels to instruments" << '\n';
