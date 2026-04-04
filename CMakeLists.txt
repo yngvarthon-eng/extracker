@@ -163,6 +163,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_record_no_empty_rows_test extracker)
   add_test(NAME extracker_cli_record_no_empty_rows_test COMMAND extracker_cli_record_no_empty_rows_test)
 
+  add_executable(extracker_cli_loop_range_status_test tests/cli_loop_range_status_test.cpp)
+  add_dependencies(extracker_cli_loop_range_status_test extracker)
+  add_test(NAME extracker_cli_loop_range_status_test COMMAND extracker_cli_loop_range_status_test)
+
   add_executable(extracker_cli_pattern_numeric_parse_test tests/cli_pattern_numeric_parse_test.cpp)
   add_dependencies(extracker_cli_pattern_numeric_parse_test extracker)
   add_test(NAME extracker_cli_pattern_numeric_parse_test COMMAND extracker_cli_pattern_numeric_parse_test)

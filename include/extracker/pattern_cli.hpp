@@ -19,7 +19,7 @@ struct PatternCommandContext {
   int& playRangeFrom;
   int& playRangeTo;
   bool& playRangeActive;
-  bool loopEnabled;
+  bool& loopEnabled;
   bool& recordCanUndo;
   bool& recordCanRedo;
   int& recordCursorRow;
