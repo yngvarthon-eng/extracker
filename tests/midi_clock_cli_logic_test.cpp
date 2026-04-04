@@ -325,6 +325,26 @@ bool testDiagnoseWithCustomFilter() {
          contains(output, "Matching sources: 1");
 }
 
+bool testDiagnoseLiveFlagCaseInsensitive() {
+  TestState state;
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock A", "Main"}};
+  state.midiInputRunning = true;
+
+  const std::string output = runMidiCommand(state, "clock diagnose LIVE");
+  return contains(output, "Mode: live health probe (1 second)") &&
+         contains(output, "Source filter: 'exTracker Virtual Clock'");
+}
+
+bool testDiagnoseLivePrefixIsFilterText() {
+  TestState state;
+  state.ports = {extracker::MidiPortEntry{24, 0, "liveclock", "Main"}};
+  state.midiInputRunning = true;
+
+  const std::string output = runMidiCommand(state, "clock diagnose liveclock");
+  return !contains(output, "Mode: live health probe (1 second)") &&
+         contains(output, "Source filter: 'liveclock'");
+}
+
 }  // namespace
 
 int main() {
@@ -340,6 +360,16 @@ int main() {
 
   if (!testDiagnoseWithCustomFilter()) {
     std::cerr << "Diagnose custom filter behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testDiagnoseLiveFlagCaseInsensitive()) {
+    std::cerr << "Diagnose live flag case-insensitive behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testDiagnoseLivePrefixIsFilterText()) {
+    std::cerr << "Diagnose live-prefix filter behavior regression" << '\n';
     return 1;
   }
 
