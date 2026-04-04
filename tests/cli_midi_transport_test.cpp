@@ -13,6 +13,10 @@ int main() {
 
   const std::string command =
       "printf 'midi transport status\\n"
+      "midi transport toggle\\n"
+      "midi transport status\\n"
+      "midi transport toggle\\n"
+      "midi transport status\\n"
       "midi transport timeout 2750ms\\n"
       "midi transport timeout 50\\n"
       "midi transport timeout 2750\\n"
@@ -44,6 +48,9 @@ int main() {
   }
 
   const bool sawInitialStatus = output.find("MIDI transport sync: off") != std::string::npos;
+  const bool sawToggleOn = output.find("MIDI transport sync enabled") != std::string::npos;
+  const bool sawToggleOff = output.find("MIDI transport sync disabled") != std::string::npos;
+  const bool sawStatusOn = output.find("MIDI transport sync: on") != std::string::npos;
   const bool sawMalformedTimeoutUsage =
       output.find("Usage: midi transport timeout <100..10000|status>") != std::string::npos;
   const bool sawTimeoutSet = output.find("MIDI clock timeout set to 2750 ms") != std::string::npos;
@@ -52,7 +59,8 @@ int main() {
   const bool sawLockStatus = output.find("MIDI fallback tempo lock: off") != std::string::npos;
   const bool sawReset = output.find("MIDI transport state reset") != std::string::npos;
 
-  if (!sawInitialStatus || !sawMalformedTimeoutUsage || !sawTimeoutSet || !sawTimeoutStatus ||
+    if (!sawInitialStatus || !sawToggleOn || !sawToggleOff || !sawStatusOn ||
+      !sawMalformedTimeoutUsage || !sawTimeoutSet || !sawTimeoutStatus ||
       !sawLockOff || !sawLockStatus || !sawReset) {
     std::cerr << "Missing expected MIDI transport output markers" << '\n';
     std::cerr << output << '\n';

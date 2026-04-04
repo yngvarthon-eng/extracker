@@ -243,6 +243,14 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
     midiTransportSyncEnabled = false;
     midiTransportRunning = false;
     std::cout << "MIDI transport sync disabled" << '\n';
+  } else if (mode == "toggle") {
+    midiTransportSyncEnabled = !midiTransportSyncEnabled;
+    if (!midiTransportSyncEnabled) {
+      midiTransportRunning = false;
+      std::cout << "MIDI transport sync disabled" << '\n';
+    } else {
+      std::cout << "MIDI transport sync enabled" << '\n';
+    }
   } else if (mode == "status") {
     {
       std::lock_guard<std::mutex> lock(stateMutex);
@@ -302,7 +310,7 @@ void handleMidiTransportCommand(std::istringstream& midiInputStream,
     }
     std::cout << "MIDI transport state reset" << '\n';
   } else {
-    std::cout << "Usage: midi transport <on|off|status|timeout|lock|reset>" << '\n';
+    std::cout << "Usage: midi transport <on|off|toggle|status|timeout|lock|reset>" << '\n';
   }
 }
 
