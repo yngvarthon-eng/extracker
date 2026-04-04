@@ -14,8 +14,10 @@ int main() {
   const std::string command =
       "printf 'midi clock diagnose\n"
       "midi clock diagnose live\n"
+      "midi clock diagnose LIVE\n"
       "midi clock diagnose exTracker\n"
       "midi clock diagnose live exTracker\n"
+      "midi clock diagnose liveclock\n"
       "quit\n' | " + appPath;
 
   std::array<char, 1024> buffer{};
@@ -40,13 +42,15 @@ int main() {
 
   const bool sawDiagnosticsHeader = output.find("MIDI clock diagnostics:") != std::string::npos;
   const bool sawLiveProbe = output.find("Mode: live health probe") != std::string::npos;
+  const bool sawLiveclockFilter = output.find("Source filter: 'liveclock'") != std::string::npos;
   const bool sawSourceFilter = output.find("Source filter:") != std::string::npos;
   const bool sawMidiInputRunning = output.find("MIDI input running:") != std::string::npos;
 
-  if (!sawDiagnosticsHeader || !sawLiveProbe || !sawSourceFilter || !sawMidiInputRunning) {
+  if (!sawDiagnosticsHeader || !sawLiveProbe || !sawLiveclockFilter || !sawSourceFilter || !sawMidiInputRunning) {
     std::cerr << "Missing expected MIDI clock diagnose output markers" << '\n';
     std::cerr << "  sawDiagnosticsHeader: " << sawDiagnosticsHeader << '\n';
     std::cerr << "  sawLiveProbe: " << sawLiveProbe << '\n';
+    std::cerr << "  sawLiveclockFilter: " << sawLiveclockFilter << '\n';
     std::cerr << "  sawSourceFilter: " << sawSourceFilter << '\n';
     std::cerr << "  sawMidiInputRunning: " << sawMidiInputRunning << '\n';
     std::cerr << output << '\n';
