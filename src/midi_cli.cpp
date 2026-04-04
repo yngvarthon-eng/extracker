@@ -167,9 +167,19 @@ void runMidiClockLiveProbe(const MidiCommandContext& context) {
 void handleMidiMapCommand(std::istringstream& midiInputStream,
                           const MidiCommandContext& context) {
   auto& midiChannelMap = context.midiChannelMap;
+
+  auto hasTrailingArgs = [&]() {
+    midiInputStream >> std::ws;
+    return midiInputStream.peek() != EOF;
+  };
+
   std::string firstArg;
   midiInputStream >> firstArg;
   if (firstArg.empty() || firstArg == "status") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi map <channel> <instr|clear>" << '\n';
+      return;
+    }
     std::cout << "MIDI channel map:";
     bool hasMapping = false;
     for (std::size_t ch = 0; ch < midiChannelMap.size(); ++ch) {
@@ -185,7 +195,7 @@ void handleMidiMapCommand(std::istringstream& midiInputStream,
   } else if (firstArg == "clear") {
     std::string clearScope;
     midiInputStream >> clearScope;
-    if (clearScope != "all") {
+    if (clearScope != "all" || hasTrailingArgs()) {
       std::cout << "Usage: midi map clear all" << '\n';
     } else {
       midiChannelMap.fill(-1);
@@ -205,13 +215,17 @@ void handleMidiMapCommand(std::istringstream& midiInputStream,
       if (secondArg.empty()) {
         std::cout << "Usage: midi map <channel> <instr|clear>" << '\n';
       } else if (secondArg == "clear") {
-        midiChannelMap[static_cast<std::size_t>(channel)] = -1;
-        std::cout << "Cleared MIDI mapping for channel " << channel << '\n';
+        if (hasTrailingArgs()) {
+          std::cout << "Usage: midi map <channel> <instr|clear>" << '\n';
+        } else {
+          midiChannelMap[static_cast<std::size_t>(channel)] = -1;
+          std::cout << "Cleared MIDI mapping for channel " << channel << '\n';
+        }
       } else {
         int instrument = -1;
         std::istringstream instrumentParse(secondArg);
         instrumentParse >> instrument;
-        if (!instrumentParse || !instrumentParse.eof()) {
+        if (!instrumentParse || !instrumentParse.eof() || hasTrailingArgs()) {
           std::cout << "Usage: midi map <channel> <instr|clear>" << '\n';
         } else {
           midiChannelMap[static_cast<std::size_t>(channel)] = std::clamp(instrument, 0, 255);
