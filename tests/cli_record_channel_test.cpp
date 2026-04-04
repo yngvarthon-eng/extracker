@@ -17,6 +17,8 @@ int main() {
       "record channel status\\n"
       "record on\\n"
       "status\\n"
+      "record channel 3foo\\n"
+      "record channel status extra\\n"
       "record channel 99\\n"
       "record channel status\\n"
       "quit\\n' | " + appPath;
@@ -47,8 +49,10 @@ int main() {
   const bool sawArmedOnThree = output.find("Record enabled on channel 3") != std::string::npos;
   const bool sawClampSet = output.find("Record channel set to 7") != std::string::npos;
   const bool sawStatusSeven = output.find("Record channel: 7") != std::string::npos;
+  const bool sawChannelUsage = output.find("Usage: record channel <0..7|status>") != std::string::npos;
 
-  if (!sawInitial || !sawSetToThree || !sawStatusThree || !sawArmedOnThree || !sawClampSet || !sawStatusSeven) {
+  if (!sawInitial || !sawSetToThree || !sawStatusThree || !sawArmedOnThree ||
+      !sawClampSet || !sawStatusSeven || !sawChannelUsage) {
     std::cerr << "Missing expected record channel output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
