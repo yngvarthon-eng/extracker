@@ -302,11 +302,44 @@ bool testClockHelpRejectsTrailingArgs() {
                   "Usage: midi clock <help|quick [name]|sources [name]|autoconnect [name] [index]|diagnose [name]|diagnose live [name]>");
 }
 
+bool testDiagnoseLiveProbeFlag() {
+  TestState state;
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock A", "Main"}};
+  state.midiInputRunning = true;
+  state.parseHintSucceeds = true;
+  state.parsedClient = 128;
+  state.parsedPort = 0;
+
+  const std::string output = runMidiCommand(state, "clock diagnose live");
+  return contains(output, "Mode: live health probe (1 second)") &&
+         contains(output, "MIDI input running: yes");
+}
+
+bool testDiagnoseWithCustomFilter() {
+  TestState state;
+  state.ports = {extracker::MidiPortEntry{24, 0, "My Custom Clock", "Main"}};
+  state.midiInputRunning = true;
+
+  const std::string output = runMidiCommand(state, "clock diagnose My");
+  return contains(output, "Source filter: 'My'") &&
+         contains(output, "Matching sources: 1");
+}
+
 }  // namespace
 
 int main() {
   if (!testNoSourceDiagnostics()) {
     std::cerr << "No-source diagnostic behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testDiagnoseLiveProbeFlag()) {
+    std::cerr << "Diagnose live probe behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testDiagnoseWithCustomFilter()) {
+    std::cerr << "Diagnose custom filter behavior regression" << '\n';
     return 1;
   }
 
