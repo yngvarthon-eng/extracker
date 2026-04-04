@@ -340,7 +340,66 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
     std::cout << "  - List sources: midi clock sources [name]" << '\n';
     std::cout << "  - Auto-connect helper: midi clock autoconnect [name] [index]" << '\n';
     std::cout << "  - Quick diagnostics: midi clock diagnose [name]" << '\n';
+    std::cout << "  - Compact status: midi clock quick [name]" << '\n';
     std::cout << "  - Live probe: midi clock diagnose live [name]" << '\n';
+  } else if (mode == "quick") {
+    std::string needle;
+    std::getline(midiInputStream, needle);
+    needle = trimLeadingSpaces(needle);
+    if (needle.empty()) {
+      needle = "exTracker Virtual Clock";
+    }
+
+    int targetClient = -1;
+    int targetPort = -1;
+    bool hasTargetEndpoint = parseHintEndpoint(midiEndpointHint(), targetClient, targetPort);
+
+    bool hasClockSnapshot = false;
+    bool clockFresh = false;
+    long long clockAgeMs = -1;
+    {
+      std::lock_guard<std::mutex> lock(context.stateMutex);
+      hasClockSnapshot = context.hasMidiClockTimestamp;
+      if (hasClockSnapshot) {
+        auto now = std::chrono::steady_clock::now();
+        clockAgeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - context.lastMidiClockTimestamp).count();
+        clockFresh = (now - context.lastMidiClockTimestamp) <= context.midiClockTimeout;
+      }
+    }
+
+    std::vector<MidiPortEntry> matches;
+    bool listedSources = readMatchingClockSources(context, needle, matches);
+
+    std::cout << "MIDI clock quick:" << '\n';
+    std::cout << "  running: " << (midiInputRunning() ? "yes" : "no") << '\n';
+    if (hasTargetEndpoint) {
+      std::cout << "  endpoint: " << targetClient << ":" << targetPort << '\n';
+    } else {
+      std::cout << "  endpoint: unavailable" << '\n';
+    }
+
+    if (!hasClockSnapshot) {
+      std::cout << "  clock: none" << '\n';
+    } else {
+      std::cout << "  clock: " << (clockFresh ? "fresh" : "stale");
+      if (clockAgeMs >= 0) {
+        std::cout << " (" << clockAgeMs << " ms)";
+      }
+      std::cout << '\n';
+    }
+
+    std::cout << "  source filter: '" << needle << "'" << '\n';
+    if (!listedSources) {
+      std::cout << "  source matches: n/a (aconnect failed)" << '\n';
+    } else {
+      std::cout << "  source matches: " << matches.size();
+      if (!matches.empty()) {
+        const auto& first = matches.front();
+        std::cout << " (first " << first.client << ":" << first.port << ")";
+      }
+      std::cout << '\n';
+    }
   } else if (mode == "sources") {
     std::string needle;
     std::getline(midiInputStream, needle);
@@ -499,7 +558,7 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
       }
     }
   } else {
-    std::cout << "Usage: midi clock <help|sources [name]|autoconnect [name] [index]|diagnose [name]|diagnose live [name]>" << '\n';
+    std::cout << "Usage: midi clock <help|quick [name]|sources [name]|autoconnect [name] [index]|diagnose [name]|diagnose live [name]>" << '\n';
   }
 }
 

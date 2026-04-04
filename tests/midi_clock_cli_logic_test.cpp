@@ -215,6 +215,25 @@ bool testAutoconnectConnectFailureReportsCommand() {
          contains(output, "Failed to connect with command: aconnect 24:0 128:0");
 }
 
+bool testQuickStatusSummary() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.parseHintSucceeds = true;
+  state.parsedClient = 128;
+  state.parsedPort = 0;
+  state.hasMidiClockTimestamp = true;
+  state.lastMidiClockTimestamp = std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
+  state.midiClockTimeout = std::chrono::milliseconds(1000);
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock A", "Main"}};
+
+  const std::string output = runMidiCommand(state, "clock quick Clock");
+  return contains(output, "MIDI clock quick:") &&
+         contains(output, "running: yes") &&
+         contains(output, "endpoint: 128:0") &&
+         contains(output, "clock: fresh") &&
+         contains(output, "source matches: 1 (first 24:0)");
+}
+
 }  // namespace
 
 int main() {
@@ -250,6 +269,11 @@ int main() {
 
   if (!testAutoconnectConnectFailureReportsCommand()) {
     std::cerr << "Autoconnect connect failure behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testQuickStatusSummary()) {
+    std::cerr << "Quick status behavior regression" << '\n';
     return 1;
   }
 
