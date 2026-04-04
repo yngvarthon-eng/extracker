@@ -178,6 +178,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_midi_clock_help_parse_test extracker)
   add_test(NAME extracker_cli_midi_clock_help_parse_test COMMAND extracker_cli_midi_clock_help_parse_test)
 
+  add_executable(extracker_cli_midi_clock_sources_test tests/cli_midi_clock_sources_test.cpp)
+  add_dependencies(extracker_cli_midi_clock_sources_test extracker)
+  add_test(NAME extracker_cli_midi_clock_sources_test COMMAND extracker_cli_midi_clock_sources_test)
+
   add_executable(extracker_cli_midi_transport_test tests/cli_midi_transport_test.cpp)
 
     add_executable(extracker_cli_midi_clock_diagnose_test tests/cli_midi_clock_diagnose_test.cpp)
