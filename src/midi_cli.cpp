@@ -781,6 +781,10 @@ void handleMidiCommand(std::istringstream& midiInputStream,
   std::string subcommand;
   midiInputStream >> subcommand;
   if (subcommand == "on") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi <on|off|status|quick|thru|instrument|learn|map|transport|clock> ..." << '\n';
+      return;
+    }
     if (midiInput.isRunning()) {
       std::cout << "MIDI input already running" << '\n';
     } else if (midiInput.start(onMidiEvent)) {
@@ -790,9 +794,17 @@ void handleMidiCommand(std::istringstream& midiInputStream,
       std::cout << "Failed to start MIDI input: " << midiInput.lastError() << '\n';
     }
   } else if (subcommand == "off") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi <on|off|status|quick|thru|instrument|learn|map|transport|clock> ..." << '\n';
+      return;
+    }
     midiInput.stop();
     std::cout << "MIDI input stopped" << '\n';
   } else if (subcommand == "status") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi <on|off|status|quick|thru|instrument|learn|map|transport|clock> ..." << '\n';
+      return;
+    }
     std::cout << "MIDI backend: " << midiInput.backendName() << '\n';
     std::cout << "MIDI running: " << (midiInput.isRunning() ? "yes" : "no") << '\n';
     if (!midiInput.lastError().empty()) {

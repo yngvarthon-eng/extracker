@@ -155,6 +155,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_midi_instrument_test extracker)
   add_test(NAME extracker_cli_midi_instrument_test COMMAND extracker_cli_midi_instrument_test)
 
+  add_executable(extracker_cli_midi_basic_parse_test tests/cli_midi_basic_parse_test.cpp)
+  add_dependencies(extracker_cli_midi_basic_parse_test extracker)
+  add_test(NAME extracker_cli_midi_basic_parse_test COMMAND extracker_cli_midi_basic_parse_test)
+
   add_executable(extracker_cli_midi_quick_test tests/cli_midi_quick_test.cpp)
   add_dependencies(extracker_cli_midi_quick_test extracker)
   add_test(NAME extracker_cli_midi_quick_test COMMAND extracker_cli_midi_quick_test)
