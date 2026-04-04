@@ -13,6 +13,7 @@ int main() {
 
   const std::string command =
       "printf 'midi clock sources\n"
+      "midi clock sources\tClock\n"
       "midi clock sources exTracker\n"
       "midi clock sources NonExistent\n"
       "quit\n' | " + appPath;
@@ -38,13 +39,16 @@ int main() {
   }
 
   const bool hasNoSourcesOutput = output.find("No MIDI source matching") != std::string::npos;
+  const bool hasTabFilterOutput = output.find("No MIDI source matching 'Clock' found.") != std::string::npos ||
+                                  output.find("Matching MIDI sources for 'Clock':") != std::string::npos;
   const bool hasFallbackHint = output.find("exTracker Virtual Clock") != std::string::npos ||
                                 output.find("No MIDI source") != std::string::npos;
   const bool hasMatchingSourcesFormat = output.find("Matching MIDI sources") != std::string::npos ||
                                         (hasNoSourcesOutput);
 
-  if (!hasMatchingSourcesFormat || !hasFallbackHint) {
+  if (!hasMatchingSourcesFormat || !hasFallbackHint || !hasTabFilterOutput) {
     std::cerr << "Missing expected MIDI clock sources output markers" << '\n';
+    std::cerr << "  hasTabFilterOutput: " << hasTabFilterOutput << '\n';
     std::cerr << "  hasMatchingSourcesFormat: " << hasMatchingSourcesFormat << '\n';
     std::cerr << "  hasFallbackHint: " << hasFallbackHint << '\n';
     std::cerr << output << '\n';
