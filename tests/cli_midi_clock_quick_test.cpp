@@ -13,6 +13,7 @@ int main() {
 
   const std::string command =
       "printf 'midi clock quick\n"
+      "midi clock quick\tClock\n"
       "quit\n' | " + appPath;
 
   std::array<char, 512> buffer{};
@@ -39,8 +40,14 @@ int main() {
   const bool sawRunning = output.find("running: no") != std::string::npos;
   const bool sawEndpoint = output.find("endpoint:") != std::string::npos;
   const bool sawSourceMatches = output.find("source matches:") != std::string::npos;
+  std::size_t headerCount = 0;
+  std::size_t pos = output.find("MIDI clock quick:");
+  while (pos != std::string::npos) {
+    ++headerCount;
+    pos = output.find("MIDI clock quick:", pos + 1);
+  }
 
-  if (!sawHeader || !sawRunning || !sawEndpoint || !sawSourceMatches) {
+  if (!sawHeader || !sawRunning || !sawEndpoint || !sawSourceMatches || headerCount < 2) {
     std::cerr << "Missing expected MIDI clock quick output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
