@@ -258,6 +258,19 @@ bool testQuickStatusSummary() {
          contains(output, "source matches: 1 (first 24:0)");
 }
 
+bool testQuickStatusTabSeparatedNeedle() {
+  TestState state;
+  state.midiInputRunning = true;
+  state.parseHintSucceeds = true;
+  state.parsedClient = 128;
+  state.parsedPort = 0;
+  state.ports = {extracker::MidiPortEntry{24, 0, "Clock A", "Main"}};
+
+  const std::string output = runMidiCommand(state, "clock quick\tClock");
+  return contains(output, "MIDI clock quick:") &&
+         contains(output, "source matches: 1 (first 24:0)");
+}
+
 bool testQuickStatusListingFailure() {
   TestState state;
   state.midiInputRunning = false;
@@ -329,6 +342,11 @@ int main() {
 
   if (!testQuickStatusSummary()) {
     std::cerr << "Quick status behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testQuickStatusTabSeparatedNeedle()) {
+    std::cerr << "Quick status tab-separated needle behavior regression" << '\n';
     return 1;
   }
 

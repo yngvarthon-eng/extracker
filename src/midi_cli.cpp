@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
@@ -15,8 +16,11 @@ namespace extracker {
 namespace {
 
 std::string trimLeadingSpaces(std::string value) {
-  if (!value.empty() && value.front() == ' ') {
-    value.erase(0, value.find_first_not_of(' '));
+  if (!value.empty()) {
+    const auto first = std::find_if(value.begin(), value.end(), [](unsigned char ch) {
+      return !std::isspace(ch);
+    });
+    value.erase(value.begin(), first);
   }
   return value;
 }
