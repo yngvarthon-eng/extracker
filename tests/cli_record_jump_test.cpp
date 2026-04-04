@@ -16,6 +16,10 @@ int main() {
       "record jump status\\n"
       "record jump 8\\n"
       "record jump status\\n"
+      "record jump 0\\n"
+      "record jump 999\\n"
+      "record jump nope\\n"
+      "record jump 3/0\\n"
       "quit\\n' | " + appPath;
 
   std::array<char, 512> buffer{};
@@ -42,8 +46,9 @@ int main() {
   const bool sawRatioStatus = output.find("Record jump: 2") != std::string::npos;
   const bool sawIntegerConversion = output.find("Record jump 8 -> 8") != std::string::npos;
   const bool sawIntegerStatus = output.find("Record jump: 8") != std::string::npos;
+  const bool sawJumpUsage = output.find("Usage: record jump <1..") != std::string::npos;
 
-  if (!sawRatioConversion || !sawRatioStatus || !sawIntegerConversion || !sawIntegerStatus) {
+  if (!sawRatioConversion || !sawRatioStatus || !sawIntegerConversion || !sawIntegerStatus || !sawJumpUsage) {
     std::cerr << "Missing expected record jump output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
