@@ -189,6 +189,30 @@ ctest --test-dir build --output-on-failure
 - `midi clock quick` shows clock source and autoconnect status.
 - `midi transport toggle` toggles between running/stopped MIDI transport.
 
+Example session:
+
+```text
+> midi quick
+MIDI quick:
+	instrument: 0
+	transport: stopped
+	clock: external (autoconnect off)
+
+> midi transport toggle
+MIDI transport started.
+
+> midi quick all
+MIDI quick all:
+	...
+MIDI transport quick:
+	...
+MIDI clock quick:
+	...
+
+> midi quick compact
+MIDI quick compact: transport=running timeout=2000ms clock=external autoconnect=off
+```
+
 ## Next milestones
 
 1. Implement full LV2 port mapping and DSP bridge for discovered plugin IDs.
