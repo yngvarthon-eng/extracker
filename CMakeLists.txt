@@ -115,6 +115,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_record_roundtrip_test extracker)
   add_test(NAME extracker_cli_record_roundtrip_test COMMAND extracker_cli_record_roundtrip_test)
 
+  add_executable(extracker_cli_record_mode_toggle_test tests/cli_record_mode_toggle_test.cpp)
+  add_dependencies(extracker_cli_record_mode_toggle_test extracker)
+  add_test(NAME extracker_cli_record_mode_toggle_test COMMAND extracker_cli_record_mode_toggle_test)
+
   add_executable(extracker_cli_save_load_default_ext_test tests/cli_save_load_default_ext_test.cpp)
   add_dependencies(extracker_cli_save_load_default_ext_test extracker)
   add_test(NAME extracker_cli_save_load_default_ext_test COMMAND extracker_cli_save_load_default_ext_test)
