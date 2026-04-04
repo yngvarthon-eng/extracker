@@ -417,7 +417,17 @@ void handleMidiClockCommand(std::istringstream& midiInputStream,
 
   std::string mode;
   midiInputStream >> mode;
+
+  auto hasTrailingArgs = [&]() {
+    midiInputStream >> std::ws;
+    return midiInputStream.peek() != EOF;
+  };
+
   if (mode == "help") {
+    if (hasTrailingArgs()) {
+      std::cout << "Usage: midi clock <help|quick [name]|sources [name]|autoconnect [name] [index]|diagnose [name]|diagnose live [name]>" << '\n';
+      return;
+    }
     std::cout << "External MIDI clock setup (ALSA):" << '\n';
     std::cout << "  1) Start MIDI input: midi on" << '\n';
     std::cout << "  2) Enable sync:     midi transport on" << '\n';

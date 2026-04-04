@@ -271,6 +271,14 @@ bool testQuickStatusListingFailure() {
          contains(output, "source matches: n/a (aconnect failed)");
 }
 
+bool testClockHelpRejectsTrailingArgs() {
+  TestState state;
+
+  const std::string output = runMidiCommand(state, "clock help extra");
+  return contains(output,
+                  "Usage: midi clock <help|quick [name]|sources [name]|autoconnect [name] [index]|diagnose [name]|diagnose live [name]>");
+}
+
 }  // namespace
 
 int main() {
@@ -326,6 +334,11 @@ int main() {
 
   if (!testQuickStatusListingFailure()) {
     std::cerr << "Quick status listing failure behavior regression" << '\n';
+    return 1;
+  }
+
+  if (!testClockHelpRejectsTrailingArgs()) {
+    std::cerr << "Clock help trailing-args behavior regression" << '\n';
     return 1;
   }
 
