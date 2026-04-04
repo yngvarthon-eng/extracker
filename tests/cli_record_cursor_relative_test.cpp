@@ -24,6 +24,8 @@ int main() {
       "record cursor status\\n"
       "record cursor start\\n"
       "record cursor status\\n"
+      "record cursor start extra\\n"
+      "record cursor end extra\\n"
       "record cursor end\\n"
       "record cursor status\\n"
       "record cursor -999\\n"
@@ -63,12 +65,13 @@ int main() {
   const bool sawPrev = output.find("Record cursor set to row 12") != std::string::npos;
   const bool sawStart = output.find("Record cursor set to row 0") != std::string::npos;
   const bool sawStatus0 = output.find("Record cursor row: 0") != std::string::npos;
+  const bool sawCursorUsageGuard = output.find("Usage: record cursor <0..63") != std::string::npos;
   const bool sawClampLow = output.find("Record cursor set to row 0") != std::string::npos;
   const bool sawEnd = output.find("Record cursor set to row 63") != std::string::npos;
   const bool sawClampHigh = output.find("Record cursor set to row 63") != std::string::npos;
   const bool sawStatus63 = output.find("Record cursor row: 63") != std::string::npos;
 
-  if (!sawSet10 || !sawPlus5 || !sawStatus15 || !sawMinus3 || !sawStatus12 || !sawJumpSet || !sawNext || !sawStatus16 || !sawPrev || !sawStart || !sawStatus0 || !sawClampLow || !sawEnd || !sawClampHigh || !sawStatus63) {
+  if (!sawSet10 || !sawPlus5 || !sawStatus15 || !sawMinus3 || !sawStatus12 || !sawJumpSet || !sawNext || !sawStatus16 || !sawPrev || !sawStart || !sawStatus0 || !sawClampLow || !sawEnd || !sawClampHigh || !sawStatus63 || !sawCursorUsageGuard) {
     std::cerr << "Missing expected relative record cursor output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
