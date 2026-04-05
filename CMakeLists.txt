@@ -339,6 +339,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_record_note_invalid_test extracker)
   add_test(NAME extracker_cli_record_note_invalid_test COMMAND extracker_cli_record_note_invalid_test)
 
+  add_executable(extracker_cli_record_note_missing_midi_test tests/cli_record_note_missing_midi_test.cpp)
+  add_dependencies(extracker_cli_record_note_missing_midi_test extracker)
+  add_test(NAME extracker_cli_record_note_missing_midi_test COMMAND extracker_cli_record_note_missing_midi_test)
+
   add_executable(extracker_cli_record_note_keyword_guard_test tests/cli_record_note_keyword_guard_test.cpp)
   add_dependencies(extracker_cli_record_note_keyword_guard_test extracker)
   add_test(NAME extracker_cli_record_note_keyword_guard_test COMMAND extracker_cli_record_note_keyword_guard_test)
