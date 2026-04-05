@@ -95,6 +95,7 @@ int main() {
   const bool sawInfo = output.find("port 2 [gain] \"Gain\": min=0 max=1 default=0.25") != std::string::npos;
   const bool sawControlOut = output.find("  control out:  1") != std::string::npos;
   const bool sawControlOutNoRange = output.find("port 3 [meter] \"Meter\": (no range)") != std::string::npos;
+  const bool sawEventIn = output.find("  event in:     0") != std::string::npos;
   const bool sawSet = output.find("Set instrument 9 control port 2 [gain] \"Gain\" to 0.5") != std::string::npos;
   const bool sawGet = output.find("Instrument 9 control port 2 [gain] \"Gain\" = 0.5 (input)") != std::string::npos;
   const bool sawGetOutput = output.find("Instrument 9 control port 3 [meter] \"Meter\" = ") != std::string::npos &&
@@ -103,7 +104,8 @@ int main() {
   std::filesystem::remove_all(tmpRoot, fsError);
 
   if (!sawPluginHeader || !sawAudioIn || !sawAudioOut || !sawControlIn || !sawInfo ||
-      !sawControlOut || !sawControlOutNoRange || !sawSet || !sawGet || !sawGetOutput) {
+      !sawControlOut || !sawControlOutNoRange || !sawEventIn || !sawSet || !sawGet ||
+      !sawGetOutput) {
     std::cerr << "Missing expected symbolic plugin control output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
