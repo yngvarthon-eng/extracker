@@ -65,6 +65,7 @@ int main() {
       "plugin info lv2:urn:extracker:test:runtime\n"
       "plugin set 9 gain 0.5\n"
       "plugin get 9 gain\n"
+      "plugin get 9 meter\n"
       "quit\n' | " + appPath;
 
   std::array<char, 1024> buffer{};
@@ -90,10 +91,12 @@ int main() {
   const bool sawInfo = output.find("port 2 [gain] \"Gain\": min=0 max=1 default=0.25") != std::string::npos;
   const bool sawSet = output.find("Set instrument 9 control port 2 [gain] \"Gain\" to 0.5") != std::string::npos;
   const bool sawGet = output.find("Instrument 9 control port 2 [gain] \"Gain\" = 0.5 (input)") != std::string::npos;
+  const bool sawGetOutput = output.find("Instrument 9 control port 3 [meter] \"Meter\" = ") != std::string::npos &&
+                            output.find("(output)") != std::string::npos;
 
   std::filesystem::remove_all(tmpRoot, fsError);
 
-  if (!sawInfo || !sawSet || !sawGet) {
+  if (!sawInfo || !sawSet || !sawGet || !sawGetOutput) {
     std::cerr << "Missing expected symbolic plugin control output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
