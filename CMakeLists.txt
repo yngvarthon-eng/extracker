@@ -147,6 +147,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_core_tempo_save_load_guard_test extracker)
   add_test(NAME extracker_cli_core_tempo_save_load_guard_test COMMAND extracker_cli_core_tempo_save_load_guard_test)
 
+  add_executable(extracker_cli_core_save_load_failure_test tests/cli_core_save_load_failure_test.cpp)
+  add_dependencies(extracker_cli_core_save_load_failure_test extracker)
+  add_test(NAME extracker_cli_core_save_load_failure_test COMMAND extracker_cli_core_save_load_failure_test)
+
   add_executable(extracker_cli_plugin_load_assign_fail_test tests/cli_plugin_load_assign_fail_test.cpp)
   add_dependencies(extracker_cli_plugin_load_assign_fail_test extracker)
   add_test(NAME extracker_cli_plugin_load_assign_fail_test COMMAND extracker_cli_plugin_load_assign_fail_test)
