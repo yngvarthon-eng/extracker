@@ -155,6 +155,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_core_status_undo_redo_flags_test extracker)
   add_test(NAME extracker_cli_core_status_undo_redo_flags_test COMMAND extracker_cli_core_status_undo_redo_flags_test)
 
+  add_executable(extracker_cli_core_reset_state_test tests/cli_core_reset_state_test.cpp)
+  add_dependencies(extracker_cli_core_reset_state_test extracker)
+  add_test(NAME extracker_cli_core_reset_state_test COMMAND extracker_cli_core_reset_state_test)
+
   add_executable(extracker_cli_core_tempo_save_load_guard_test tests/cli_core_tempo_save_load_guard_test.cpp)
   add_dependencies(extracker_cli_core_tempo_save_load_guard_test extracker)
   add_test(NAME extracker_cli_core_tempo_save_load_guard_test COMMAND extracker_cli_core_tempo_save_load_guard_test)
