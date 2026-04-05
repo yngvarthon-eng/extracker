@@ -54,6 +54,9 @@ add_executable(extracker
   src/midi_cli.cpp
   src/note_cli.cpp
   src/pattern_cli.cpp
+  src/pattern_cli_basic.cpp
+  src/pattern_cli_bulk.cpp
+  src/pattern_cli_shared.cpp
   src/plugin_cli.cpp
   src/record_cli.cpp
 )
@@ -198,6 +201,66 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_pattern_template_apply_test tests/cli_pattern_template_apply_test.cpp)
   add_dependencies(extracker_cli_pattern_template_apply_test extracker)
   add_test(NAME extracker_cli_pattern_template_apply_test COMMAND extracker_cli_pattern_template_apply_test)
+
+  add_executable(extracker_cli_pattern_transpose_test tests/cli_pattern_transpose_test.cpp)
+  add_dependencies(extracker_cli_pattern_transpose_test extracker)
+  add_test(NAME extracker_cli_pattern_transpose_test COMMAND extracker_cli_pattern_transpose_test)
+
+  add_executable(extracker_cli_pattern_transpose_dry_test tests/cli_pattern_transpose_dry_test.cpp)
+  add_dependencies(extracker_cli_pattern_transpose_dry_test extracker)
+  add_test(NAME extracker_cli_pattern_transpose_dry_test COMMAND extracker_cli_pattern_transpose_dry_test)
+
+  add_executable(extracker_cli_pattern_transpose_preview_test tests/cli_pattern_transpose_preview_test.cpp)
+  add_dependencies(extracker_cli_pattern_transpose_preview_test extracker)
+  add_test(NAME extracker_cli_pattern_transpose_preview_test COMMAND extracker_cli_pattern_transpose_preview_test)
+
+  add_executable(extracker_cli_pattern_transpose_preview_verbose_test tests/cli_pattern_transpose_preview_verbose_test.cpp)
+  add_dependencies(extracker_cli_pattern_transpose_preview_verbose_test extracker)
+  add_test(NAME extracker_cli_pattern_transpose_preview_verbose_test COMMAND extracker_cli_pattern_transpose_preview_verbose_test)
+
+  add_executable(extracker_cli_pattern_transpose_numeric_parse_test tests/cli_pattern_transpose_numeric_parse_test.cpp)
+  add_dependencies(extracker_cli_pattern_transpose_numeric_parse_test extracker)
+  add_test(NAME extracker_cli_pattern_transpose_numeric_parse_test COMMAND extracker_cli_pattern_transpose_numeric_parse_test)
+
+  add_executable(extracker_cli_pattern_velocity_scale_test tests/cli_pattern_velocity_scale_test.cpp)
+  add_dependencies(extracker_cli_pattern_velocity_scale_test extracker)
+  add_test(NAME extracker_cli_pattern_velocity_scale_test COMMAND extracker_cli_pattern_velocity_scale_test)
+
+  add_executable(extracker_cli_pattern_velocity_numeric_parse_test tests/cli_pattern_velocity_numeric_parse_test.cpp)
+  add_dependencies(extracker_cli_pattern_velocity_numeric_parse_test extracker)
+  add_test(NAME extracker_cli_pattern_velocity_numeric_parse_test COMMAND extracker_cli_pattern_velocity_numeric_parse_test)
+
+  add_executable(extracker_cli_pattern_gate_scale_test tests/cli_pattern_gate_scale_test.cpp)
+  add_dependencies(extracker_cli_pattern_gate_scale_test extracker)
+  add_test(NAME extracker_cli_pattern_gate_scale_test COMMAND extracker_cli_pattern_gate_scale_test)
+
+  add_executable(extracker_cli_pattern_gate_numeric_parse_test tests/cli_pattern_gate_numeric_parse_test.cpp)
+  add_dependencies(extracker_cli_pattern_gate_numeric_parse_test extracker)
+  add_test(NAME extracker_cli_pattern_gate_numeric_parse_test COMMAND extracker_cli_pattern_gate_numeric_parse_test)
+
+  add_executable(extracker_cli_pattern_effect_fill_test tests/cli_pattern_effect_fill_test.cpp)
+  add_dependencies(extracker_cli_pattern_effect_fill_test extracker)
+  add_test(NAME extracker_cli_pattern_effect_fill_test COMMAND extracker_cli_pattern_effect_fill_test)
+
+  add_executable(extracker_cli_pattern_effect_numeric_parse_test tests/cli_pattern_effect_numeric_parse_test.cpp)
+  add_dependencies(extracker_cli_pattern_effect_numeric_parse_test extracker)
+  add_test(NAME extracker_cli_pattern_effect_numeric_parse_test COMMAND extracker_cli_pattern_effect_numeric_parse_test)
+
+  add_executable(extracker_cli_pattern_copy_paste_test tests/cli_pattern_copy_paste_test.cpp)
+  add_dependencies(extracker_cli_pattern_copy_paste_test extracker)
+  add_test(NAME extracker_cli_pattern_copy_paste_test COMMAND extracker_cli_pattern_copy_paste_test)
+
+  add_executable(extracker_cli_pattern_humanize_test tests/cli_pattern_humanize_test.cpp)
+  add_dependencies(extracker_cli_pattern_humanize_test extracker)
+  add_test(NAME extracker_cli_pattern_humanize_test COMMAND extracker_cli_pattern_humanize_test)
+
+  add_executable(extracker_cli_pattern_randomize_test tests/cli_pattern_randomize_test.cpp)
+  add_dependencies(extracker_cli_pattern_randomize_test extracker)
+  add_test(NAME extracker_cli_pattern_randomize_test COMMAND extracker_cli_pattern_randomize_test)
+
+  add_executable(extracker_cli_pattern_bulk_undo_redo_test tests/cli_pattern_bulk_undo_redo_test.cpp)
+  add_dependencies(extracker_cli_pattern_bulk_undo_redo_test extracker)
+  add_test(NAME extracker_cli_pattern_bulk_undo_redo_test COMMAND extracker_cli_pattern_bulk_undo_redo_test)
 
   add_executable(extracker_cli_plugin_numeric_parse_test tests/cli_plugin_numeric_parse_test.cpp)
   add_dependencies(extracker_cli_plugin_numeric_parse_test extracker)

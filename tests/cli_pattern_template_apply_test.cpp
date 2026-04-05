@@ -43,7 +43,7 @@ int main() {
   const bool sawHouse    = output.find("Applied pattern template: house") != std::string::npos;
   const bool sawElectro  = output.find("Applied pattern template: electro") != std::string::npos;
   const bool sawUnknown  = output.find("Unknown pattern template: nope") != std::string::npos;
-  const bool sawTopUsage = output.find("Usage: pattern <print|play|template> ...") != std::string::npos;
+  const bool sawTopUsage = output.find("Usage: pattern <print|play|template|transpose|velocity|gate|effect|copy|paste|humanize|randomize|undo|redo> ...") != std::string::npos;
 
   if (!sawBlank || !sawHouse || !sawElectro || !sawUnknown || !sawTopUsage) {
     std::cerr << "Missing expected pattern template output markers" << '\n';

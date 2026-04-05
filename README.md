@@ -179,6 +179,25 @@ ctest --test-dir build --output-on-failure
 - `note gate dry <row> <ch> <ticks>` previews a gate edit without writing.
 - `note fx dry <row> <ch> <fx> <fxval>` previews an effect edit without writing.
 
+## CLI Pattern Quick Reference
+
+- `pattern transpose <semitones>` transposes all notes in the full pattern.
+- `pattern transpose <semitones> <from> <to> [ch]` transposes a range and optional channel.
+- `pattern transpose dry <semitones> <from> <to> [ch]` previews a transpose without writing.
+- `pattern transpose dry preview <semitones> <from> <to> [ch]` previews affected row/channel note changes.
+- `pattern transpose dry preview verbose <semitones> <from> <to> [ch]` adds per-step instrument/velocity/effect context.
+- `pattern velocity <percent> <from> <to> [ch]` scales note velocity in a range (rounded, clamped 1..127).
+- `pattern velocity dry preview verbose <percent> <from> <to> [ch]` previews per-step velocity changes with note/instrument/effect context.
+- `pattern gate <percent> <from> <to> [ch]` scales gate ticks in a range (rounded, clamped to valid uint32).
+- `pattern gate dry preview verbose <percent> <from> <to> [ch]` previews per-step gate changes with note/instrument/effect context.
+- `pattern effect <fx> <fxval> <from> <to> [ch]` fills effect command/value across notes in a range.
+- `pattern effect dry preview verbose <fx> <fxval> <from> <to> [ch]` previews per-step effect changes with note/instrument/velocity context.
+- `pattern copy <from> <to> [chFrom] [chTo]` copies a row/channel block into the internal clipboard.
+- `pattern paste <destRow> [channelOffset]` pastes copied notes; dry/preview/verbose modes are supported.
+- `pattern humanize <velRange> <gateRangePercent> <seed> <from> <to> [ch]` adds seeded random variation to velocity/gate.
+- `pattern randomize <probabilityPercent> <seed> <from> <to> [ch]` randomizes velocity/effect on selected steps.
+- `pattern undo` and `pattern redo` provide one-level bulk edit undo/redo for committed pattern bulk operations.
+
 ## CLI MIDI Quick Reference
 
 - `midi quick` shows a short overview of instrument, transport, and clock state.
