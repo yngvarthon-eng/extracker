@@ -43,7 +43,7 @@ int main() {
     return 1;
   }
 
-  const std::string usage = "Usage: pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch]";
+  const std::string usage = "Usage: pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>]";
   const bool sawUsage = output.find(usage) != std::string::npos;
   const bool sawValidScale =
       output.find("Scaled gate on 0 step(s) by 120% in rows 4..8 (channel 0, 0 clamped)") !=

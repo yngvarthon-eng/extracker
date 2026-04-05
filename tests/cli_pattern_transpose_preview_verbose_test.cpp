@@ -39,7 +39,7 @@ int main() {
     return 1;
   }
 
-  const std::string usage = "Usage: pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch]";
+  const std::string usage = "Usage: pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>]";
   const bool sawDrySummary =
       output.find("Transposed 2 step(s) by 2 semitones in rows 0..0 (all channels, 1 clamped) [dry-run]") !=
       std::string::npos;

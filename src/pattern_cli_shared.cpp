@@ -76,6 +76,7 @@ bool parseRangeAndOptionalChannel(std::istringstream& input,
   selection.to = rowCount - 1;
   selection.channel = -1;
   selection.hasChannel = false;
+  selection.rowStep = 1;
 
   bool hasFrom = false;
   bool hasTo = false;
@@ -83,6 +84,27 @@ bool parseRangeAndOptionalChannel(std::istringstream& input,
     std::cout << usage << '\n';
     return false;
   }
+
+  auto parseStepClause = [&](bool keywordAlreadyRead) -> bool {
+    if (!keywordAlreadyRead) {
+      std::string stepKeyword;
+      if (!(input >> stepKeyword)) {
+        return true;
+      }
+      if (stepKeyword != "step") {
+        std::cout << usage << '\n';
+        return false;
+      }
+    }
+
+    if (!cli::parseStrictIntFromStream(input, selection.rowStep) || cli::hasExtraTokens(input)) {
+      std::cout << usage << '\n';
+      return false;
+    }
+
+    return true;
+  };
+
   if (hasFrom) {
     if (!readOptionalStrictInt(input, hasTo, selection.to)) {
       std::cout << usage << '\n';
@@ -91,14 +113,40 @@ bool parseRangeAndOptionalChannel(std::istringstream& input,
     if (!hasTo) {
       selection.to = selection.from;
     }
-    if (!readOptionalStrictInt(input, selection.hasChannel, selection.channel)) {
-      std::cout << usage << '\n';
-      return false;
+
+    std::string token;
+    if (input >> token) {
+      if (token == "step") {
+        if (!parseStepClause(true)) {
+          return false;
+        }
+      } else {
+        if (!cli::parseStrictIntToken(token, selection.channel)) {
+          std::cout << usage << '\n';
+          return false;
+        }
+        selection.hasChannel = true;
+
+        if (input >> token) {
+          if (token != "step" || !parseStepClause(true)) {
+            std::cout << usage << '\n';
+            return false;
+          }
+        }
+      }
     }
+  } else if (!parseStepClause(false)) {
+    return false;
   }
 
-  if (cli::hasExtraTokens(input)) {
-    std::cout << usage << '\n';
+  if (selection.hasChannel && (selection.channel < 0 || selection.channel >= channelCount)) {
+    std::cout << "Channel out of range: " << selection.channel << " (valid 0.."
+              << (channelCount - 1) << ")" << '\n';
+    return false;
+  }
+
+  if (selection.rowStep < 1) {
+    std::cout << "Step must be >= 1" << '\n';
     return false;
   }
 
@@ -108,12 +156,6 @@ bool parseRangeAndOptionalChannel(std::istringstream& input,
 
   selection.from = std::max(selection.from, 0);
   selection.to = std::min(selection.to, rowCount - 1);
-
-  if (selection.hasChannel && (selection.channel < 0 || selection.channel >= channelCount)) {
-    std::cout << "Channel out of range: " << selection.channel << " (valid 0.."
-              << (channelCount - 1) << ")" << '\n';
-    return false;
-  }
 
   return true;
 }

@@ -57,7 +57,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "transpose") {
     constexpr const char* usage =
-        "Usage: pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch]";
+        "Usage: pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -77,6 +77,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int to = selection.to;
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
+    const int rowStep = selection.rowStep;
 
     int changedSteps = 0;
     int clampedSteps = 0;
@@ -97,7 +98,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     bool undoCaptured = false;
     {
       std::lock_guard<std::mutex> lock(stateMutex);
-      for (int row = from; row <= to; ++row) {
+      for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
           if (note < 0) {
@@ -157,6 +158,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
               << " semitones in rows " << from << ".." << to;
     printChannelScope(hasChannel, channel);
     std::cout << ", " << clampedSteps << " clamped)";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }
@@ -184,7 +188,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "velocity") {
     constexpr const char* usage =
-        "Usage: pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch]";
+        "Usage: pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -204,6 +208,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int to = selection.to;
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
+    const int rowStep = selection.rowStep;
 
     int changedSteps = 0;
     int clampedSteps = 0;
@@ -224,7 +229,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     bool undoCaptured = false;
     {
       std::lock_guard<std::mutex> lock(stateMutex);
-      for (int row = from; row <= to; ++row) {
+      for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
           if (note < 0) {
@@ -277,6 +282,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
               << "% in rows " << from << ".." << to;
     printChannelScope(hasChannel, channel);
     std::cout << ", " << clampedSteps << " clamped)";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }
@@ -304,7 +312,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "gate") {
     constexpr const char* usage =
-        "Usage: pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch]";
+        "Usage: pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -324,6 +332,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int to = selection.to;
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
+    const int rowStep = selection.rowStep;
 
     int changedSteps = 0;
     int clampedSteps = 0;
@@ -345,7 +354,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     bool undoCaptured = false;
     {
       std::lock_guard<std::mutex> lock(stateMutex);
-      for (int row = from; row <= to; ++row) {
+      for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
           if (note < 0) {
@@ -404,6 +413,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
               << "% in rows " << from << ".." << to;
     printChannelScope(hasChannel, channel);
     std::cout << ", " << clampedSteps << " clamped)";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }
@@ -432,7 +444,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "effect") {
     constexpr const char* usage =
-        "Usage: pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch]";
+        "Usage: pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -458,6 +470,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int to = selection.to;
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
+    const int rowStep = selection.rowStep;
 
     std::uint8_t fxOut = static_cast<std::uint8_t>(std::clamp(fx, 0, 255));
     std::uint8_t fxValueOut = static_cast<std::uint8_t>(std::clamp(fxValue, 0, 255));
@@ -483,7 +496,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     bool undoCaptured = false;
     {
       std::lock_guard<std::mutex> lock(stateMutex);
-      for (int row = from; row <= to; ++row) {
+      for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
           if (note < 0) {
@@ -529,6 +542,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
               << " in rows " << from << ".." << to;
     printChannelScope(hasChannel, channel);
     std::cout << ", " << clampedValues << " input clamped)";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }
@@ -753,7 +769,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "humanize") {
     constexpr const char* usage =
-        "Usage: pattern humanize [dry [preview [verbose]]] <velRange> <gateRangePercent> <seed> [from] [to] [ch]";
+        "Usage: pattern humanize [dry [preview [verbose]]] <velRange> <gateRangePercent> <seed> [from] [to] [ch] [step <n>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -780,6 +796,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int to = selection.to;
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
+    const int rowStep = selection.rowStep;
 
     std::mt19937 rng(static_cast<std::uint32_t>(seed));
     std::uniform_int_distribution<int> velDeltaDist(-std::abs(velRange), std::abs(velRange));
@@ -805,7 +822,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
     {
       std::lock_guard<std::mutex> lock(stateMutex);
-      for (int row = from; row <= to; ++row) {
+      for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
           if (note < 0) {
@@ -867,6 +884,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
               << "% in rows " << from << ".." << to;
     printChannelScope(hasChannel, channel);
     std::cout << ", " << clampedSteps << " clamped, seed " << seed << ")";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }
@@ -891,7 +911,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "randomize") {
     constexpr const char* usage =
-        "Usage: pattern randomize [dry [preview [verbose]]] <probabilityPercent> <seed> [from] [to] [ch]";
+        "Usage: pattern randomize [dry [preview [verbose]]] <probabilityPercent> <seed> [from] [to] [ch] [step <n>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -922,6 +942,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int to = selection.to;
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
+    const int rowStep = selection.rowStep;
 
     std::mt19937 rng(static_cast<std::uint32_t>(seed));
     std::bernoulli_distribution pick(static_cast<double>(clampedProbability) / 100.0);
@@ -949,7 +970,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
     {
       std::lock_guard<std::mutex> lock(stateMutex);
-      for (int row = from; row <= to; ++row) {
+      for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
           if (note < 0 || !pick(rng)) {
@@ -998,6 +1019,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
               << "% probability in rows " << from << ".." << to;
     printChannelScope(hasChannel, channel);
     std::cout << ", " << clampedInputs << " input clamped, seed " << seed << ")";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }

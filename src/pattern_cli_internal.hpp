@@ -43,6 +43,7 @@ struct RangeChannelSelection {
   int to = 0;
   int channel = -1;
   bool hasChannel = false;
+  int rowStep = 1;
 };
 
 extern std::optional<PatternEditor> gBulkUndoSnapshot;
