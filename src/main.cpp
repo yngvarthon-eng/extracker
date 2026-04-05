@@ -45,6 +45,7 @@ int main() {
   bool playRangeActive = false;
   int playRangeFrom = 0;
   int playRangeTo = 0;
+  int playRangeStep = 1;
   extracker::RecordWorkflowState recordState;
   bool& recordEnabled = recordState.enabled;
   int& recordChannel = recordState.channel;
@@ -499,7 +500,40 @@ int main() {
 
       if (transport.isPlaying() || midiTransportRunning) {
         std::lock_guard<std::mutex> lock(stateMutex);
-        sequencer.update(editor, transport, audio, plugins);
+
+        bool skipDispatchThisTick = false;
+        if (playRangeActive) {
+          int currentRow = static_cast<int>(transport.currentRow());
+          if (currentRow < playRangeFrom || currentRow > playRangeTo) {
+            if (loopEnabled) {
+              transport.jumpToRow(static_cast<std::uint32_t>(playRangeFrom));
+              currentRow = playRangeFrom;
+            } else {
+              transport.stop();
+              playRangeActive = false;
+            }
+          }
+
+          if (playRangeActive && playRangeStep > 1 && currentRow >= playRangeFrom && currentRow <= playRangeTo) {
+            int delta = (currentRow - playRangeFrom) % playRangeStep;
+            if (delta != 0) {
+              int nextRow = currentRow + (playRangeStep - delta);
+              if (nextRow <= playRangeTo) {
+                transport.jumpToRow(static_cast<std::uint32_t>(nextRow));
+              } else if (loopEnabled) {
+                transport.jumpToRow(static_cast<std::uint32_t>(playRangeFrom));
+              } else {
+                transport.stop();
+                playRangeActive = false;
+              }
+              skipDispatchThisTick = true;
+            }
+          }
+        }
+
+        if (!skipDispatchThisTick) {
+          sequencer.update(editor, transport, audio, plugins);
+        }
 
         if (playRangeActive) {
           int currentRow = static_cast<int>(transport.currentRow());
@@ -519,7 +553,7 @@ int main() {
 
   std::cout << "Commands: help, play, stop, tempo <bpm>, loop <on|off|range>, status, reset, save <file>, load <file>, quit" << '\n';
   std::cout << "Plugin commands: plugin list, plugin load <id>, plugin assign <instrument> <id>, sine <instrument>" << '\n';
-  std::cout << "Pattern commands: note set <row> <ch> <midi> <instr> [vel] [fx] [fxval], note set dry <row> <ch> <midi> <instr> [vel] [fx] [fxval], note clear <row> <ch>, note clear dry <row> <ch>, note vel <row> <ch> <vel>, note vel dry <row> <ch> <vel>, note gate <row> <ch> <ticks>, note gate dry <row> <ch> <ticks>, note fx <row> <ch> <fx> <fxval>, note fx dry <row> <ch> <fx> <fxval>, pattern print [from] [to], pattern play [from] [to], pattern template <blank|house|electro>, pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>], pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>], pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>], pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>], pattern copy <from> <to> [chFrom] [chTo] [step <n>], pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>], pattern humanize [dry [preview [verbose]]] <velRange> <gateRangePercent> <seed> [from] [to] [ch] [step <n>], pattern randomize [dry [preview [verbose]]] <probabilityPercent> <seed> [from] [to] [ch] [step <n>], pattern undo, pattern redo" << '\n';
+  std::cout << "Pattern commands: note set <row> <ch> <midi> <instr> [vel] [fx] [fxval], note set dry <row> <ch> <midi> <instr> [vel] [fx] [fxval], note clear <row> <ch>, note clear dry <row> <ch>, note vel <row> <ch> <vel>, note vel dry <row> <ch> <vel>, note gate <row> <ch> <ticks>, note gate dry <row> <ch> <ticks>, note fx <row> <ch> <fx> <fxval>, note fx dry <row> <ch> <fx> <fxval>, pattern print [from] [to], pattern play [from] [to] [step <n>], pattern template <blank|house|electro>, pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>] [chance <p>], pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>] [chance <p>], pattern copy <from> <to> [chFrom] [chTo] [step <n>], pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>], pattern humanize [dry [preview [verbose]]] <velRange> <gateRangePercent> <seed> [from] [to] [ch] [step <n>], pattern randomize [dry [preview [verbose]]] <probabilityPercent> <seed> [from] [to] [ch] [step <n>], pattern undo, pattern redo" << '\n';
   std::cout << "Record commands: record on [channel], record off, record channel <index|status>, record cursor <row|+delta|-delta|start|end|next|prev|status>, record note <midi> [instr] [vel] [fx] [fxval], record note <midi> vel <vel> [fx] [fxval], record note <midi> fx <fx> <fxval>, record note <midi> instr <i> [vel <v>] [fx <f> <fv>], record note dry <midi> ..., record quantize <on|off|status>, record overdub <on|off|status>, record jump <ticks|ratio|status>, record undo, record redo" << '\n';
   std::cout << "MIDI commands: midi on, midi off, midi status, midi quick [all|compact], midi thru <on|off>, midi instrument <index>, midi learn <on|off|status>, midi map <ch> <instr|clear>, midi map <status|clear all>, midi transport <on|off|toggle|status|timeout|lock|reset>, midi clock <help|quick|sources|autoconnect|diagnose>" << '\n';
   std::cout << "exTracker> " << std::flush;
@@ -607,6 +641,7 @@ int main() {
                                                    audio,
                                                    playRangeFrom,
                                                    playRangeTo,
+                                                   playRangeStep,
                                                    playRangeActive,
                                                    loopEnabled,
                                                    recordCanUndo,

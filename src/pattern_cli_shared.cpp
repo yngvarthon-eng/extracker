@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <vector>
 
 #include "extracker/cli_parse_utils.hpp"
 
@@ -77,6 +78,8 @@ bool parseRangeAndOptionalChannel(std::istringstream& input,
   selection.channel = -1;
   selection.hasChannel = false;
   selection.rowStep = 1;
+  selection.chancePercent = 100;
+  selection.hasChance = false;
 
   bool hasFrom = false;
   bool hasTo = false;
@@ -84,26 +87,6 @@ bool parseRangeAndOptionalChannel(std::istringstream& input,
     std::cout << usage << '\n';
     return false;
   }
-
-  auto parseStepClause = [&](bool keywordAlreadyRead) -> bool {
-    if (!keywordAlreadyRead) {
-      std::string stepKeyword;
-      if (!(input >> stepKeyword)) {
-        return true;
-      }
-      if (stepKeyword != "step") {
-        std::cout << usage << '\n';
-        return false;
-      }
-    }
-
-    if (!cli::parseStrictIntFromStream(input, selection.rowStep) || cli::hasExtraTokens(input)) {
-      std::cout << usage << '\n';
-      return false;
-    }
-
-    return true;
-  };
 
   if (hasFrom) {
     if (!readOptionalStrictInt(input, hasTo, selection.to)) {
@@ -113,29 +96,64 @@ bool parseRangeAndOptionalChannel(std::istringstream& input,
     if (!hasTo) {
       selection.to = selection.from;
     }
+  }
 
-    std::string token;
-    if (input >> token) {
-      if (token == "step") {
-        if (!parseStepClause(true)) {
-          return false;
-        }
-      } else {
-        if (!cli::parseStrictIntToken(token, selection.channel)) {
-          std::cout << usage << '\n';
-          return false;
-        }
-        selection.hasChannel = true;
+  std::vector<std::string> tailTokens;
+  std::string token;
+  while (input >> token) {
+    tailTokens.push_back(token);
+  }
 
-        if (input >> token) {
-          if (token != "step" || !parseStepClause(true)) {
-            std::cout << usage << '\n';
-            return false;
-          }
-        }
+  std::size_t index = 0;
+  if (!tailTokens.empty()) {
+    const std::string& first = tailTokens.front();
+    if (first != "step" && first != "chance") {
+      if (!cli::parseStrictIntToken(first, selection.channel)) {
+        std::cout << usage << '\n';
+        return false;
       }
+      selection.hasChannel = true;
+      index = 1;
     }
-  } else if (!parseStepClause(false)) {
+  }
+
+  bool sawStep = false;
+  bool sawChance = false;
+  while (index < tailTokens.size()) {
+    const std::string& key = tailTokens[index++];
+    if (index >= tailTokens.size()) {
+      std::cout << usage << '\n';
+      return false;
+    }
+
+    int value = 0;
+    if (!cli::parseStrictIntToken(tailTokens[index++], value)) {
+      std::cout << usage << '\n';
+      return false;
+    }
+
+    if (key == "step") {
+      if (sawStep) {
+        std::cout << usage << '\n';
+        return false;
+      }
+      sawStep = true;
+      selection.rowStep = value;
+      continue;
+    }
+
+    if (key == "chance") {
+      if (sawChance) {
+        std::cout << usage << '\n';
+        return false;
+      }
+      sawChance = true;
+      selection.hasChance = true;
+      selection.chancePercent = std::clamp(value, 0, 100);
+      continue;
+    }
+
+    std::cout << usage << '\n';
     return false;
   }
 

@@ -43,6 +43,20 @@ void printChannelScope(bool hasChannel, int channel) {
   }
 }
 
+bool shouldEditByChance(int row, int channel, int chancePercent) {
+  if (chancePercent >= 100) {
+    return true;
+  }
+  if (chancePercent <= 0) {
+    return false;
+  }
+
+  std::uint32_t hash = static_cast<std::uint32_t>(row) * 73856093u;
+  hash ^= static_cast<std::uint32_t>(channel) * 19349663u;
+  hash ^= 0x9e3779b9u;
+  return static_cast<int>(hash % 100u) < chancePercent;
+}
+
 }  // namespace
 
 bool handlePatternBulkSubcommand(PatternCommandContext context,
@@ -57,7 +71,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "transpose") {
     constexpr const char* usage =
-        "Usage: pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>]";
+        "Usage: pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>] [chance <p>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -78,6 +92,8 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
     const int rowStep = selection.rowStep;
+    const int chancePercent = selection.chancePercent;
+    const bool hasChance = selection.hasChance;
 
     int changedSteps = 0;
     int clampedSteps = 0;
@@ -101,7 +117,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
       for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
-          if (note < 0) {
+          if (note < 0 || !shouldEditByChance(row, ch, chancePercent)) {
             continue;
           }
 
@@ -161,6 +177,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     if (rowStep > 1) {
       std::cout << " [step " << rowStep << "]";
     }
+    if (hasChance) {
+      std::cout << " [chance " << chancePercent << "%]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }
@@ -188,7 +207,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "velocity") {
     constexpr const char* usage =
-        "Usage: pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>]";
+        "Usage: pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -209,6 +228,8 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
     const int rowStep = selection.rowStep;
+    const int chancePercent = selection.chancePercent;
+    const bool hasChance = selection.hasChance;
 
     int changedSteps = 0;
     int clampedSteps = 0;
@@ -232,7 +253,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
       for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
-          if (note < 0) {
+          if (note < 0 || !shouldEditByChance(row, ch, chancePercent)) {
             continue;
           }
 
@@ -285,6 +306,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     if (rowStep > 1) {
       std::cout << " [step " << rowStep << "]";
     }
+    if (hasChance) {
+      std::cout << " [chance " << chancePercent << "%]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }
@@ -312,7 +336,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "gate") {
     constexpr const char* usage =
-        "Usage: pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>]";
+        "Usage: pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -333,6 +357,8 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
     const int rowStep = selection.rowStep;
+    const int chancePercent = selection.chancePercent;
+    const bool hasChance = selection.hasChance;
 
     int changedSteps = 0;
     int clampedSteps = 0;
@@ -357,7 +383,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
       for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
-          if (note < 0) {
+          if (note < 0 || !shouldEditByChance(row, ch, chancePercent)) {
             continue;
           }
 
@@ -416,6 +442,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     if (rowStep > 1) {
       std::cout << " [step " << rowStep << "]";
     }
+    if (hasChance) {
+      std::cout << " [chance " << chancePercent << "%]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }
@@ -444,7 +473,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
   if (subcommand == "effect") {
     constexpr const char* usage =
-        "Usage: pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>]";
+        "Usage: pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>] [chance <p>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -471,6 +500,8 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     const int channel = selection.channel;
     const bool hasChannel = selection.hasChannel;
     const int rowStep = selection.rowStep;
+    const int chancePercent = selection.chancePercent;
+    const bool hasChance = selection.hasChance;
 
     std::uint8_t fxOut = static_cast<std::uint8_t>(std::clamp(fx, 0, 255));
     std::uint8_t fxValueOut = static_cast<std::uint8_t>(std::clamp(fxValue, 0, 255));
@@ -499,7 +530,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
       for (int row = from; row <= to; row += rowStep) {
         for (int ch = channelStart; ch <= channelEnd; ++ch) {
           int note = editor.noteAt(row, ch);
-          if (note < 0) {
+          if (note < 0 || !shouldEditByChance(row, ch, chancePercent)) {
             continue;
           }
 
@@ -544,6 +575,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     std::cout << ", " << clampedValues << " input clamped)";
     if (rowStep > 1) {
       std::cout << " [step " << rowStep << "]";
+    }
+    if (hasChance) {
+      std::cout << " [chance " << chancePercent << "%]";
     }
     if (mode.dryRun) {
       std::cout << " [dry-run]";

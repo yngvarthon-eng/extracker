@@ -18,6 +18,7 @@ bool handlePatternBasicSubcommand(PatternCommandContext context,
   auto& audio = context.audio;
   auto& playRangeFrom = context.playRangeFrom;
   auto& playRangeTo = context.playRangeTo;
+  auto& playRangeStep = context.playRangeStep;
   auto& playRangeActive = context.playRangeActive;
   auto& loopEnabled = context.loopEnabled;
   auto& recordCanUndo = context.recordCanUndo;
@@ -75,25 +76,37 @@ bool handlePatternBasicSubcommand(PatternCommandContext context,
   }
 
   if (subcommand == "play") {
+    constexpr const char* usage = "Usage: pattern play [from] [to] [step <n>]";
     int from = 0;
     int to = static_cast<int>(editor.rows()) - 1;
+    int rowStep = 1;
     bool hasFrom = false;
     bool hasTo = false;
     if (!readOptionalStrictInt(patternInput, hasFrom, from)) {
-      std::cout << "Usage: pattern play [from] [to]" << '\n';
+      std::cout << usage << '\n';
       return true;
     }
     if (hasFrom) {
       if (!readOptionalStrictInt(patternInput, hasTo, to)) {
-        std::cout << "Usage: pattern play [from] [to]" << '\n';
+        std::cout << usage << '\n';
         return true;
       }
       if (!hasTo) {
         to = from;
       }
     }
-    if (cli::hasExtraTokens(patternInput)) {
-      std::cout << "Usage: pattern play [from] [to]" << '\n';
+
+    std::string token;
+    if (patternInput >> token) {
+      if (token != "step" || !cli::parseStrictIntFromStream(patternInput, rowStep) ||
+          cli::hasExtraTokens(patternInput)) {
+        std::cout << usage << '\n';
+        return true;
+      }
+    }
+
+    if (rowStep < 1) {
+      std::cout << "Step must be >= 1" << '\n';
       return true;
     }
 
@@ -106,14 +119,18 @@ bool handlePatternBasicSubcommand(PatternCommandContext context,
     std::lock_guard<std::mutex> lock(stateMutex);
     playRangeFrom = from;
     playRangeTo = to;
+    playRangeStep = rowStep;
     playRangeActive = true;
     transport.stop();
     transport.jumpToRow(static_cast<std::uint32_t>(playRangeFrom));
     sequencer.reset();
     audio.allNotesOff();
     if (transport.play()) {
-      std::cout << "Playing range " << playRangeFrom << ".." << playRangeTo
-                << (loopEnabled ? " (loop on)" : " (loop off)") << '\n';
+      std::cout << "Playing range " << playRangeFrom << ".." << playRangeTo;
+      if (playRangeStep > 1) {
+        std::cout << " [step " << playRangeStep << "]";
+      }
+      std::cout << (loopEnabled ? " (loop on)" : " (loop off)") << '\n';
     } else {
       std::cout << "Failed to start playback for selected range" << '\n';
     }

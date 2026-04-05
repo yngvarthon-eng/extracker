@@ -18,6 +18,7 @@ struct PatternCommandContext {
   AudioEngine& audio;
   int& playRangeFrom;
   int& playRangeTo;
+  int& playRangeStep;
   bool& playRangeActive;
   bool& loopEnabled;
   bool& recordCanUndo;
