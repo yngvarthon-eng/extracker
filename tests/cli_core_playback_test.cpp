@@ -47,9 +47,12 @@ int main() {
   const bool sawStatusTempo      = output.find("Transport tempo:") != std::string::npos;
   const bool sawStatusLoop       = output.find("Loop enabled:") != std::string::npos;
   const bool sawStatusPlayRange  = output.find("Play range:") != std::string::npos;
+  const bool sawRecordChannelLine = output.find("Record channel:") != std::string::npos;
+  const bool sawRecordCursorLine  = output.find("Record cursor row:") != std::string::npos;
 
   if (!sawPlaybackStarted || !sawAlreadyRunning || !sawPlaybackStopped || !sawPlaybackReset ||
-      !sawStatusPlaying || !sawStatusTempo || !sawStatusLoop || !sawStatusPlayRange) {
+      !sawStatusPlaying || !sawStatusTempo || !sawStatusLoop || !sawStatusPlayRange ||
+      sawRecordChannelLine || sawRecordCursorLine) {
     std::cerr << "Missing expected core playback output markers" << '\n';
     std::cerr << output << '\n';
     return 1;
