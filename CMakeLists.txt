@@ -283,6 +283,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_record_note_vel_test extracker)
   add_test(NAME extracker_cli_record_note_vel_test COMMAND extracker_cli_record_note_vel_test)
 
+  add_executable(extracker_cli_record_note_positional_parse_test tests/cli_record_note_positional_parse_test.cpp)
+  add_dependencies(extracker_cli_record_note_positional_parse_test extracker)
+  add_test(NAME extracker_cli_record_note_positional_parse_test COMMAND extracker_cli_record_note_positional_parse_test)
+
   add_executable(extracker_cli_record_note_fx_test tests/cli_record_note_fx_test.cpp)
   add_dependencies(extracker_cli_record_note_fx_test extracker)
   add_test(NAME extracker_cli_record_note_fx_test COMMAND extracker_cli_record_note_fx_test)
