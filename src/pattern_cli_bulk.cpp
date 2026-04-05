@@ -1158,6 +1158,348 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     return true;
   }
 
+  if (subcommand == "scale-duration") {
+    constexpr const char* usage =
+        "Usage: pattern scale-duration [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>]";
+    BulkEditMode mode;
+    if (!parseBulkEditMode(patternInput, usage, mode)) {
+      return true;
+    }
+
+    int percent = 0;
+    if (!cli::parseStrictIntToken(mode.valueToken, percent)) {
+      std::cout << usage << '\n';
+      return true;
+    }
+
+    RangeChannelSelection selection;
+    if (!parseSelection(patternInput, usage, editor, selection)) {
+      return true;
+    }
+    const int from = selection.from;
+    const int to = selection.to;
+    const int channel = selection.channel;
+    const bool hasChannel = selection.hasChannel;
+    const int rowStep = selection.rowStep;
+    const int chancePercent = selection.chancePercent;
+    const bool hasChance = selection.hasChance;
+
+    int changedSteps = 0;
+    int channelStart = selectedChannelStart(hasChannel, channel);
+    int channelEnd = selectedChannelEnd(editor, hasChannel, channel);
+    struct PreviewLine {
+      int row = 0;
+      int channel = 0;
+      std::uint32_t fromDuration = 0;
+      std::uint32_t toDuration = 0;
+      int note = 0;
+      int instrument = 0;
+    };
+    std::vector<PreviewLine> previewLines;
+    bool undoCaptured = false;
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      for (int row = from; row <= to; row += rowStep) {
+        for (int ch = channelStart; ch <= channelEnd; ++ch) {
+          int note = editor.noteAt(row, ch);
+          if (note < 0 || !shouldEditByChance(row, ch, chancePercent)) {
+            continue;
+          }
+
+          std::uint32_t gate = editor.gateTicksAt(row, ch);
+          double scaled = static_cast<double>(gate) * static_cast<double>(percent) / 100.0;
+          long long rounded = static_cast<long long>(std::llround(scaled));
+          std::uint32_t scaledDuration = static_cast<std::uint32_t>(std::clamp(
+              rounded,
+              0LL,
+              static_cast<long long>(std::numeric_limits<std::uint32_t>::max())));
+
+          int instrument = static_cast<int>(editor.instrumentAt(row, ch));
+
+          if (mode.dryRun && mode.previewMode && previewLines.size() < kMaxPreviewLines) {
+            previewLines.push_back(PreviewLine{row, ch, gate, scaledDuration, note, instrument});
+          }
+
+          if (!mode.dryRun) {
+            if (!undoCaptured) {
+              captureBulkUndoSnapshot(editor);
+              undoCaptured = true;
+            }
+            editor.setGateTicks(row, ch, scaledDuration);
+          }
+          ++changedSteps;
+        }
+      }
+
+      if (!mode.dryRun) {
+        resetStateAfterPatternEdit(sequencer, audio, recordCanUndo, recordCanRedo);
+      }
+    }
+
+    std::cout << "Scaled duration on " << changedSteps
+              << " step(s) by " << percent
+              << "% in rows " << from << ".." << to;
+    printChannelScope(hasChannel, channel);
+    std::cout << ")";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
+    if (hasChance) {
+      std::cout << " [chance " << chancePercent << "%]";
+    }
+    if (mode.dryRun) {
+      std::cout << " [dry-run]";
+    }
+    std::cout << '\n';
+
+    if (mode.dryRun && mode.previewMode) {
+      printPreviewBlock("Scale-duration preview:", changedSteps, previewLines, [&](const PreviewLine& line) {
+        std::cout << "row " << line.row
+                  << " ch " << line.channel
+                  << " dur " << line.fromDuration
+                  << " -> " << line.toDuration;
+        if (mode.verboseMode) {
+          std::cout << " n" << line.note
+                    << " i" << line.instrument;
+        }
+      });
+    }
+    return true;
+  }
+
+  if (subcommand == "invert-notes") {
+    constexpr const char* usage =
+        "Usage: pattern invert-notes [dry [preview [verbose]]] [centerNote] [from] [to] [ch] [step <n>]";
+    BulkEditMode mode;
+    if (!parseBulkEditMode(patternInput, usage, mode)) {
+      return true;
+    }
+
+    int centerNote = 60;  // Middle C
+    if (!mode.valueToken.empty()) {
+      if (!cli::parseStrictIntToken(mode.valueToken, centerNote)) {
+        std::cout << usage << '\n';
+        return true;
+      }
+    }
+
+    RangeChannelSelection selection;
+    if (!parseSelection(patternInput, usage, editor, selection)) {
+      return true;
+    }
+    const int from = selection.from;
+    const int to = selection.to;
+    const int channel = selection.channel;
+    const bool hasChannel = selection.hasChannel;
+    const int rowStep = selection.rowStep;
+
+    int invertedSteps = 0;
+    int channelStart = selectedChannelStart(hasChannel, channel);
+    int channelEnd = selectedChannelEnd(editor, hasChannel, channel);
+    struct PreviewLine {
+      int row = 0;
+      int channel = 0;
+      int fromNote = 0;
+      int toNote = 0;
+      int instrument = 0;
+      int velocity = 0;
+    };
+    std::vector<PreviewLine> previewLines;
+    bool undoCaptured = false;
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      for (int row = from; row <= to; row += rowStep) {
+        for (int ch = channelStart; ch <= channelEnd; ++ch) {
+          int note = editor.noteAt(row, ch);
+          if (note < 0) {
+            continue;
+          }
+
+          int inverted = centerNote - (note - centerNote);
+          inverted = std::clamp(inverted, 0, 127);
+
+          int instrument = static_cast<int>(editor.instrumentAt(row, ch));
+          int velocity = static_cast<int>(editor.velocityAt(row, ch));
+
+          if (mode.dryRun && mode.previewMode && previewLines.size() < kMaxPreviewLines) {
+            previewLines.push_back(PreviewLine{row, ch, note, inverted, instrument, velocity});
+          }
+
+          if (!mode.dryRun) {
+            if (!undoCaptured) {
+              captureBulkUndoSnapshot(editor);
+              undoCaptured = true;
+            }
+            editor.insertNote(
+                row,
+                ch,
+                inverted,
+                static_cast<std::uint8_t>(instrument),
+                editor.gateTicksAt(row, ch),
+                static_cast<std::uint8_t>(velocity),
+                editor.retriggerAt(row, ch),
+                static_cast<std::uint8_t>(editor.effectCommandAt(row, ch)),
+                static_cast<std::uint8_t>(editor.effectValueAt(row, ch)));
+          }
+          ++invertedSteps;
+        }
+      }
+
+      if (!mode.dryRun) {
+        resetStateAfterPatternEdit(sequencer, audio, recordCanUndo, recordCanRedo);
+      }
+    }
+
+    std::cout << "Inverted " << invertedSteps
+              << " note(s) around center " << centerNote
+              << " in rows " << from << ".." << to;
+    printChannelScope(hasChannel, channel);
+    std::cout << ")";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
+    if (mode.dryRun) {
+      std::cout << " [dry-run]";
+    }
+    std::cout << '\n';
+
+    if (mode.dryRun && mode.previewMode) {
+      printPreviewBlock("Invert-notes preview:", invertedSteps, previewLines, [&](const PreviewLine& line) {
+        std::cout << "row " << line.row
+                  << " ch " << line.channel
+                  << " n" << line.fromNote
+                  << " -> n" << line.toNote;
+        if (mode.verboseMode) {
+          std::cout << " i" << line.instrument
+                    << " v" << line.velocity;
+        }
+      });
+    }
+    return true;
+  }
+
+  if (subcommand == "filter-notes") {
+    constexpr const char* usage =
+        "Usage: pattern filter-notes [dry [preview [verbose]]] <minNote> <maxNote> [from] [to] [ch] [delete]";
+    BulkEditMode mode;
+    if (!parseBulkEditMode(patternInput, usage, mode)) {
+      return true;
+    }
+
+    int minNote = 0;
+    if (!cli::parseStrictIntToken(mode.valueToken, minNote)) {
+      std::cout << usage << '\n';
+      return true;
+    }
+
+    int maxNote = 127;
+    if (!cli::parseStrictIntFromStream(patternInput, maxNote)) {
+      std::cout << usage << '\n';
+      return true;
+    }
+
+    minNote = std::clamp(minNote, 0, 127);
+    maxNote = std::clamp(maxNote, 0, 127);
+    if (minNote > maxNote) {
+      std::swap(minNote, maxNote);
+    }
+
+    RangeChannelSelection selection;
+    if (!parseSelection(patternInput, usage, editor, selection)) {
+      return true;
+    }
+
+    bool deleteMatches = false;
+    std::string deleteToken;
+    if (patternInput >> deleteToken) {
+      if (deleteToken == "delete") {
+        deleteMatches = true;
+      } else if (deleteToken != "list") {
+        std::cout << usage << '\n';
+        return true;
+      }
+    }
+
+    const int from = selection.from;
+    const int to = selection.to;
+    const int channel = selection.channel;
+    const bool hasChannel = selection.hasChannel;
+    const int rowStep = selection.rowStep;
+
+    int matchedSteps = 0;
+    int channelStart = selectedChannelStart(hasChannel, channel);
+    int channelEnd = selectedChannelEnd(editor, hasChannel, channel);
+    struct MatchLine {
+      int row = 0;
+      int channel = 0;
+      int note = 0;
+      int velocity = 0;
+      int instrument = 0;
+    };
+    std::vector<MatchLine> matches;
+    bool undoCaptured = false;
+    {
+      std::lock_guard<std::mutex> lock(stateMutex);
+      for (int row = from; row <= to; row += rowStep) {
+        for (int ch = channelStart; ch <= channelEnd; ++ch) {
+          int note = editor.noteAt(row, ch);
+          if (note < 0) {
+            continue;
+          }
+
+          int vel = static_cast<int>(editor.velocityAt(row, ch));
+          if (note >= minNote && note <= maxNote) {
+            ++matchedSteps;
+
+            if (matches.size() < kMaxPreviewLines) {
+              matches.push_back(MatchLine{row, ch, note, vel, static_cast<int>(editor.instrumentAt(row, ch))});
+            }
+
+            if (!mode.dryRun && deleteMatches) {
+              if (!undoCaptured) {
+                captureBulkUndoSnapshot(editor);
+                undoCaptured = true;
+              }
+              editor.clearStep(row, ch);
+            }
+          }
+        }
+      }
+
+      if (!mode.dryRun && deleteMatches) {
+        resetStateAfterPatternEdit(sequencer, audio, recordCanUndo, recordCanRedo);
+      }
+    }
+
+    std::string actionStr = deleteMatches ? "deleted" : "found";
+    std::cout << "Filter: " << actionStr << " " << matchedSteps
+              << " note(s) in range n[" << minNote << ".." << maxNote
+              << "] in rows " << from << ".." << to;
+    printChannelScope(hasChannel, channel);
+    std::cout << ")";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
+    if (mode.dryRun) {
+      std::cout << " [dry-run]";
+    }
+    std::cout << '\n';
+
+    if (matches.size() > 0 && (mode.dryRun || !deleteMatches)) {
+      for (const auto& m : matches) {
+        std::cout << "  row " << m.row
+                  << " ch " << m.channel
+                  << " n" << m.note
+                  << " v" << m.velocity
+                  << " i" << m.instrument << '\n';
+      }
+      if (matchedSteps > matches.size()) {
+        std::cout << "  ... and " << (matchedSteps - matches.size()) << " more\n";
+      }
+    }
+    return true;
+  }
+
   return false;
 }
 
