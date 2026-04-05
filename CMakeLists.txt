@@ -299,6 +299,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_record_cursor_relative_test extracker)
   add_test(NAME extracker_cli_record_cursor_relative_test COMMAND extracker_cli_record_cursor_relative_test)
 
+  add_executable(extracker_cli_record_cursor_status_extra_test tests/cli_record_cursor_status_extra_test.cpp)
+  add_dependencies(extracker_cli_record_cursor_status_extra_test extracker)
+  add_test(NAME extracker_cli_record_cursor_status_extra_test COMMAND extracker_cli_record_cursor_status_extra_test)
+
   add_executable(extracker_cli_record_cursor_step_test tests/cli_record_cursor_step_test.cpp)
   add_dependencies(extracker_cli_record_cursor_step_test extracker)
   add_test(NAME extracker_cli_record_cursor_step_test COMMAND extracker_cli_record_cursor_step_test)
