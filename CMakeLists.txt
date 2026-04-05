@@ -207,6 +207,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_plugin_subcommand_usage_guard_test extracker)
   add_test(NAME extracker_cli_plugin_subcommand_usage_guard_test COMMAND extracker_cli_plugin_subcommand_usage_guard_test)
 
+  add_executable(extracker_cli_plugin_top_level_usage_test tests/cli_plugin_top_level_usage_test.cpp)
+  add_dependencies(extracker_cli_plugin_top_level_usage_test extracker)
+  add_test(NAME extracker_cli_plugin_top_level_usage_test COMMAND extracker_cli_plugin_top_level_usage_test)
+
   add_executable(extracker_cli_record_on_parse_test tests/cli_record_on_parse_test.cpp)
   add_dependencies(extracker_cli_record_on_parse_test extracker)
   add_test(NAME extracker_cli_record_on_parse_test COMMAND extracker_cli_record_on_parse_test)
