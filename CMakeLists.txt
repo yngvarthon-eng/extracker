@@ -155,6 +155,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_plugin_set_get_no_assign_test extracker)
   add_test(NAME extracker_cli_plugin_set_get_no_assign_test COMMAND extracker_cli_plugin_set_get_no_assign_test)
 
+  add_executable(extracker_cli_plugin_set_get_no_lv2_meta_test tests/cli_plugin_set_get_no_lv2_meta_test.cpp)
+  add_dependencies(extracker_cli_plugin_set_get_no_lv2_meta_test extracker)
+  add_test(NAME extracker_cli_plugin_set_get_no_lv2_meta_test COMMAND extracker_cli_plugin_set_get_no_lv2_meta_test)
+
   add_executable(extracker_cli_note_write_commit_test tests/cli_note_write_commit_test.cpp)
   add_dependencies(extracker_cli_note_write_commit_test extracker)
   add_test(NAME extracker_cli_note_write_commit_test COMMAND extracker_cli_note_write_commit_test)
