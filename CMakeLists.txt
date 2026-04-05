@@ -315,6 +315,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_note_usage_guard_test extracker)
   add_test(NAME extracker_cli_note_usage_guard_test COMMAND extracker_cli_note_usage_guard_test)
 
+  add_executable(extracker_cli_note_trailing_token_guard_test tests/cli_note_trailing_token_guard_test.cpp)
+  add_dependencies(extracker_cli_note_trailing_token_guard_test extracker)
+  add_test(NAME extracker_cli_note_trailing_token_guard_test COMMAND extracker_cli_note_trailing_token_guard_test)
+
   add_executable(extracker_cli_plugin_scan_test tests/cli_plugin_scan_test.cpp)
   add_dependencies(extracker_cli_plugin_scan_test extracker)
   add_test(NAME extracker_cli_plugin_scan_test COMMAND extracker_cli_plugin_scan_test)

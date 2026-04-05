@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "extracker/cli_parse_utils.hpp"
 
@@ -72,16 +73,37 @@ void handleNoteCommand(PatternEditor& editor,
     int effectCommand = 0;
     int effectValue = 0;
 
-    if (!(noteInput >> channel >> midi >> instrument)) {
+    std::string channelToken;
+    std::string midiToken;
+    std::string instrumentToken;
+
+    if (!(noteInput >> channelToken >> midiToken >> instrumentToken) ||
+        !cli::parseStrictIntToken(channelToken, channel) ||
+        !cli::parseStrictIntToken(midiToken, midi) ||
+        !cli::parseStrictIntToken(instrumentToken, instrument)) {
       std::cout << usage << '\n';
     } else {
-      if (noteInput >> velocity) {
-        if (noteInput >> effectCommand) {
-          if (!(noteInput >> effectValue)) {
-            printNoteUsage(usage);
-            return;
-          }
+      std::vector<std::string> optionalArgs;
+      std::string token;
+      while (noteInput >> token) {
+        optionalArgs.push_back(token);
+      }
+
+      if (optionalArgs.size() == 1) {
+        if (!cli::parseStrictIntToken(optionalArgs[0], velocity)) {
+          printNoteUsage(usage);
+          return;
         }
+      } else if (optionalArgs.size() == 3) {
+        if (!cli::parseStrictIntToken(optionalArgs[0], velocity) ||
+            !cli::parseStrictIntToken(optionalArgs[1], effectCommand) ||
+            !cli::parseStrictIntToken(optionalArgs[2], effectValue)) {
+          printNoteUsage(usage);
+          return;
+        }
+      } else if (!optionalArgs.empty()) {
+        printNoteUsage(usage);
+        return;
       }
 
       if (!ensureNoTrailing(usage)) {
