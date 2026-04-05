@@ -56,6 +56,12 @@ int main() {
       std::cerr << "CLI exited non-zero on repeated scan: " << status << '\n' << output;
       return 1;
     }
+
+    if (output.find("Scan complete, no new plugins discovered") == std::string::npos) {
+      std::cerr << "Expected 'Scan complete, no new plugins discovered' on repeated scan\n"
+                << output;
+      return 1;
+    }
   }
 
   return 0;
