@@ -215,6 +215,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_record_on_parse_test extracker)
   add_test(NAME extracker_cli_record_on_parse_test COMMAND extracker_cli_record_on_parse_test)
 
+  add_executable(extracker_cli_record_on_extra_token_test tests/cli_record_on_extra_token_test.cpp)
+  add_dependencies(extracker_cli_record_on_extra_token_test extracker)
+  add_test(NAME extracker_cli_record_on_extra_token_test COMMAND extracker_cli_record_on_extra_token_test)
+
   add_executable(extracker_cli_midi_map_test tests/cli_midi_map_test.cpp)
   add_dependencies(extracker_cli_midi_map_test extracker)
   add_test(NAME extracker_cli_midi_map_test COMMAND extracker_cli_midi_map_test)
