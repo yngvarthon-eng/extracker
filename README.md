@@ -192,8 +192,8 @@ ctest --test-dir build --output-on-failure
 - `pattern gate dry preview verbose <percent> <from> <to> [ch] [step <n>]` previews per-step gate changes with note/instrument/effect context.
 - `pattern effect <fx> <fxval> <from> <to> [ch] [step <n>]` fills effect command/value across notes in a range.
 - `pattern effect dry preview verbose <fx> <fxval> <from> <to> [ch] [step <n>]` previews per-step effect changes with note/instrument/velocity context.
-- `pattern copy <from> <to> [chFrom] [chTo]` copies a row/channel block into the internal clipboard.
-- `pattern paste <destRow> [channelOffset]` pastes copied notes; dry/preview/verbose modes are supported.
+- `pattern copy <from> <to> [chFrom] [chTo] [step <n>]` copies a row/channel block into the internal clipboard.
+- `pattern paste <destRow> [channelOffset] [step <n>]` pastes copied notes; dry/preview/verbose modes are supported.
 - `pattern humanize <velRange> <gateRangePercent> <seed> <from> <to> [ch] [step <n>]` adds seeded random variation to velocity/gate.
 - `pattern randomize <probabilityPercent> <seed> <from> <to> [ch] [step <n>]` randomizes velocity/effect on selected steps.
 - `pattern undo` and `pattern redo` provide one-level bulk edit undo/redo for committed pattern bulk operations.

@@ -254,6 +254,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_pattern_copy_paste_test extracker)
   add_test(NAME extracker_cli_pattern_copy_paste_test COMMAND extracker_cli_pattern_copy_paste_test)
 
+  add_executable(extracker_cli_pattern_copy_paste_step_stride_test tests/cli_pattern_copy_paste_step_stride_test.cpp)
+  add_dependencies(extracker_cli_pattern_copy_paste_step_stride_test extracker)
+  add_test(NAME extracker_cli_pattern_copy_paste_step_stride_test COMMAND extracker_cli_pattern_copy_paste_step_stride_test)
+
   add_executable(extracker_cli_pattern_humanize_test tests/cli_pattern_humanize_test.cpp)
   add_dependencies(extracker_cli_pattern_humanize_test extracker)
   add_test(NAME extracker_cli_pattern_humanize_test COMMAND extracker_cli_pattern_humanize_test)

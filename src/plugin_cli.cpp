@@ -313,8 +313,8 @@ void handleHelpCommand() {
   std::cout << "pattern velocity [dry [preview [verbose]]] p [f t c] [step n] scale velocity by percent" << '\n';
   std::cout << "pattern gate [dry [preview [verbose]]] p [f t c] [step n] scale gate ticks by percent" << '\n';
   std::cout << "pattern effect [dry [preview [verbose]]] fx fv [f t c] [step n] fill effect command/value" << '\n';
-  std::cout << "pattern copy f t [cf ct]    copy range into internal pattern clipboard" << '\n';
-  std::cout << "pattern paste [dry ...] r [offset] paste clipboard at target row/channel offset" << '\n';
+  std::cout << "pattern copy f t [cf ct] [step n] copy range into internal pattern clipboard" << '\n';
+  std::cout << "pattern paste [dry ...] r [offset] [step n] paste clipboard at target row/channel offset" << '\n';
   std::cout << "pattern humanize [dry ...] vr gr seed [f t c] [step n] randomize velocity/gate around current values" << '\n';
   std::cout << "pattern randomize [dry ...] p seed [f t c] [step n] randomize velocity/effect per-step by probability" << '\n';
   std::cout << "pattern undo                undo last committed bulk pattern edit" << '\n';

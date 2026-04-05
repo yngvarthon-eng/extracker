@@ -35,6 +35,7 @@ struct PatternClipboard {
   int channels = 0;
   int sourceFromRow = 0;
   int sourceFromChannel = 0;
+  int sourceRowStep = 1;
   std::vector<ClipboardStep> steps;
 };
 

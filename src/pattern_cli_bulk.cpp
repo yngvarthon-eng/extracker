@@ -569,7 +569,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
   }
 
   if (subcommand == "copy") {
-    constexpr const char* usage = "Usage: pattern copy <from> <to> [chFrom] [chTo]";
+    constexpr const char* usage = "Usage: pattern copy <from> <to> [chFrom] [chTo] [step <n>]";
     int from = 0;
     int to = 0;
     if (!cli::parseStrictIntFromStream(patternInput, from) ||
@@ -580,20 +580,32 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
     int chFrom = 0;
     int chTo = static_cast<int>(editor.channels()) - 1;
-    bool hasChFrom = false;
-    bool hasChTo = false;
-    if (!readOptionalStrictInt(patternInput, hasChFrom, chFrom)) {
-      std::cout << usage << '\n';
-      return true;
-    }
-    if (hasChFrom) {
-      if (!readOptionalStrictInt(patternInput, hasChTo, chTo) || !hasChTo) {
-        std::cout << usage << '\n';
-        return true;
+    int rowStep = 1;
+    std::string token;
+    if (patternInput >> token) {
+      if (token == "step") {
+        if (!cli::parseStrictIntFromStream(patternInput, rowStep) || cli::hasExtraTokens(patternInput)) {
+          std::cout << usage << '\n';
+          return true;
+        }
+      } else {
+        if (!cli::parseStrictIntToken(token, chFrom) || !cli::parseStrictIntFromStream(patternInput, chTo)) {
+          std::cout << usage << '\n';
+          return true;
+        }
+
+        if (patternInput >> token) {
+          if (token != "step" || !cli::parseStrictIntFromStream(patternInput, rowStep) ||
+              cli::hasExtraTokens(patternInput)) {
+            std::cout << usage << '\n';
+            return true;
+          }
+        }
       }
     }
-    if (cli::hasExtraTokens(patternInput)) {
-      std::cout << usage << '\n';
+
+    if (rowStep < 1) {
+      std::cout << "Step must be >= 1" << '\n';
       return true;
     }
 
@@ -611,17 +623,18 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
     std::lock_guard<std::mutex> lock(stateMutex);
     gPatternClipboard.valid = false;
-    gPatternClipboard.rows = (to - from + 1);
+    gPatternClipboard.rows = ((to - from) / rowStep) + 1;
     gPatternClipboard.channels = (chTo - chFrom + 1);
     gPatternClipboard.sourceFromRow = from;
     gPatternClipboard.sourceFromChannel = chFrom;
+    gPatternClipboard.sourceRowStep = rowStep;
     gPatternClipboard.steps.assign(
         static_cast<std::size_t>(gPatternClipboard.rows * gPatternClipboard.channels),
         ClipboardStep{});
 
     for (int r = 0; r < gPatternClipboard.rows; ++r) {
       for (int c = 0; c < gPatternClipboard.channels; ++c) {
-        int row = from + r;
+      int row = from + (r * rowStep);
         int ch = chFrom + c;
         ClipboardStep step;
         step.hasNote = editor.hasNoteAt(row, ch);
@@ -641,13 +654,17 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
 
     std::cout << "Copied rows " << from << ".." << to
               << " channels " << chFrom << ".." << chTo
-              << " (" << gPatternClipboard.rows << "x" << gPatternClipboard.channels << ")" << '\n';
+              << " (" << gPatternClipboard.rows << "x" << gPatternClipboard.channels << ")";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
+    std::cout << '\n';
     return true;
   }
 
   if (subcommand == "paste") {
     constexpr const char* usage =
-        "Usage: pattern paste [dry [preview [verbose]]] <destRow> [channelOffset]";
+        "Usage: pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -660,9 +677,31 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     }
 
     int channelOffset = 0;
-    bool hasOffset = false;
-    if (!readOptionalStrictInt(patternInput, hasOffset, channelOffset) || cli::hasExtraTokens(patternInput)) {
-      std::cout << usage << '\n';
+    int rowStep = 1;
+    std::string token;
+    if (patternInput >> token) {
+      if (token == "step") {
+        if (!cli::parseStrictIntFromStream(patternInput, rowStep) || cli::hasExtraTokens(patternInput)) {
+          std::cout << usage << '\n';
+          return true;
+        }
+      } else {
+        if (!cli::parseStrictIntToken(token, channelOffset)) {
+          std::cout << usage << '\n';
+          return true;
+        }
+        if (patternInput >> token) {
+          if (token != "step" || !cli::parseStrictIntFromStream(patternInput, rowStep) ||
+              cli::hasExtraTokens(patternInput)) {
+            std::cout << usage << '\n';
+            return true;
+          }
+        }
+      }
+    }
+
+    if (rowStep < 1) {
+      std::cout << "Step must be >= 1" << '\n';
       return true;
     }
 
@@ -698,7 +737,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
             continue;
           }
 
-          int targetRow = destRow + r;
+          int targetRow = destRow + (r * rowStep);
           int targetChannel = baseChannel + c;
           if (targetRow < 0 || targetRow >= static_cast<int>(editor.rows()) ||
               targetChannel < 0 || targetChannel >= static_cast<int>(editor.channels())) {
@@ -707,7 +746,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
           }
 
           if (mode.dryRun && mode.previewMode && previewLines.size() < kMaxPreviewLines) {
-            previewLines.push_back(PreviewLine{gPatternClipboard.sourceFromRow + r,
+            previewLines.push_back(PreviewLine{gPatternClipboard.sourceFromRow + (r * gPatternClipboard.sourceRowStep),
                                                gPatternClipboard.sourceFromChannel + c,
                                                targetRow,
                                                targetChannel,
@@ -747,6 +786,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
               << " step(s) at row " << destRow
               << " (channel offset " << channelOffset
               << ", " << skippedSteps << " skipped)";
+    if (rowStep > 1) {
+      std::cout << " [step " << rowStep << "]";
+    }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
     }
