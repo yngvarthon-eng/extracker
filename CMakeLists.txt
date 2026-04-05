@@ -147,6 +147,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_core_status_detail_test extracker)
   add_test(NAME extracker_cli_core_status_detail_test COMMAND extracker_cli_core_status_detail_test)
 
+  add_executable(extracker_cli_core_status_midi_map_test tests/cli_core_status_midi_map_test.cpp)
+  add_dependencies(extracker_cli_core_status_midi_map_test extracker)
+  add_test(NAME extracker_cli_core_status_midi_map_test COMMAND extracker_cli_core_status_midi_map_test)
+
   add_executable(extracker_cli_core_tempo_save_load_guard_test tests/cli_core_tempo_save_load_guard_test.cpp)
   add_dependencies(extracker_cli_core_tempo_save_load_guard_test extracker)
   add_test(NAME extracker_cli_core_tempo_save_load_guard_test COMMAND extracker_cli_core_tempo_save_load_guard_test)
