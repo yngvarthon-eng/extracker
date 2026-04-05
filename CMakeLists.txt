@@ -393,6 +393,13 @@ if(BUILD_TESTING)
     PRIVATE EXTRACKER_LV2_TEST_PLUGIN_PATH="$<TARGET_FILE:extracker_lv2_test_plugin>")
   add_test(NAME extracker_cli_plugin_get_test COMMAND extracker_cli_plugin_get_test)
 
+  add_executable(extracker_cli_plugin_scan_found_summary_test tests/cli_plugin_scan_found_summary_test.cpp)
+  add_dependencies(extracker_cli_plugin_scan_found_summary_test extracker extracker_lv2_test_plugin)
+  target_compile_definitions(
+    extracker_cli_plugin_scan_found_summary_test
+    PRIVATE EXTRACKER_LV2_TEST_PLUGIN_PATH="$<TARGET_FILE:extracker_lv2_test_plugin>")
+  add_test(NAME extracker_cli_plugin_scan_found_summary_test COMMAND extracker_cli_plugin_scan_found_summary_test)
+
   add_executable(extracker_cli_plugin_control_index_token_test tests/cli_plugin_control_index_token_test.cpp)
   add_dependencies(extracker_cli_plugin_control_index_token_test extracker extracker_lv2_test_plugin)
   target_compile_definitions(
