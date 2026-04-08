@@ -70,6 +70,13 @@ Voice lifecycle milestone is now in place:
 - per-step retrigger restarts phase/envelope on repeated notes
 - per-step instrument IDs route notes into separate voice groups
 
+Song/module workflow milestone is now in place:
+
+- multi-pattern modules with song-order sequencing
+- Pattern vs Song play modes in the GUI
+- full-song save/load in `EXTRACKER_SONG_V1` format
+- CLI and GUI parity for song-order persistence
+
 Plugin host routing milestone is now in place:
 
 - instrument IDs can be assigned to plugin slots
