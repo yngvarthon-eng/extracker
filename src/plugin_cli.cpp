@@ -254,6 +254,12 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     if (!hasAny) {
       std::cout << "  (none)" << '\n';
     }
+  } else if (subcommand == "sample") {
+    std::cout << "Sample management has moved to the 'sample' command.\n";
+    std::cout << "  sample load <slot> <name> <wav-file>   load a WAV, give it a name\n";
+    std::cout << "  sample unload <slot>                   unload a sample slot\n";
+    std::cout << "  sample rename <slot> <name>            rename a loaded sample\n";
+    std::cout << "  sample list                            list all loaded samples\n";
   } else {
     std::cout << "Usage: plugin <scan|list|load|assign|set|get|info|status> ..." << '\n';
   }
@@ -295,6 +301,13 @@ void handleHelpCommand() {
   std::cout << "plugin get <i> <p>         get LV2 control by port index or symbol" << '\n';
   std::cout << "plugin info <id>           show port layout for a plugin" << '\n';
   std::cout << "plugin status              show instrument->plugin assignments" << '\n';
+  std::cout << "sample load <s> <name> <f> load WAV into slot s with a name" << '\n';
+  std::cout << "sample unload <s>          unload sample slot s" << '\n';
+  std::cout << "sample rename <s> <name>   rename sample slot s" << '\n';
+  std::cout << "sample play <s> [note]     preview sample slot s" << '\n';
+  std::cout << "sample stop <s> [note]     stop preview on sample slot s" << '\n';
+  std::cout << "sample list                list all loaded samples with names and paths" << '\n';
+  std::cout << "sample status [s]          show status of one or all sample slots" << '\n';
   std::cout << "sine <instrument>          convenience command for builtin.sine" << '\n';
   std::cout << "note set r c n i [v fx fv] set note in pattern (optional vel/effect)" << '\n';
   std::cout << "note set dry ...           parse and preview note set without writing" << '\n';

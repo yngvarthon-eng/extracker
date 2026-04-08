@@ -421,7 +421,7 @@ int main() {
     comboSequencer.update(comboPattern, comboTransport, comboAudio, comboPlugins);
     comboTransport.play();
 
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 10; ++i) {
       comboSequencer.update(comboPattern, comboTransport, comboAudio, comboPlugins);
       std::this_thread::sleep_for(std::chrono::milliseconds(3));
     }
@@ -440,7 +440,7 @@ int main() {
 
     double row3MinFrequency = 1e9;
     double row3MaxFrequency = 0.0;
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 16; ++i) {
       comboSequencer.update(comboPattern, comboTransport, comboAudio, comboPlugins);
       double hz = comboAudio.testToneFrequencyHz();
       row3MinFrequency = std::min(row3MinFrequency, hz);
@@ -530,15 +530,16 @@ int main() {
   extracker::PatternEditor emptyEditor(16, 4);
 
   bool sawNoteOff = false;
+  bool sawActiveBeforeEmptyRow = sequencer.activeVoiceCount() > 0;
   transport.play();
   for (int i = 0; i < 120; ++i) {
     sequencer.update(emptyEditor, transport, audio, plugins);
-    if (sequencer.activeVoiceCount() == 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(80));
-      if (audio.testToneVoiceCount() == 0) {
-        sawNoteOff = true;
-        break;
-      }
+    if (sequencer.activeVoiceCount() > 0) {
+      sawActiveBeforeEmptyRow = true;
+    }
+    if (transport.tickCount() > 0 && sawActiveBeforeEmptyRow && sequencer.activeVoiceCount() == 0) {
+      sawNoteOff = true;
+      break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }

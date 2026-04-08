@@ -18,6 +18,7 @@ public:
     int midiNote = -1;
     std::size_t channel = 0;
     std::uint8_t instrument = 0;
+    std::uint16_t sample = 0xFFFF;  // 0xFFFF means no sample
     std::uint32_t gateTicks = 0;
     std::uint8_t velocity = 100;
     bool retrigger = false;
@@ -51,7 +52,8 @@ public:
       const PatternEditor& pattern,
       Transport& transport,
       AudioEngine& audioEngine,
-      PluginHost& pluginHost);
+      PluginHost& pluginHost,
+      const std::vector<bool>* mutedChannels = nullptr);
 
   std::uint64_t dispatchCount() const;
   int activeMidiNote() const;

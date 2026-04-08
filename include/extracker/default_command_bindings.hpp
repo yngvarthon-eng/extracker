@@ -7,6 +7,7 @@ namespace extracker {
 struct DefaultCommandBindingCallbacks {
   CommandHandler onHelp;
   CommandHandler onPlugin;
+  CommandHandler onSample;
   CommandHandler onSine;
   CommandHandler onNote;
   CommandHandler onPattern;

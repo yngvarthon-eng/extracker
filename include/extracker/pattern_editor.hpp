@@ -13,6 +13,7 @@ public:
     bool hasNote = false;
     int note = -1;
     std::uint8_t instrument = 0;
+    std::uint16_t sample = 0xFFFF;  // kInvalidSampleSlot; 0xFFFF means no sample, use instrument
     std::uint32_t gateTicks = 0;
     std::uint8_t velocity = 100;
     bool retrigger = false;
@@ -34,6 +35,7 @@ public:
       std::uint8_t effectCommand = 0,
       std::uint8_t effectValue = 0);
   void setInstrument(int row, int channel, std::uint8_t instrument);
+  void setSample(int row, int channel, std::uint16_t sample);
   void setGateTicks(int row, int channel, std::uint32_t gateTicks);
   void setVelocity(int row, int channel, std::uint8_t velocity);
   void setRetrigger(int row, int channel, bool retrigger);
@@ -43,6 +45,7 @@ public:
   bool hasNoteAt(int row, int channel) const;
   int noteAt(int row, int channel) const;
   std::uint8_t instrumentAt(int row, int channel) const;
+  std::uint16_t sampleAt(int row, int channel) const;
   std::uint32_t gateTicksAt(int row, int channel) const;
   std::uint8_t velocityAt(int row, int channel) const;
   bool retriggerAt(int row, int channel) const;
@@ -51,6 +54,8 @@ public:
 
   std::size_t rows() const;
   std::size_t channels() const;
+  void resizeRows(std::size_t newRows);
+  void resizeChannels(std::size_t newChannels);
 
 private:
   bool isValidCell(int row, int channel) const;

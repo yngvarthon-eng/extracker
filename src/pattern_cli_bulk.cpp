@@ -675,6 +675,7 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
         if (step.hasNote) {
           step.note = editor.noteAt(row, ch);
           step.instrument = editor.instrumentAt(row, ch);
+          step.sample = editor.sampleAt(row, ch);
           step.gateTicks = editor.gateTicksAt(row, ch);
           step.velocity = editor.velocityAt(row, ch);
           step.retrigger = editor.retriggerAt(row, ch);
@@ -806,6 +807,9 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
                 step.retrigger,
                 step.effectCommand,
                 step.effectValue);
+            if (step.sample != 0xFFFF) {
+              editor.setSample(targetRow, targetChannel, step.sample);
+            }
           }
           ++changedSteps;
         }

@@ -8,6 +8,7 @@ void registerCommandHandlers(CommandRegistry& commandRegistry,
                              const CommandBindings& commandBindings) {
   commandRegistry["help"] = commandBindings.help;
   commandRegistry["plugin"] = commandBindings.plugin;
+  commandRegistry["sample"] = commandBindings.sample;
   commandRegistry["sine"] = commandBindings.sine;
   commandRegistry["note"] = commandBindings.note;
   commandRegistry["pattern"] = commandBindings.pattern;

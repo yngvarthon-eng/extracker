@@ -41,6 +41,7 @@ public:
 
   virtual void noteOn(int midiNote, std::uint8_t velocity, bool retrigger) = 0;
   virtual void noteOff(int midiNote) = 0;
+    virtual void allNotesOff() = 0;
   virtual void renderAdd(std::vector<double>& monoBuffer, std::uint32_t sampleRate) = 0;
 
   virtual bool setParameter(const std::string& name, double value) = 0;
@@ -83,6 +84,7 @@ struct PluginPortInfo {
 class PluginHost {
 public:
   static constexpr std::size_t kMaxInstrumentSlots = 16;
+  static constexpr std::size_t kMaxSampleSlots = 257; // Slots 0..256
   using PluginFactory = std::function<std::unique_ptr<IInstrumentPlugin>()>;
 
   PluginHost();
@@ -101,9 +103,30 @@ public:
   std::string pluginForInstrument(std::uint8_t instrument) const;
   bool triggerNoteOn(std::uint8_t instrument, int midiNote, std::uint8_t velocity, bool retrigger);
   bool triggerNoteOff(std::uint8_t instrument, int midiNote);
+  bool triggerNoteOnResolved(std::uint8_t instrument,
+                             std::uint16_t sampleSlot,
+                             int midiNote,
+                             std::uint8_t velocity,
+                             bool retrigger);
+  bool triggerNoteOffResolved(std::uint8_t instrument, std::uint16_t sampleSlot, int midiNote);
+  void allNotesOff();
   bool renderInterleaved(std::vector<double>& monoBuffer, std::uint32_t sampleRate);
   bool setInstrumentParameter(std::uint8_t instrument, const std::string& name, double value);
   double getInstrumentParameter(std::uint8_t instrument, const std::string& name) const;
+  bool loadSampleToSlot(std::uint16_t sampleSlot, const std::string& wavPath);
+  bool saveSampleFromSlot(std::uint16_t sampleSlot, const std::string& wavPath) const;
+  bool clearSampleSlot(std::uint16_t sampleSlot);
+  std::string samplePathForSlot(std::uint16_t sampleSlot) const;
+  bool setSampleNameForSlot(std::uint16_t sampleSlot, const std::string& name);
+  std::string sampleNameForSlot(std::uint16_t sampleSlot) const;
+  bool assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument);
+  int sampleSlotForInstrument(std::uint8_t instrument) const;
+  bool loadSampleToInstrument(std::uint8_t instrument, const std::string& wavPath);
+  bool saveSampleFromInstrument(std::uint8_t instrument, const std::string& wavPath) const;
+  bool clearSampleFromInstrument(std::uint8_t instrument);
+  std::string samplePathForInstrument(std::uint8_t instrument) const;
+  std::size_t activeVoiceCountForInstrument(std::uint8_t instrument) const;
+  double activeVoiceFrequencyHzForInstrument(std::uint8_t instrument, std::size_t voiceIndex) const;
   std::size_t noteOnEventCount() const;
   std::size_t noteOffEventCount() const;
   std::size_t activeRenderVoiceCount() const;
@@ -111,11 +134,16 @@ public:
 
 private:
   bool isValidInstrument(std::uint8_t instrument) const;
+  bool isValidSampleSlot(std::uint16_t sampleSlot) const;
   bool hasPluginFactory(const std::string& pluginId) const;
   std::unique_ptr<IInstrumentPlugin> createPluginInstance(const std::string& pluginId) const;
 
   std::array<std::string, kMaxInstrumentSlots> instrumentSlots_;
   std::array<std::unique_ptr<IInstrumentPlugin>, kMaxInstrumentSlots> instrumentPlugins_;
+  std::array<int, kMaxInstrumentSlots> instrumentSampleSlots_;
+  std::array<std::unique_ptr<IInstrumentPlugin>, kMaxSampleSlots> sampleSlotPlugins_;
+  std::array<std::string, kMaxSampleSlots> sampleSlotPaths_;
+  std::array<std::string, kMaxSampleSlots> sampleSlotNames_;
   std::unordered_set<std::string> loadedPluginIds_;
   std::vector<std::string> availablePluginIds_;
   std::unordered_map<std::string, PluginPortInfo> pluginPortInfoMap_;
@@ -124,6 +152,7 @@ private:
   std::size_t loadedPluginCount_;
   std::size_t noteOnEventCount_;
   std::size_t noteOffEventCount_;
+  mutable std::timed_mutex mutex_;
 };
 
 }  // namespace extracker

@@ -23,6 +23,7 @@ endif()
 add_library(extracker_core
   src/audio_engine.cpp
   src/midi_input.cpp
+  src/module.cpp
   src/pattern_editor.cpp
   src/pattern_templates.cpp
   src/record_workflow.cpp
@@ -52,6 +53,7 @@ add_executable(extracker
   src/core_cli.cpp
   src/default_command_bindings.cpp
   src/midi_cli.cpp
+  src/module_cli.cpp
   src/note_cli.cpp
   src/pattern_cli.cpp
   src/pattern_cli_basic.cpp
@@ -59,12 +61,67 @@ add_executable(extracker
   src/pattern_cli_shared.cpp
   src/plugin_cli.cpp
   src/record_cli.cpp
+  src/sample_cli.cpp
 )
 target_link_libraries(extracker PRIVATE extracker_core)
 target_include_directories(extracker PRIVATE include)
 
+# GUI target with JUCE
+include(FetchContent)
+set(FETCHCONTENT_QUIET OFF)
+
+FetchContent_Declare(
+  juce
+  GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+  GIT_TAG 7.0.10
+  GIT_SHALLOW ON
+)
+
+FetchContent_GetProperties(juce)
+if(NOT juce_POPULATED)
+  message(STATUS "Fetching JUCE...")
+  FetchContent_Populate(juce)
+endif()
+
+add_subdirectory(${juce_SOURCE_DIR} ${juce_BINARY_DIR} EXCLUDE_FROM_ALL)
+
+add_executable(extracker_gui
+  src/gui/main_gui.cpp
+  src/gui/app.cpp
+  src/gui/app.h
+  src/gui/main_window.cpp
+  src/gui/main_window.h
+  src/gui/pattern_grid.cpp
+  src/gui/pattern_grid.h
+)
+
+target_link_libraries(extracker_gui PRIVATE
+  juce::juce_core
+  juce::juce_gui_basics
+  juce::juce_audio_basics
+  juce::juce_audio_devices
+  juce::juce_events
+  extracker_core
+  curl
+)
+
+target_include_directories(extracker_gui PRIVATE 
+  include
+  ${juce_SOURCE_DIR}/modules
+  ${CMAKE_CURRENT_BINARY_DIR}/extracker_gui_artefacts/JuceLibraryCode
+)
+
+target_compile_options(extracker_gui PRIVATE
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>
+)
+
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(extracker_module_song_order_test tests/module_song_order_test.cpp)
+  target_include_directories(extracker_module_song_order_test PRIVATE include)
+  target_link_libraries(extracker_module_song_order_test PRIVATE extracker_core)
+  add_test(NAME extracker_module_song_order_test COMMAND extracker_module_song_order_test)
+
   add_executable(extracker_smoke_test tests/smoke_test.cpp)
   target_include_directories(extracker_smoke_test PRIVATE include)
   target_link_libraries(extracker_smoke_test PRIVATE extracker_core)
@@ -74,6 +131,11 @@ if(BUILD_TESTING)
   target_include_directories(extracker_effect_regression_test PRIVATE include)
   target_link_libraries(extracker_effect_regression_test PRIVATE extracker_core)
   add_test(NAME extracker_effect_regression_test COMMAND extracker_effect_regression_test)
+
+  add_executable(extracker_multichannel_note_identity_test tests/multichannel_note_identity_test.cpp)
+  target_include_directories(extracker_multichannel_note_identity_test PRIVATE include)
+  target_link_libraries(extracker_multichannel_note_identity_test PRIVATE extracker_core)
+  add_test(NAME extracker_multichannel_note_identity_test COMMAND extracker_multichannel_note_identity_test)
 
   add_executable(extracker_lv2_port_map_scaffold_test tests/lv2_port_map_scaffold_test.cpp)
   target_include_directories(extracker_lv2_port_map_scaffold_test PRIVATE include)
@@ -125,6 +187,10 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_save_load_default_ext_test tests/cli_save_load_default_ext_test.cpp)
   add_dependencies(extracker_cli_save_load_default_ext_test extracker)
   add_test(NAME extracker_cli_save_load_default_ext_test COMMAND extracker_cli_save_load_default_ext_test)
+
+  add_executable(extracker_cli_song_roundtrip_test tests/extracker_cli_song_roundtrip_test.cpp)
+  add_dependencies(extracker_cli_song_roundtrip_test extracker)
+  add_test(NAME extracker_cli_song_roundtrip_test COMMAND extracker_cli_song_roundtrip_test)
 
   add_executable(extracker_cli_record_jump_test tests/cli_record_jump_test.cpp)
   add_dependencies(extracker_cli_record_jump_test extracker)
@@ -465,6 +531,15 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_plugin_status_test tests/cli_plugin_status_test.cpp)
   add_dependencies(extracker_cli_plugin_status_test extracker)
   add_test(NAME extracker_cli_plugin_status_test COMMAND extracker_cli_plugin_status_test)
+
+  add_executable(extracker_cli_sample_workflow_test tests/cli_sample_workflow_test.cpp)
+  add_dependencies(extracker_cli_sample_workflow_test extracker)
+  add_test(NAME extracker_cli_sample_workflow_test COMMAND extracker_cli_sample_workflow_test)
+
+  add_executable(extracker_sample_slot_priority_collision_test tests/sample_slot_priority_collision_test.cpp)
+  target_include_directories(extracker_sample_slot_priority_collision_test PRIVATE include)
+  target_link_libraries(extracker_sample_slot_priority_collision_test PRIVATE extracker_core)
+  add_test(NAME extracker_sample_slot_priority_collision_test COMMAND extracker_sample_slot_priority_collision_test)
 
   add_executable(extracker_cli_plugin_set_test tests/cli_plugin_set_test.cpp)
   add_dependencies(extracker_cli_plugin_set_test extracker extracker_lv2_test_plugin)

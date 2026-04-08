@@ -22,6 +22,7 @@ struct ClipboardStep {
   bool hasNote = false;
   int note = -1;
   std::uint8_t instrument = 0;
+  std::uint16_t sample = 0xFFFF;  // kInvalidSampleSlot; 0xFFFF means no sample
   std::uint32_t gateTicks = 0;
   std::uint8_t velocity = 100;
   bool retrigger = false;

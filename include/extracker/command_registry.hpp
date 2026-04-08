@@ -13,6 +13,7 @@ using CommandRegistry = std::unordered_map<std::string, CommandHandler>;
 struct CommandBindings {
   CommandHandler help;
   CommandHandler plugin;
+  CommandHandler sample;
   CommandHandler sine;
   CommandHandler note;
   CommandHandler pattern;

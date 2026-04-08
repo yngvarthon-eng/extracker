@@ -6,6 +6,7 @@
 #include <cmath>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -22,19 +23,21 @@
 #include "extracker/default_command_bindings.hpp"
 #include "extracker/midi_cli.hpp"
 #include "extracker/midi_input.hpp"
+#include "extracker/module.hpp"
+#include "extracker/module_cli.hpp"
 #include "extracker/note_cli.hpp"
 #include "extracker/pattern_cli.hpp"
-#include "extracker/pattern_editor.hpp"
 #include "extracker/plugin_cli.hpp"
 #include "extracker/plugin_host.hpp"
 #include "extracker/record_cli.hpp"
+#include "extracker/sample_cli.hpp"
 #include "extracker/record_workflow.hpp"
 #include "extracker/sequencer.hpp"
 #include "extracker/transport.hpp"
 
 int main() {
   extracker::AudioEngine audio;
-  extracker::PatternEditor editor;
+  extracker::Module module;
   extracker::PluginHost plugins;
   extracker::Sequencer sequencer;
   extracker::Transport transport;
@@ -106,7 +109,7 @@ int main() {
   auto chooseRecordRow = [&](int channel) {
     int originalChannel = recordState.channel;
     recordState.channel = channel;
-    int row = extracker::chooseRecordRow(editor, transport, recordState);
+    int row = extracker::chooseRecordRow(module.currentEditor(), transport, recordState);
     recordState.channel = originalChannel;
     return row;
   };
@@ -123,7 +126,7 @@ int main() {
     int originalChannel = recordState.channel;
     recordState.channel = channel;
     extracker::applyRecordWrite(
-        editor,
+        module.currentEditor(),
       recordState,
         row,
         note,
@@ -295,6 +298,8 @@ int main() {
   };
 
   std::cout << "exTracker prototype boot" << '\n';
+    audio.setPluginHost(&plugins);
+
   if (audio.start()) {
     std::cout << "Audio started using backend: " << audio.backendName() << '\n';
   } else {
@@ -307,23 +312,23 @@ int main() {
   if (!plugins.loadPlugin("builtin.square")) {
     std::cout << "Failed to load builtin.square plugin" << '\n';
   }
+  // Assign builtin plugins to default instruments
   if (!plugins.assignInstrument(0, "builtin.sine")) {
     std::cout << "Failed to assign builtin.sine to instrument 0" << '\n';
   }
   if (!plugins.assignInstrument(1, "builtin.square")) {
     std::cout << "Failed to assign builtin.square to instrument 1" << '\n';
   }
-  audio.setPluginHost(&plugins);
-  editor.insertNote(0, 0, 48, 0, 0, 120, true);
-  editor.insertNote(0, 1, 55, 1, 0, 96, false);
-  editor.insertNote(1, 0, 52, 0, 0, 80, false);
-  editor.insertNote(1, 1, 59, 1, 0, 70, true);
-  editor.insertNote(2, 0, 55, 0, 0, 100, false);
-  editor.insertNote(4, 1, 55, 1, 0, 127, true);
+  module.currentEditor().insertNote(0, 0, 48, 0, 0, 120, true);
+  module.currentEditor().insertNote(0, 1, 55, 1, 0, 96, false);
+  module.currentEditor().insertNote(1, 0, 52, 0, 0, 80, false);
+  module.currentEditor().insertNote(1, 1, 59, 1, 0, 70, true);
+  module.currentEditor().insertNote(2, 0, 55, 0, 0, 100, false);
+  module.currentEditor().insertNote(4, 1, 55, 1, 0, 127, true);
   transport.setTempoBpm(125.0);
   transport.setTicksPerBeat(6);
   transport.setTicksPerRow(1);
-  transport.setPatternRows(static_cast<std::uint32_t>(editor.rows()));
+  transport.setPatternRows(static_cast<std::uint32_t>(module.currentEditor().rows()));
   transport.resetTickCount();
 
   auto savePatternToFile = [&](const std::string& path) -> bool {
@@ -332,22 +337,40 @@ int main() {
       return false;
     }
 
-    out << "EXTRACKER_MODULE_V1 " << editor.rows() << " " << editor.channels() << "\n";
-    for (std::size_t row = 0; row < editor.rows(); ++row) {
-      for (std::size_t channel = 0; channel < editor.channels(); ++channel) {
-        int iRow = static_cast<int>(row);
-        int iChannel = static_cast<int>(channel);
-        out << row << " " << channel << " "
-            << (editor.hasNoteAt(iRow, iChannel) ? 1 : 0) << " "
-            << editor.noteAt(iRow, iChannel) << " "
-            << static_cast<int>(editor.instrumentAt(iRow, iChannel)) << " "
-            << editor.gateTicksAt(iRow, iChannel) << " "
-            << static_cast<int>(editor.velocityAt(iRow, iChannel)) << " "
-            << (editor.retriggerAt(iRow, iChannel) ? 1 : 0) << " "
-            << static_cast<int>(editor.effectCommandAt(iRow, iChannel)) << " "
-            << static_cast<int>(editor.effectValueAt(iRow, iChannel)) << "\n";
+    out << "EXTRACKER_SONG_V1 "
+        << module.currentEditor().rows() << " "
+        << module.currentEditor().channels() << " "
+        << module.patternCount() << " "
+        << module.songLength() << " "
+        << module.currentPattern() << " "
+        << module.firstSongEntryForPattern(module.currentPattern()) << "\n";
+
+    for (std::size_t patternIndex = 0; patternIndex < module.patternCount(); ++patternIndex) {
+      const auto& editor = module.patternEditor(patternIndex);
+      out << "PATTERN " << patternIndex << "\n";
+      for (std::size_t row = 0; row < editor.rows(); ++row) {
+        for (std::size_t channel = 0; channel < editor.channels(); ++channel) {
+          int iRow = static_cast<int>(row);
+          int iChannel = static_cast<int>(channel);
+          out << row << " " << channel << " "
+              << (editor.hasNoteAt(iRow, iChannel) ? 1 : 0) << " "
+              << editor.noteAt(iRow, iChannel) << " "
+              << static_cast<int>(editor.instrumentAt(iRow, iChannel)) << " "
+              << editor.sampleAt(iRow, iChannel) << " "
+              << editor.gateTicksAt(iRow, iChannel) << " "
+              << static_cast<int>(editor.velocityAt(iRow, iChannel)) << " "
+              << (editor.retriggerAt(iRow, iChannel) ? 1 : 0) << " "
+              << static_cast<int>(editor.effectCommandAt(iRow, iChannel)) << " "
+              << static_cast<int>(editor.effectValueAt(iRow, iChannel)) << "\n";
+        }
       }
     }
+
+    out << "SONG_ORDER";
+    for (std::size_t songIndex = 0; songIndex < module.songLength(); ++songIndex) {
+      out << " " << module.songEntryAt(songIndex);
+    }
+    out << "\n";
 
     out << "MIDI_MAP";
     for (std::size_t ch = 0; ch < midiChannelMap.size(); ++ch) {
@@ -356,6 +379,13 @@ int main() {
     out << "\n";
 
     out << "MIDI_TRANSPORT " << midiClockTimeout.count() << " " << (midiFallbackLockTempo ? 1 : 0) << "\n";
+    for (std::size_t sampleSlot = 0; sampleSlot < extracker::PluginHost::kMaxSampleSlots; ++sampleSlot) {
+      const std::string samplePath = plugins.samplePathForSlot(static_cast<std::uint16_t>(sampleSlot));
+      if (!samplePath.empty()) {
+        const std::string sampleName = plugins.sampleNameForSlot(static_cast<std::uint16_t>(sampleSlot));
+        out << "SAMPLE_ENTRY " << sampleSlot << " " << std::quoted(sampleName) << " " << std::quoted(samplePath) << "\n";
+      }
+    }
     extracker::writeRecordState(out, recordState);
 
     return true;
@@ -368,19 +398,184 @@ int main() {
     }
 
     std::string magic;
+    const std::filesystem::path modulePath(path);
+    const std::filesystem::path moduleDirectory = modulePath.has_parent_path() ? modulePath.parent_path() : std::filesystem::current_path();
     std::size_t fileRows = 0;
     std::size_t fileChannels = 0;
     in >> magic >> fileRows >> fileChannels;
-    if (!in || (magic != "EXTRACKER_PATTERN_V1" && magic != "EXTRACKER_MODULE_V1") ||
-        fileRows != editor.rows() || fileChannels != editor.channels()) {
+    if (!in || fileRows != module.currentEditor().rows() || fileChannels != module.currentEditor().channels()) {
       return false;
     }
 
-    for (std::size_t row = 0; row < editor.rows(); ++row) {
-      for (std::size_t channel = 0; channel < editor.channels(); ++channel) {
-        editor.clearStep(static_cast<int>(row), static_cast<int>(channel));
-      }
+    const bool isSongV1 = (magic == "EXTRACKER_SONG_V1");
+    const bool isLegacyV1 = (magic == "EXTRACKER_PATTERN_V1" || magic == "EXTRACKER_MODULE_V1");
+    const bool isLegacyV2 = (magic == "EXTRACKER_PATTERN_V2" || magic == "EXTRACKER_MODULE_V2");
+    if (!isSongV1 && !isLegacyV1 && !isLegacyV2) {
+      return false;
     }
+
+    for (std::size_t instrument = 0; instrument < extracker::PluginHost::kMaxInstrumentSlots; ++instrument) {
+      plugins.clearSampleFromInstrument(static_cast<std::uint8_t>(instrument));
+    }
+    for (std::size_t sampleSlot = 0; sampleSlot < extracker::PluginHost::kMaxSampleSlots; ++sampleSlot) {
+      plugins.clearSampleSlot(static_cast<std::uint16_t>(sampleSlot));
+    }
+
+    if (isSongV1) {
+      std::size_t filePatternCount = 0;
+      std::size_t fileSongLength = 0;
+      std::size_t fileCurrentPattern = 0;
+      std::size_t fileCurrentSongPosition = 0;
+      in >> filePatternCount >> fileSongLength >> fileCurrentPattern >> fileCurrentSongPosition;
+      if (!in || filePatternCount == 0 || fileSongLength == 0) {
+        return false;
+      }
+
+      module.reset(fileRows, fileChannels, filePatternCount);
+      for (std::size_t patternIndex = 0; patternIndex < filePatternCount; ++patternIndex) {
+        std::string patternToken;
+        std::size_t storedPatternIndex = 0;
+        in >> patternToken >> storedPatternIndex;
+        if (!in || patternToken != "PATTERN" || storedPatternIndex != patternIndex) {
+          return false;
+        }
+
+        auto& editor = module.patternEditor(patternIndex);
+        for (std::size_t row = 0; row < editor.rows(); ++row) {
+          for (std::size_t channel = 0; channel < editor.channels(); ++channel) {
+            int parsedRow = 0;
+            int parsedChannel = 0;
+            int hasNote = 0;
+            int note = -1;
+            int instrument = 0;
+            int sample = 0xFFFF;
+            int gateTicks = 0;
+            int velocity = 100;
+            int retrigger = 0;
+            int effectCommand = 0;
+            int effectValue = 0;
+
+            in >> parsedRow >> parsedChannel >> hasNote >> note >> instrument >> sample >> gateTicks >> velocity >> retrigger >> effectCommand >> effectValue;
+            if (!in) {
+              return false;
+            }
+
+            if (hasNote != 0) {
+              editor.insertNote(
+                  parsedRow,
+                  parsedChannel,
+                  note,
+                  static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
+                  static_cast<std::uint32_t>(std::max(gateTicks, 0)),
+                  static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
+                  retrigger != 0,
+                  static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+                  static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+              if (sample != 0xFFFF) {
+                editor.setSample(parsedRow, parsedChannel, static_cast<std::uint16_t>(std::clamp(sample, 0, 65535)));
+              }
+            } else if (effectCommand != 0 || effectValue != 0) {
+              editor.setEffect(
+                  parsedRow,
+                  parsedChannel,
+                  static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+                  static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+            }
+          }
+        }
+      }
+
+      std::vector<std::size_t> songOrder;
+      std::string tailToken;
+      while (in >> tailToken) {
+        if (tailToken == "SONG_ORDER") {
+          songOrder.clear();
+          for (std::size_t i = 0; i < fileSongLength; ++i) {
+            std::size_t entry = 0;
+            in >> entry;
+            if (!in) {
+              return false;
+            }
+            songOrder.push_back(entry);
+          }
+        } else if (tailToken == "MIDI_MAP") {
+          for (std::size_t ch = 0; ch < midiChannelMap.size(); ++ch) {
+            int mapped = -1;
+            if (!(in >> mapped)) {
+              return false;
+            }
+            midiChannelMap[ch] = mapped;
+          }
+        } else if (tailToken == "MIDI_TRANSPORT") {
+          long long timeoutMs = midiClockTimeout.count();
+          int lockTempo = midiFallbackLockTempo ? 1 : 0;
+          if (!(in >> timeoutMs >> lockTempo)) {
+            return false;
+          }
+          timeoutMs = std::clamp<long long>(timeoutMs, 100, 10000);
+          midiClockTimeout = std::chrono::milliseconds(timeoutMs);
+          midiFallbackLockTempo = (lockTempo != 0);
+        } else if (tailToken == "SAMPLE_BANK") {
+          int sampleSlot = -1;
+          std::string samplePath;
+          if (!(in >> sampleSlot >> std::quoted(samplePath))) {
+            return false;
+          }
+          if (sampleSlot < 0 || sampleSlot >= static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
+            return false;
+          }
+          std::filesystem::path resolvedSamplePath(samplePath);
+          if (!resolvedSamplePath.is_absolute()) {
+            resolvedSamplePath = moduleDirectory / resolvedSamplePath;
+          }
+          if (!plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+            return false;
+          }
+          plugins.setSampleNameForSlot(
+              static_cast<std::uint16_t>(sampleSlot),
+              std::filesystem::path(samplePath).stem().string());
+        } else if (tailToken == "SAMPLE_ENTRY") {
+          int sampleSlot = -1;
+          std::string sampleName;
+          std::string samplePath;
+          if (!(in >> sampleSlot >> std::quoted(sampleName) >> std::quoted(samplePath))) {
+            return false;
+          }
+          if (sampleSlot < 0 || sampleSlot >= static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
+            return false;
+          }
+          std::filesystem::path resolvedSamplePath(samplePath);
+          if (!resolvedSamplePath.is_absolute()) {
+            resolvedSamplePath = moduleDirectory / resolvedSamplePath;
+          }
+          if (!plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+            return false;
+          }
+          plugins.setSampleNameForSlot(static_cast<std::uint16_t>(sampleSlot), sampleName);
+        } else {
+          bool handledRecordToken = false;
+          if (!extracker::applyRecordFileToken(
+                  in,
+                  tailToken,
+                  module.currentEditor().rows(),
+                  recordState,
+                  handledRecordToken)) {
+            return false;
+          }
+        }
+      }
+
+      if (!songOrder.empty()) {
+        module.setSongOrder(songOrder);
+      }
+      module.switchToPattern(std::min(fileCurrentPattern, module.patternCount() - 1));
+      (void)fileCurrentSongPosition;
+      return true;
+    }
+
+    module.reset(fileRows, fileChannels, 1);
+    auto& editor = module.currentEditor();
+    const bool isV2Format = isLegacyV2;
 
     for (std::size_t i = 0; i < editor.rows() * editor.channels(); ++i) {
       int row = 0;
@@ -388,13 +583,18 @@ int main() {
       int hasNote = 0;
       int note = -1;
       int instrument = 0;
+      int sample = 0xFFFF;
       int gateTicks = 0;
       int velocity = 100;
       int retrigger = 0;
       int effectCommand = 0;
       int effectValue = 0;
 
-      in >> row >> channel >> hasNote >> note >> instrument >> gateTicks >> velocity >> retrigger >> effectCommand >> effectValue;
+      if (isV2Format) {
+        in >> row >> channel >> hasNote >> note >> instrument >> sample >> gateTicks >> velocity >> retrigger >> effectCommand >> effectValue;
+      } else {
+        in >> row >> channel >> hasNote >> note >> instrument >> gateTicks >> velocity >> retrigger >> effectCommand >> effectValue;
+      }
       if (!in) {
         return false;
       }
@@ -410,6 +610,9 @@ int main() {
             retrigger != 0,
             static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
             static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+        if (isV2Format && sample != 0xFFFF) {
+          editor.setSample(row, channel, static_cast<std::uint16_t>(std::clamp(sample, 0, 65535)));
+        }
       } else if (effectCommand != 0 || effectValue != 0) {
         editor.setEffect(
             row,
@@ -438,6 +641,45 @@ int main() {
         timeoutMs = std::clamp<long long>(timeoutMs, 100, 10000);
         midiClockTimeout = std::chrono::milliseconds(timeoutMs);
         midiFallbackLockTempo = (lockTempo != 0);
+      } else if (tailToken == "SAMPLE_BANK") {
+        // Backward-compatible: old format had no name; use filename stem as name
+        int sampleSlot = -1;
+        std::string samplePath;
+        if (!(in >> sampleSlot >> std::quoted(samplePath))) {
+          return false;
+        }
+        if (sampleSlot < 0 || sampleSlot >= static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
+          return false;
+        }
+        std::filesystem::path resolvedSamplePath(samplePath);
+        if (!resolvedSamplePath.is_absolute()) {
+          resolvedSamplePath = moduleDirectory / resolvedSamplePath;
+        }
+        if (!plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+          return false;
+        }
+        // Derive a default name from the filename stem
+        plugins.setSampleNameForSlot(
+            static_cast<std::uint16_t>(sampleSlot),
+            std::filesystem::path(samplePath).stem().string());
+      } else if (tailToken == "SAMPLE_ENTRY") {
+        int sampleSlot = -1;
+        std::string sampleName;
+        std::string samplePath;
+        if (!(in >> sampleSlot >> std::quoted(sampleName) >> std::quoted(samplePath))) {
+          return false;
+        }
+        if (sampleSlot < 0 || sampleSlot >= static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
+          return false;
+        }
+        std::filesystem::path resolvedSamplePath(samplePath);
+        if (!resolvedSamplePath.is_absolute()) {
+          resolvedSamplePath = moduleDirectory / resolvedSamplePath;
+        }
+        if (!plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+          return false;
+        }
+        plugins.setSampleNameForSlot(static_cast<std::uint16_t>(sampleSlot), sampleName);
       } else {
         bool handledRecordToken = false;
         if (!extracker::applyRecordFileToken(
@@ -532,7 +774,7 @@ int main() {
         }
 
         if (!skipDispatchThisTick) {
-          sequencer.update(editor, transport, audio, plugins);
+          sequencer.update(module.currentEditor(), transport, audio, plugins);
         }
 
         if (playRangeActive) {
@@ -552,7 +794,7 @@ int main() {
   });
 
   std::cout << "Commands: help, play, stop, tempo <bpm>, loop <on|off|range>, status, reset, save <file>, load <file>, quit" << '\n';
-  std::cout << "Plugin commands: plugin list, plugin load <id>, plugin assign <instrument> <id>, sine <instrument>" << '\n';
+  std::cout << "Plugin commands: plugin list, plugin load <id>, plugin assign <instrument> <id>, sample <load|unload|rename|play|stop|list|status> ..., sine <instrument>" << '\n';
   std::cout << "Pattern commands: note set <row> <ch> <midi> <instr> [vel] [fx] [fxval], note set dry <row> <ch> <midi> <instr> [vel] [fx] [fxval], note clear <row> <ch>, note clear dry <row> <ch>, note vel <row> <ch> <vel>, note vel dry <row> <ch> <vel>, note gate <row> <ch> <ticks>, note gate dry <row> <ch> <ticks>, note fx <row> <ch> <fx> <fxval>, note fx dry <row> <ch> <fx> <fxval>, pattern print [from] [to], pattern display [from] [to], pattern watch [update_interval_ms], pattern play [from] [to] [step <n>], pattern template <blank|house|electro>, pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>] [chance <p>], pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>] [chance <p>], pattern copy <from> <to> [chFrom] [chTo] [step <n>], pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>], pattern humanize [dry [preview [verbose]]] <velRange> <gateRangePercent> <seed> [from] [to] [ch] [step <n>], pattern randomize [dry [preview [verbose]]] <probabilityPercent> <seed> [from] [to] [ch] [step <n>], pattern scale-duration [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern invert-notes [dry [preview [verbose]]] [centerNote] [from] [to] [ch] [step <n>], pattern filter-notes [dry [preview [verbose]]] <minNote> <maxNote> [minVel] [maxVel] [from] [to] [ch] [delete], pattern undo, pattern redo" << '\n';
   std::cout << "Record commands: record on [channel], record off, record channel <index|status>, record cursor <row|+delta|-delta|start|end|next|prev|status>, record note <midi> [instr] [vel] [fx] [fxval], record note <midi> vel <vel> [fx] [fxval], record note <midi> fx <fx> <fxval>, record note <midi> instr <i> [vel <v>] [fx <f> <fv>], record note dry <midi> ..., record quantize <on|off|status>, record overdub <on|off|status>, record jump <ticks|ratio|status>, record undo, record redo" << '\n';
   std::cout << "MIDI commands: midi on, midi off, midi status, midi quick [all|compact], midi thru <on|off>, midi instrument <index>, midi learn <on|off|status>, midi map <ch> <instr|clear>, midi map <status|clear all>, midi transport <on|off|toggle|status|timeout|lock|reset>, midi clock <help|quick|sources|autoconnect|diagnose>" << '\n';
@@ -561,7 +803,7 @@ int main() {
   extracker::CommandRegistry commandRegistry;
 
   extracker::CoreCommandContext coreContext{transport,
-                                            editor,
+                                            module.currentEditor(),
                                             stateMutex,
                                             loopEnabled,
                                             playRangeFrom,
@@ -595,7 +837,7 @@ int main() {
                                             savePatternToFileFn,
                                             loadPatternFromFileFn};
 
-  extracker::RecordCommandContext recordContext{editor,
+  extracker::RecordCommandContext recordContext{module.currentEditor(),
                                                 transport,
                                                 stateMutex,
                                                 recordState,
@@ -634,7 +876,7 @@ int main() {
                                    midiEndpointHintFn,
                                    executeSystemCommandFn};
 
-  extracker::PatternCommandContext patternContext{editor,
+  extracker::PatternCommandContext patternContext{module.currentEditor(),
                                                    stateMutex,
                                                    transport,
                                                    sequencer,
@@ -657,10 +899,13 @@ int main() {
             extracker::handlePluginCommand(plugins, input);
           },
           [&](std::istringstream& input) {
+            extracker::handleSampleCommand(plugins, input);
+          },
+          [&](std::istringstream& input) {
             extracker::handleSineCommand(plugins, input);
           },
           [&](std::istringstream& input) {
-            extracker::handleNoteCommand(editor, stateMutex, input);
+            extracker::handleNoteCommand(module.currentEditor(), stateMutex, input);
           },
           [&](std::istringstream& input) {
             extracker::handlePatternCommand(patternContext, input);
@@ -684,6 +929,27 @@ int main() {
 
     if (command == "quit" || command == "exit") {
       break;
+    } else if (command == "pattern") {
+      // Handle both pattern management and pattern commands
+      std::vector<std::string> tokens;
+      std::string token;
+      while (input >> token) {
+        tokens.push_back(token);
+      }
+      
+      // Check if this is a module command (list, switch, insert, remove)
+      if (!tokens.empty() && (tokens[0] == "list" || tokens[0] == "status" || 
+                               tokens[0] == "switch" || tokens[0] == "insert" || 
+                               tokens[0] == "remove")) {
+        extracker::ModuleCommandContext moduleContext{module};
+        extracker::handleModuleCommand(command, tokens, moduleContext);
+      } else {
+        // Regular pattern commands
+        std::istringstream patternInput(line);
+        std::string dummy;
+        patternInput >> dummy;  // consume "pattern"
+        extracker::handlePatternCommand(patternContext, patternInput);
+      }
     } else if (!command.empty()) {
       auto commandIt = commandRegistry.find(command);
       if (commandIt != commandRegistry.end()) {

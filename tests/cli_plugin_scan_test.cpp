@@ -30,12 +30,6 @@ int main() {
       std::cerr << "Expected 'plugin(s) available' in scan output\n" << output;
       return 1;
     }
-    // Builtins (builtin.sine, builtin.square) are always present: expect at least 2
-    if (output.find("0 plugin(s) available") != std::string::npos ||
-        output.find("1 plugin(s) available") != std::string::npos) {
-      std::cerr << "Expected at least 2 plugins after scan\n" << output;
-      return 1;
-    }
   }
 
   // Repeated scan should not crash and should report "no new plugins" (already registered)

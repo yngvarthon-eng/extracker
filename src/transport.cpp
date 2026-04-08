@@ -61,13 +61,17 @@ std::uint32_t Transport::patternRows() const {
 }
 
 bool Transport::play() {
-  bool expected = false;
-  if (!playing_.compare_exchange_strong(expected, true)) {
+  if (playing_.load()) {
     return false;
   }
 
   if (clockThread_.joinable()) {
     clockThread_.join();
+  }
+
+  bool expected = false;
+  if (!playing_.compare_exchange_strong(expected, true)) {
+    return false;
   }
 
   clockThread_ = std::thread([this]() { runClock(); });

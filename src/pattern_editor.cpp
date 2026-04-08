@@ -59,6 +59,15 @@ void PatternEditor::setInstrument(int row, int channel, std::uint8_t instrument)
   step.instrument = instrument;
 }
 
+void PatternEditor::setSample(int row, int channel, std::uint16_t sample) {
+  if (!isValidCell(row, channel)) {
+    return;
+  }
+
+  Step& step = cell(row, channel);
+  step.sample = sample;
+}
+
 void PatternEditor::setGateTicks(int row, int channel, std::uint32_t gateTicks) {
   if (!isValidCell(row, channel)) {
     return;
@@ -105,6 +114,7 @@ void PatternEditor::clearStep(int row, int channel) {
   step.hasNote = false;
   step.note = -1;
   step.instrument = 0;
+  step.sample = 0xFFFF;
   step.gateTicks = 0;
   step.velocity = kDefaultVelocity;
   step.retrigger = false;
@@ -136,6 +146,15 @@ std::uint8_t PatternEditor::instrumentAt(int row, int channel) const {
 
   const Step& step = cell(row, channel);
   return step.hasNote ? step.instrument : 0;
+}
+
+std::uint16_t PatternEditor::sampleAt(int row, int channel) const {
+  if (!isValidCell(row, channel)) {
+    return 0xFFFF;
+  }
+
+  const Step& step = cell(row, channel);
+  return step.hasNote ? step.sample : 0xFFFF;
 }
 
 std::uint32_t PatternEditor::gateTicksAt(int row, int channel) const {
@@ -189,6 +208,42 @@ std::size_t PatternEditor::rows() const {
 
 std::size_t PatternEditor::channels() const {
   return channels_;
+}
+
+void PatternEditor::resizeRows(std::size_t newRows) {
+  std::size_t targetRows = std::max<std::size_t>(newRows, 1);
+  if (targetRows == rows_) {
+    return;
+  }
+
+  std::vector<Step> resized(targetRows * channels_);
+  std::size_t rowsToCopy = std::min(rows_, targetRows);
+  for (std::size_t row = 0; row < rowsToCopy; ++row) {
+    for (std::size_t channel = 0; channel < channels_; ++channel) {
+      resized[row * channels_ + channel] = steps_[row * channels_ + channel];
+    }
+  }
+
+  steps_.swap(resized);
+  rows_ = targetRows;
+}
+
+void PatternEditor::resizeChannels(std::size_t newChannels) {
+  std::size_t targetChannels = std::max<std::size_t>(newChannels, 1);
+  if (targetChannels == channels_) {
+    return;
+  }
+
+  std::vector<Step> resized(rows_ * targetChannels);
+  std::size_t channelsToCopy = std::min(channels_, targetChannels);
+  for (std::size_t row = 0; row < rows_; ++row) {
+    for (std::size_t channel = 0; channel < channelsToCopy; ++channel) {
+      resized[row * targetChannels + channel] = steps_[row * channels_ + channel];
+    }
+  }
+
+  steps_.swap(resized);
+  channels_ = targetChannels;
 }
 
 bool PatternEditor::isValidCell(int row, int channel) const {

@@ -16,6 +16,7 @@ void assignInstrumentAndPatternBindings(
     CommandBindings& bindings,
     const DefaultCommandBindingCallbacks& callbacks) {
   bindings.plugin = callbacks.onPlugin;
+  bindings.sample = callbacks.onSample;
   bindings.sine = callbacks.onSine;
   bindings.note = callbacks.onNote;
   bindings.pattern = callbacks.onPattern;
