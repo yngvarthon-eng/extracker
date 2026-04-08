@@ -12,6 +12,8 @@ bool handleModuleCommand(const std::string& command,
                          const std::vector<std::string>& tokens,
                          ModuleCommandContext context) {
   auto& module = context.module;
+  auto* songModeEnabled = context.songModeEnabled;
+  auto* songPlaybackPosition = context.songPlaybackPosition;
 
   if (command == "pattern") {
     if (tokens.empty()) {
@@ -92,10 +94,78 @@ bool handleModuleCommand(const std::string& command,
         std::cout << " " << (module.songEntryAt(i) + 1);
       }
       std::cout << '\n';
+      if (songModeEnabled != nullptr && songPlaybackPosition != nullptr) {
+        std::size_t safePos = std::min(songPlaybackPosition->load(), module.songLength() > 0 ? module.songLength() - 1 : 0);
+        std::cout << "Playback mode: " << (songModeEnabled->load() ? "song" : "pattern") << '\n';
+        if (module.songLength() > 0) {
+          std::cout << "Song position: " << (safePos + 1)
+                    << " (pattern " << (module.songEntryAt(safePos) + 1) << ")" << '\n';
+        }
+      }
       return true;
     }
 
     const std::string& subcommand = tokens[0];
+    if (subcommand == "play") {
+      if (tokens.size() < 2) {
+        std::cout << "song play <pattern|song|status>: set or show playback mode" << '\n';
+        return true;
+      }
+      if (songModeEnabled == nullptr || songPlaybackPosition == nullptr) {
+        std::cout << "Song playback mode is unavailable" << '\n';
+        return true;
+      }
+      const std::string& mode = tokens[1];
+      if (mode == "status") {
+        std::size_t safePos = std::min(songPlaybackPosition->load(), module.songLength() > 0 ? module.songLength() - 1 : 0);
+        std::cout << "Playback mode: " << (songModeEnabled->load() ? "song" : "pattern") << '\n';
+        if (module.songLength() > 0) {
+          std::cout << "Song position: " << (safePos + 1)
+                    << " (pattern " << (module.songEntryAt(safePos) + 1) << ")" << '\n';
+        }
+      } else if (mode == "song") {
+        songModeEnabled->store(true);
+        std::size_t pos = module.firstSongEntryForPattern(module.currentPattern());
+        if (module.songLength() > 0) {
+          pos = std::min(pos, module.songLength() - 1);
+        } else {
+          pos = 0;
+        }
+        songPlaybackPosition->store(pos);
+        std::cout << "Playback mode set to song" << '\n';
+      } else if (mode == "pattern") {
+        songModeEnabled->store(false);
+        std::cout << "Playback mode set to pattern" << '\n';
+      } else {
+        std::cout << "Mode must be 'pattern', 'song', or 'status'" << '\n';
+      }
+      return true;
+    }
+
+    if (subcommand == "goto") {
+      if (tokens.size() < 2) {
+        std::cout << "song goto <entry>: jump to song entry (1-indexed)" << '\n';
+        return true;
+      }
+      int entryIndex = 0;
+      if (!extracker::cli::parseStrictIntToken(tokens[1], entryIndex) ||
+          entryIndex <= 0 ||
+          entryIndex > static_cast<int>(module.songLength())) {
+        std::cout << "Invalid song entry index" << '\n';
+        return true;
+      }
+      std::size_t targetPos = static_cast<std::size_t>(entryIndex - 1);
+      std::size_t targetPattern = module.songEntryAt(targetPos);
+      if (module.switchToPattern(targetPattern)) {
+        if (songPlaybackPosition != nullptr) {
+          songPlaybackPosition->store(targetPos);
+        }
+        std::cout << "Jumped to song entry " << entryIndex
+                  << " (pattern " << (targetPattern + 1) << ")" << '\n';
+      }
+      return true;
+    }
+
     if (subcommand == "set") {
       if (tokens.size() < 3) {
         std::cout << "song set <entry> <pattern>: set song entry (1-indexed)" << '\n';
