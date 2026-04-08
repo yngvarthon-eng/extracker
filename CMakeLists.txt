@@ -260,6 +260,14 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_loop_range_status_test extracker)
   add_test(NAME extracker_cli_loop_range_status_test COMMAND extracker_cli_loop_range_status_test)
 
+  add_executable(extracker_cli_song_order_basic_test tests/cli_song_order_basic_test.cpp)
+  add_dependencies(extracker_cli_song_order_basic_test extracker)
+  add_test(NAME extracker_cli_song_order_basic_test COMMAND extracker_cli_song_order_basic_test)
+
+  add_executable(extracker_cli_song_order_pattern_switch_test tests/cli_song_order_pattern_switch_test.cpp)
+  add_dependencies(extracker_cli_song_order_pattern_switch_test extracker)
+  add_test(NAME extracker_cli_song_order_pattern_switch_test COMMAND extracker_cli_song_order_pattern_switch_test)
+
   add_executable(extracker_cli_pattern_numeric_parse_test tests/cli_pattern_numeric_parse_test.cpp)
   add_dependencies(extracker_cli_pattern_numeric_parse_test extracker)
   add_test(NAME extracker_cli_pattern_numeric_parse_test COMMAND extracker_cli_pattern_numeric_parse_test)

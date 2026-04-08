@@ -796,6 +796,7 @@ int main() {
   std::cout << "Commands: help, play, stop, tempo <bpm>, loop <on|off|range>, status, reset, save <file>, load <file>, quit" << '\n';
   std::cout << "Plugin commands: plugin list, plugin load <id>, plugin assign <instrument> <id>, sample <load|unload|rename|play|stop|list|status> ..., sine <instrument>" << '\n';
   std::cout << "Pattern commands: note set <row> <ch> <midi> <instr> [vel] [fx] [fxval], note set dry <row> <ch> <midi> <instr> [vel] [fx] [fxval], note clear <row> <ch>, note clear dry <row> <ch>, note vel <row> <ch> <vel>, note vel dry <row> <ch> <vel>, note gate <row> <ch> <ticks>, note gate dry <row> <ch> <ticks>, note fx <row> <ch> <fx> <fxval>, note fx dry <row> <ch> <fx> <fxval>, pattern print [from] [to], pattern display [from] [to], pattern watch [update_interval_ms], pattern play [from] [to] [step <n>], pattern template <blank|house|electro>, pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>] [chance <p>], pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>] [chance <p>], pattern copy <from> <to> [chFrom] [chTo] [step <n>], pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>], pattern humanize [dry [preview [verbose]]] <velRange> <gateRangePercent> <seed> [from] [to] [ch] [step <n>], pattern randomize [dry [preview [verbose]]] <probabilityPercent> <seed> [from] [to] [ch] [step <n>], pattern scale-duration [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern invert-notes [dry [preview [verbose]]] [centerNote] [from] [to] [ch] [step <n>], pattern filter-notes [dry [preview [verbose]]] <minNote> <maxNote> [minVel] [maxVel] [from] [to] [ch] [delete], pattern undo, pattern redo" << '\n';
+  std::cout << "Song commands: song status, song list, song set <entry> <pattern>, song insert <entry> <pattern>, song append <pattern>, song remove <entry>, song move <entry> <up|down>" << '\n';
   std::cout << "Record commands: record on [channel], record off, record channel <index|status>, record cursor <row|+delta|-delta|start|end|next|prev|status>, record note <midi> [instr] [vel] [fx] [fxval], record note <midi> vel <vel> [fx] [fxval], record note <midi> fx <fx> <fxval>, record note <midi> instr <i> [vel <v>] [fx <f> <fv>], record note dry <midi> ..., record quantize <on|off|status>, record overdub <on|off|status>, record jump <ticks|ratio|status>, record undo, record redo" << '\n';
   std::cout << "MIDI commands: midi on, midi off, midi status, midi quick [all|compact], midi thru <on|off>, midi instrument <index>, midi learn <on|off|status>, midi map <ch> <instr|clear>, midi map <status|clear all>, midi transport <on|off|toggle|status|timeout|lock|reset>, midi clock <help|quick|sources|autoconnect|diagnose>" << '\n';
   std::cout << "exTracker> " << std::flush;
@@ -929,26 +930,31 @@ int main() {
 
     if (command == "quit" || command == "exit") {
       break;
-    } else if (command == "pattern") {
+    } else if (command == "pattern" || command == "song") {
       // Handle both pattern management and pattern commands
       std::vector<std::string> tokens;
       std::string token;
       while (input >> token) {
         tokens.push_back(token);
       }
-      
-      // Check if this is a module command (list, switch, insert, remove)
-      if (!tokens.empty() && (tokens[0] == "list" || tokens[0] == "status" || 
-                               tokens[0] == "switch" || tokens[0] == "insert" || 
-                               tokens[0] == "remove")) {
+
+      if (command == "song") {
         extracker::ModuleCommandContext moduleContext{module};
         extracker::handleModuleCommand(command, tokens, moduleContext);
       } else {
-        // Regular pattern commands
-        std::istringstream patternInput(line);
-        std::string dummy;
-        patternInput >> dummy;  // consume "pattern"
-        extracker::handlePatternCommand(patternContext, patternInput);
+        // Check if this is a module pattern-management command (list, switch, insert, remove)
+        if (!tokens.empty() && (tokens[0] == "list" || tokens[0] == "status" ||
+                                tokens[0] == "switch" || tokens[0] == "insert" ||
+                                tokens[0] == "remove")) {
+          extracker::ModuleCommandContext moduleContext{module};
+          extracker::handleModuleCommand(command, tokens, moduleContext);
+        } else {
+          // Regular pattern commands
+          std::istringstream patternInput(line);
+          std::string dummy;
+          patternInput >> dummy;  // consume "pattern"
+          extracker::handlePatternCommand(patternContext, patternInput);
+        }
       }
     } else if (!command.empty()) {
       auto commandIt = commandRegistry.find(command);
