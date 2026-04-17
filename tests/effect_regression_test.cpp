@@ -574,5 +574,65 @@ int main() {
     }
   }
 
+  {
+    extracker::PatternEditor pattern(8, 1);
+    pattern.setEffect(0, 0, 0x0E, 0xF2);                    // EF2: carry retrigger memory (every 2 ticks)
+    pattern.insertNote(1, 0, 60, 0, 0, 120, true, 0x0E, 0xD3);  // ED3: delay start until tick 3
+
+    extracker::Transport transport;
+    transport.setTicksPerRow(8);
+    transport.setPatternRows(8);
+    transport.resetTickCount();
+
+    extracker::AudioEngine audio;
+    extracker::PluginHost plugins;
+    plugins.loadPlugin("builtin.sine");
+    plugins.assignInstrument(0, "builtin.sine");
+    audio.setPluginHost(&plugins);
+    extracker::Sequencer sequencer;
+
+    // Row 0 applies EF2 memory.
+    sequencer.update(pattern, transport, audio, plugins);
+
+    // Advance deterministically to row 1 tick 0.
+    for (int i = 0; i < 16 && transport.currentRow() != 1; ++i) {
+      transport.advanceExternalTick();
+      sequencer.update(pattern, transport, audio, plugins);
+    }
+
+    if (transport.currentRow() != 1) {
+      std::cerr << "ED/EF timing regression did not reach delayed-note row" << '\n';
+      return 1;
+    }
+
+    sequencer.update(pattern, transport, audio, plugins);  // row 1 dispatch at tick 0
+    const std::size_t noteOnAtTick0 = plugins.noteOnEventCount();
+
+    transport.advanceExternalTick();
+    sequencer.update(pattern, transport, audio, plugins);  // tick 1
+    transport.advanceExternalTick();
+    sequencer.update(pattern, transport, audio, plugins);  // tick 2
+
+    if (plugins.noteOnEventCount() != noteOnAtTick0) {
+      std::cerr << "ED3 triggered note-on activity before delayed start tick" << '\n';
+      return 1;
+    }
+
+    transport.advanceExternalTick();
+    sequencer.update(pattern, transport, audio, plugins);  // tick 3 delayed start
+    const std::size_t noteOnAfterDelayedStart = plugins.noteOnEventCount();
+    if (noteOnAfterDelayedStart <= noteOnAtTick0) {
+      std::cerr << "ED3 delayed start did not trigger note-on on scheduled tick" << '\n';
+      return 1;
+    }
+
+    transport.advanceExternalTick();
+    sequencer.update(pattern, transport, audio, plugins);  // tick 4 retrigger from EF2 memory
+    if (plugins.noteOnEventCount() <= noteOnAfterDelayedStart) {
+      std::cerr << "EF2 memory did not retrigger delayed note after ED3 start" << '\n';
+      return 1;
+    }
+  }
+
   return 0;
 }
