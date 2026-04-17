@@ -416,6 +416,58 @@ int main() {
   }
 
   {
+    extracker::PatternEditor pattern(8, 2);
+    pattern.setEffect(0, 1, 0x0E, 0x60);  // ch1: loop start at row 0
+    pattern.setEffect(1, 0, 0x0B, 6);     // ch0: position jump to row 6
+    pattern.setEffect(1, 1, 0x0E, 0x61);  // ch1: loop jump to row 0 (processed later, should win)
+
+    extracker::Transport transport;
+    transport.setTicksPerRow(1);
+    transport.setPatternRows(8);
+    transport.resetTickCount();
+
+    extracker::AudioEngine audio;
+    extracker::PluginHost plugins;
+    extracker::Sequencer sequencer;
+
+    sequencer.update(pattern, transport, audio, plugins);  // row 0
+    transport.advanceExternalTick();
+    sequencer.update(pattern, transport, audio, plugins);  // row 1 conflict: 0B vs E61
+
+    if (transport.currentRow() != 0) {
+      std::cerr << "E6 vs 0B precedence regression mismatch (expected loop jump target row 0, got "
+                << transport.currentRow() << ")" << '\n';
+      return 1;
+    }
+  }
+
+  {
+    extracker::PatternEditor pattern(8, 2);
+    pattern.setEffect(0, 0, 0x0E, 0x60);  // ch0: loop start at row 0
+    pattern.setEffect(1, 0, 0x0E, 0x61);  // ch0: loop jump to row 0
+    pattern.setEffect(1, 1, 0x0D, 5);     // ch1: pattern-break style jump to row 5 (processed later, should win)
+
+    extracker::Transport transport;
+    transport.setTicksPerRow(1);
+    transport.setPatternRows(8);
+    transport.resetTickCount();
+
+    extracker::AudioEngine audio;
+    extracker::PluginHost plugins;
+    extracker::Sequencer sequencer;
+
+    sequencer.update(pattern, transport, audio, plugins);  // row 0
+    transport.advanceExternalTick();
+    sequencer.update(pattern, transport, audio, plugins);  // row 1 conflict: E61 vs 0D
+
+    if (transport.currentRow() != 5) {
+      std::cerr << "E6 vs 0D precedence regression mismatch (expected break target row 5, got "
+                << transport.currentRow() << ")" << '\n';
+      return 1;
+    }
+  }
+
+  {
     extracker::PatternEditor pattern(8, 1);
     pattern.setEffect(0, 0, 0x0E, 0xE2);  // EE2: delay next row progression by 2 rows
 
