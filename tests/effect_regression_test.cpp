@@ -680,5 +680,71 @@ int main() {
     }
   }
 
+  {
+    extracker::PatternEditor pattern(8, 1);
+    pattern.setEffect(0, 0, 0x0E, 0xF2);               // row 0: EF2 (carry retrigger every 2 ticks)
+    pattern.insertNote(1, 0, 60, 0, 0, 120, false);    // row 1: inherits EF2 retrigger memory
+    pattern.setEffect(2, 0, 0x0E, 0xF0);               // row 2: EF0 clears retrigger memory
+    pattern.insertNote(3, 0, 62, 0, 0, 120, false);    // row 3: should no longer inherit retrigger
+
+    extracker::Transport transport;
+    transport.setTicksPerRow(8);
+    transport.setPatternRows(8);
+    transport.resetTickCount();
+
+    extracker::AudioEngine audio;
+    extracker::PluginHost plugins;
+    plugins.loadPlugin("builtin.sine");
+    plugins.assignInstrument(0, "builtin.sine");
+    audio.setPluginHost(&plugins);
+    extracker::Sequencer sequencer;
+
+    sequencer.update(pattern, transport, audio, plugins);  // row 0 EF2
+
+    // Reach row 1, then capture note-on count and run one full row to observe EF2 retriggers.
+    for (int i = 0; i < 16 && transport.currentRow() != 1; ++i) {
+      transport.advanceExternalTick();
+      sequencer.update(pattern, transport, audio, plugins);
+    }
+    if (transport.currentRow() != 1) {
+      std::cerr << "EF clear regression did not reach row 1" << '\n';
+      return 1;
+    }
+    sequencer.update(pattern, transport, audio, plugins);  // row 1 dispatch
+    const std::size_t row1StartNoteOn = plugins.noteOnEventCount();
+    for (int i = 0; i < 8; ++i) {
+      transport.advanceExternalTick();
+      sequencer.update(pattern, transport, audio, plugins);
+    }
+    const std::size_t row1EndNoteOn = plugins.noteOnEventCount();
+    if (row1EndNoteOn < row1StartNoteOn + 2) {
+      std::cerr << "EF2 carry regression did not retrigger row-1 note" << '\n';
+      return 1;
+    }
+    const std::size_t row1Delta = row1EndNoteOn - row1StartNoteOn;
+
+    // Reach row 3 (row 2 applies EF0 clear), then verify retriggers no longer occur.
+    for (int i = 0; i < 24 && transport.currentRow() != 3; ++i) {
+      transport.advanceExternalTick();
+      sequencer.update(pattern, transport, audio, plugins);
+    }
+    if (transport.currentRow() != 3) {
+      std::cerr << "EF clear regression did not reach row 3" << '\n';
+      return 1;
+    }
+    sequencer.update(pattern, transport, audio, plugins);  // row 3 dispatch
+    const std::size_t row3StartNoteOn = plugins.noteOnEventCount();
+    for (int i = 0; i < 8; ++i) {
+      transport.advanceExternalTick();
+      sequencer.update(pattern, transport, audio, plugins);
+    }
+    const std::size_t row3EndNoteOn = plugins.noteOnEventCount();
+    const std::size_t row3Delta = row3EndNoteOn - row3StartNoteOn;
+    if (row1Delta < row3Delta + 2) {
+      std::cerr << "EF0 clear regression did not reduce extra retrigger activity on later notes" << '\n';
+      return 1;
+    }
+  }
+
   return 0;
 }
