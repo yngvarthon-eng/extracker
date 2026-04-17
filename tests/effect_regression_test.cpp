@@ -634,5 +634,51 @@ int main() {
     }
   }
 
+  {
+    extracker::PatternEditor pattern(8, 1);
+    // Gate reaches threshold before delayed start; current behavior should start
+    // the note on ED tick and release it immediately in the same tick update.
+    pattern.insertNote(0, 0, 60, 0, 1, 120, true, 0x0E, 0xD3);  // gate=1, ED3
+
+    extracker::Transport transport;
+    transport.setTicksPerRow(8);
+    transport.setPatternRows(8);
+    transport.resetTickCount();
+
+    extracker::AudioEngine audio;
+    extracker::PluginHost plugins;
+    plugins.loadPlugin("builtin.sine");
+    plugins.assignInstrument(0, "builtin.sine");
+    audio.setPluginHost(&plugins);
+    extracker::Sequencer sequencer;
+
+    sequencer.update(pattern, transport, audio, plugins);  // row 0 tick 0 dispatch
+    const std::size_t baseNoteOn = plugins.noteOnEventCount();
+    const std::size_t baseNoteOff = plugins.noteOffEventCount();
+
+    transport.advanceExternalTick();
+    sequencer.update(pattern, transport, audio, plugins);  // tick 1
+    transport.advanceExternalTick();
+    sequencer.update(pattern, transport, audio, plugins);  // tick 2
+
+    if (plugins.noteOnEventCount() != baseNoteOn || plugins.noteOffEventCount() != baseNoteOff) {
+      std::cerr << "ED3+gate regression emitted note activity before delayed start tick" << '\n';
+      return 1;
+    }
+
+    transport.advanceExternalTick();
+    sequencer.update(pattern, transport, audio, plugins);  // tick 3 delayed start and immediate gate release
+
+    if (plugins.noteOnEventCount() != baseNoteOn + 1) {
+      std::cerr << "ED3+gate regression did not emit delayed note-on on start tick" << '\n';
+      return 1;
+    }
+
+    if (plugins.noteOffEventCount() != baseNoteOff + 1) {
+      std::cerr << "ED3+gate regression did not apply gate release on delayed start tick" << '\n';
+      return 1;
+    }
+  }
+
   return 0;
 }
