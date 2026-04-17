@@ -376,6 +376,46 @@ int main() {
   }
 
   {
+    extracker::PatternEditor pattern(8, 2);
+    pattern.setEffect(0, 0, 0x0E, 0x60);  // ch0: loop start at row 0
+    pattern.setEffect(1, 1, 0x0E, 0x60);  // ch1: loop start at row 1
+    pattern.setEffect(2, 0, 0x0E, 0x61);  // ch0: one repeat to row 0
+    pattern.setEffect(3, 1, 0x0E, 0x62);  // ch1: two repeats to row 1
+
+    extracker::Transport transport;
+    transport.setTicksPerRow(1);
+    transport.setPatternRows(8);
+    transport.resetTickCount();
+
+    extracker::AudioEngine audio;
+    extracker::PluginHost plugins;
+    extracker::Sequencer sequencer;
+
+    sequencer.update(pattern, transport, audio, plugins);  // initial row 0 dispatch
+
+    bool reachedRow4 = false;
+    for (int i = 0; i < 32; ++i) {
+      transport.advanceExternalTick();
+      sequencer.update(pattern, transport, audio, plugins);
+      if (transport.currentRow() == 4) {
+        reachedRow4 = true;
+        break;
+      }
+    }
+
+    if (!reachedRow4) {
+      std::cerr << "Multi-channel E6 loop regression did not progress past loop rows" << '\n';
+      return 1;
+    }
+
+    if (sequencer.dispatchCount() != 15) {
+      std::cerr << "Multi-channel E6 loop regression dispatch count mismatch before reaching row 4 (got "
+                << sequencer.dispatchCount() << ")" << '\n';
+      return 1;
+    }
+  }
+
+  {
     extracker::PatternEditor pattern(8, 1);
     pattern.setEffect(0, 0, 0x0E, 0xE2);  // EE2: delay next row progression by 2 rows
 
