@@ -3,12 +3,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace extracker {
 
 class PatternEditor {
 public:
+  static constexpr std::uint8_t kDefaultVelocity = 100;
+
   struct Step {
     bool hasNote = false;
     int note = -1;
@@ -54,6 +57,8 @@ public:
 
   std::size_t rows() const;
   std::size_t channels() const;
+  std::size_t noteCount() const;
+  std::pair<int, int> activeRowSpan() const;
   void resizeRows(std::size_t newRows);
   void resizeChannels(std::size_t newChannels);
 

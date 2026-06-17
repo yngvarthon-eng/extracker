@@ -14,7 +14,8 @@ Transport::Transport()
       tempoBpm_(125.0),
   ticksPerBeat_(6),
   ticksPerRow_(6),
-  patternRows_(64) {}
+  patternRows_(64),
+  swingPercent_(50) {}
 
 Transport::~Transport() {
   stop();
@@ -44,6 +45,10 @@ void Transport::setPatternRows(std::uint32_t patternRows) {
   }
 }
 
+void Transport::setSwingPercent(std::uint32_t swingPercent) {
+  swingPercent_.store(std::clamp<std::uint32_t>(swingPercent, 50, 75));
+}
+
 double Transport::tempoBpm() const {
   return tempoBpm_.load();
 }
@@ -58,6 +63,10 @@ std::uint32_t Transport::ticksPerRow() const {
 
 std::uint32_t Transport::patternRows() const {
   return patternRows_.load();
+}
+
+std::uint32_t Transport::swingPercent() const {
+  return swingPercent_.load();
 }
 
 bool Transport::play() {
@@ -132,6 +141,12 @@ void Transport::runClock() {
     double bpm = std::max(tempoBpm_.load(), 1.0);
     std::uint32_t tpb = std::max<std::uint32_t>(ticksPerBeat_.load(), 1);
     double tickSeconds = 60.0 / (bpm * static_cast<double>(tpb));
+
+    const double swing = static_cast<double>(std::clamp<std::uint32_t>(swingPercent_.load(), 50, 75)) / 100.0;
+    const double evenFactor = std::max(0.25, 2.0 * (1.0 - swing));
+    const double oddFactor = std::max(0.25, 2.0 * swing);
+    const bool oddRow = (currentRow_.load() % 2u) == 1u;
+    tickSeconds *= oddRow ? oddFactor : evenFactor;
 
     std::this_thread::sleep_for(std::chrono::duration<double>(tickSeconds));
 

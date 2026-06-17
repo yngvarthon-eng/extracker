@@ -15,6 +15,7 @@ int main() {
       "printf 'note vel 5\\n"
       "note gate 5\\n"
       "note fx 5\\n"
+      "note off 5\n"
       "note nope\\n"
       "quit\\n' | " + appPath;
 
@@ -41,9 +42,10 @@ int main() {
   const bool sawVelUsage  = output.find("Usage: note vel [dry] <row> <ch> <vel>") != std::string::npos;
   const bool sawGateUsage = output.find("Usage: note gate [dry] <row> <ch> <ticks>") != std::string::npos;
   const bool sawFxUsage   = output.find("Usage: note fx [dry] <row> <ch> <fx> <fxval>") != std::string::npos;
-  const bool sawTopUsage  = output.find("Usage: note <set|clear|vel|gate|fx> ...") != std::string::npos;
+  const bool sawOffUsage  = output.find("Usage: note off [dry] <row> <ch> <fadeout_ticks>") != std::string::npos;
+  const bool sawTopUsage  = output.find("Usage: note <set|off|clear|vel|gate|fx> ...") != std::string::npos;
 
-  if (!sawVelUsage || !sawGateUsage || !sawFxUsage || !sawTopUsage) {
+  if (!sawVelUsage || !sawGateUsage || !sawFxUsage || !sawOffUsage || !sawTopUsage) {
     std::cerr << "Missing expected note usage guard output markers" << '\n';
     std::cerr << output << '\n';
     return 1;

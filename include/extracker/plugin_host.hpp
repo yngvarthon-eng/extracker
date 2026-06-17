@@ -23,6 +23,7 @@ struct PluginRenderVoice {
   int midiNote = -1;
   std::uint8_t instrument = 0;
   double frequencyHz = 0.0;
+  double pan = 0.5;
   double phase = 0.0;
   double level = 0.0;
   double targetLevel = 1.0;
@@ -49,6 +50,15 @@ public:
 
   virtual std::size_t activeVoiceCount() const = 0;
   virtual double activeVoiceFrequencyHz(std::size_t voiceIndex) const = 0;
+};
+
+class IEffectPlugin {
+public:
+  virtual ~IEffectPlugin() = default;
+  virtual void process(std::vector<double>& monoBuffer, std::uint32_t sampleRate) = 0;
+  virtual bool setParameter(const std::string& name, double value) = 0;
+  virtual double getParameter(const std::string& name) const = 0;
+  virtual std::string name() const = 0;
 };
 
 class IExternalPluginAdapter {
@@ -85,7 +95,9 @@ class PluginHost {
 public:
   static constexpr std::size_t kMaxInstrumentSlots = 16;
   static constexpr std::size_t kMaxSampleSlots = 257; // Slots 0..256
+  static constexpr std::size_t kMaxEffectSlots = 8;
   using PluginFactory = std::function<std::unique_ptr<IInstrumentPlugin>()>;
+  using EffectFactory = std::function<std::unique_ptr<IEffectPlugin>()>;
 
   PluginHost();
 
@@ -117,6 +129,21 @@ public:
   bool saveSampleFromSlot(std::uint16_t sampleSlot, const std::string& wavPath) const;
   bool clearSampleSlot(std::uint16_t sampleSlot);
   std::string samplePathForSlot(std::uint16_t sampleSlot) const;
+  std::size_t sampleFrameCountForSlot(std::uint16_t sampleSlot) const;
+  std::uint32_t sampleRateForSlot(std::uint16_t sampleSlot) const;
+  std::size_t sampleSourceFrameCountForSlot(std::uint16_t sampleSlot) const;
+  bool trimSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive);
+  bool restoreSampleSlotSource(std::uint16_t sampleSlot);
+  bool normalizeSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive);
+  bool fadeInSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive);
+  bool fadeOutSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive);
+  bool reverseSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive);
+  bool resampleSampleSlot(std::uint16_t sampleSlot, std::uint32_t newRate);
+  bool bitDepthSampleSlot(std::uint16_t sampleSlot, int bits, std::size_t startFrame, std::size_t endFrameExclusive);
+  bool crossfadeLoopSampleSlot(std::uint16_t sampleSlot, std::size_t lengthFrames);
+  bool setSampleSlotParameter(std::uint16_t sampleSlot, const std::string& name, double value);
+  double getSampleSlotParameter(std::uint16_t sampleSlot, const std::string& name) const;
+  std::vector<float> sampleWaveformForSlot(std::uint16_t sampleSlot, std::size_t maxPoints = 2048) const;
   bool setSampleNameForSlot(std::uint16_t sampleSlot, const std::string& name);
   std::string sampleNameForSlot(std::uint16_t sampleSlot) const;
   bool assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument);
@@ -132,11 +159,23 @@ public:
   std::size_t activeRenderVoiceCount() const;
   double activeRenderVoiceFrequencyHz(std::size_t voiceIndex) const;
 
+  // Effect chain (global master effects applied after instrument synthesis)
+  bool registerEffectFactory(const std::string& pluginId, EffectFactory factory);
+  bool assignEffect(std::uint8_t slot, const std::string& pluginId);
+  bool removeEffect(std::uint8_t slot);
+  bool hasEffectAssignment(std::uint8_t slot) const;
+  std::string pluginForEffect(std::uint8_t slot) const;
+  bool setEffectParameter(std::uint8_t slot, const std::string& name, double value);
+  double getEffectParameter(std::uint8_t slot, const std::string& name) const;
+  void renderEffectChain(std::vector<double>& monoBuffer, std::uint32_t sampleRate);
+
 private:
   bool isValidInstrument(std::uint8_t instrument) const;
   bool isValidSampleSlot(std::uint16_t sampleSlot) const;
+  bool isValidEffectSlot(std::uint8_t slot) const;
   bool hasPluginFactory(const std::string& pluginId) const;
   std::unique_ptr<IInstrumentPlugin> createPluginInstance(const std::string& pluginId) const;
+  std::unique_ptr<IEffectPlugin> createEffectInstance(const std::string& pluginId) const;
 
   std::array<std::string, kMaxInstrumentSlots> instrumentSlots_;
   std::array<std::unique_ptr<IInstrumentPlugin>, kMaxInstrumentSlots> instrumentPlugins_;
@@ -148,6 +187,9 @@ private:
   std::vector<std::string> availablePluginIds_;
   std::unordered_map<std::string, PluginPortInfo> pluginPortInfoMap_;
   std::unordered_map<std::string, PluginFactory> pluginFactories_;
+  std::unordered_map<std::string, EffectFactory> effectFactories_;
+  std::array<std::string, kMaxEffectSlots> effectSlots_;
+  std::array<std::unique_ptr<IEffectPlugin>, kMaxEffectSlots> effectPlugins_;
   std::vector<std::unique_ptr<IExternalPluginAdapter>> externalAdapters_;
   std::size_t loadedPluginCount_;
   std::size_t noteOnEventCount_;

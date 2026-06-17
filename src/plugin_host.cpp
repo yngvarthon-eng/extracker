@@ -463,7 +463,7 @@ public:
   void noteOff(int midiNote) override {
     for (auto& voice : voices_) {
       if (voice.midiNote == midiNote) {
-        voice.active = false;
+        voice.releasing = true;
       }
     }
   }
@@ -478,6 +478,12 @@ public:
     }
 
     const double baseStep = static_cast<double>(sample_.sampleRate) / static_cast<double>(sampleRate);
+    const double releaseStep = 1.0 / std::max<double>(static_cast<double>(sampleRate) * 0.03, 1.0);
+    const std::size_t sampleSize = sample_.mono.size();
+    const std::size_t loopEndEff = (loopEnd_ != std::numeric_limits<std::size_t>::max() && loopEnd_ <= sampleSize)
+        ? loopEnd_ : sampleSize;
+    const std::size_t loopStartEff = (loopStart_ < loopEndEff) ? loopStart_ : 0;
+
     for (std::size_t frame = 0; frame < monoBuffer.size(); ++frame) {
       double mixed = 0.0;
       std::size_t activeCount = 0;
@@ -487,20 +493,54 @@ public:
           continue;
         }
 
-        std::size_t idx = static_cast<std::size_t>(voice.pos);
-        if (idx >= sample_.mono.size()) {
+        // Apply loop wrapping before index computation
+        if (loopMode_ != 0) {
+          if (loopMode_ == 1) {  // forward loop
+            if (voice.pos >= static_cast<double>(loopEndEff)) {
+              voice.pos = static_cast<double>(loopStartEff);
+            }
+          } else if (loopMode_ == 2) {  // bidirectional
+            if (voice.direction > 0.0 && voice.pos >= static_cast<double>(loopEndEff)) {
+              voice.pos = static_cast<double>(loopEndEff > 0 ? loopEndEff - 1 : 0);
+              voice.direction = -1.0;
+            } else if (voice.direction < 0.0 && voice.pos < static_cast<double>(loopStartEff)) {
+              voice.pos = static_cast<double>(loopStartEff);
+              voice.direction = 1.0;
+            }
+          } else if (loopMode_ == 3) {  // sustain loop
+            if (!voice.releasing && voice.pos >= static_cast<double>(loopEndEff)) {
+              voice.pos = static_cast<double>(loopStartEff);
+            }
+          }
+        }
+
+        if (voice.pos < 0.0) {
+          voice.pos = 0.0;
+        }
+
+        const std::size_t idx = static_cast<std::size_t>(voice.pos);
+        if (idx >= sampleSize) {
           voice.active = false;
           continue;
         }
 
-        std::size_t nextIdx = std::min(idx + 1, sample_.mono.size() - 1);
+        std::size_t nextIdx = std::min(idx + 1, sampleSize - 1);
         const double frac = voice.pos - static_cast<double>(idx);
         const double sampleValue =
             static_cast<double>(sample_.mono[idx]) * (1.0 - frac) +
             static_cast<double>(sample_.mono[nextIdx]) * frac;
 
-        mixed += sampleValue * voice.level;
-        voice.pos += baseStep * voice.pitchRatio;
+        if (voice.releasing) {
+          voice.envelope = std::max(0.0, voice.envelope - releaseStep);
+        } else {
+          voice.envelope = 1.0;
+        }
+
+        mixed += sampleValue * voice.level * voice.envelope;
+        voice.pos += baseStep * voice.pitchRatio * voice.direction;
+        if (voice.envelope <= 0.0) {
+          voice.active = false;
+        }
         activeCount += 1;
       }
 
@@ -521,11 +561,31 @@ public:
 
   bool setParameter(const std::string& name, double value) override {
     if (name == "gain") {
-      gain_ = std::clamp(value, 0.0, 1.0);
+      gain_ = std::clamp(value, 0.0, 2.0);
       return true;
     }
     if (name == "sample_root") {
       rootMidiNote_ = static_cast<int>(std::clamp(value, 0.0, 127.0));
+      return true;
+    }
+    if (name == "pan") {
+      pan_ = std::clamp(value, 0.0, 1.0);
+      return true;
+    }
+    if (name == "loop_mode") {
+      loopMode_ = static_cast<int>(std::clamp(value, 0.0, 3.0));
+      return true;
+    }
+    if (name == "loop_start") {
+      loopStart_ = static_cast<std::size_t>(std::max(value, 0.0));
+      return true;
+    }
+    if (name == "loop_end") {
+      if (value <= 0.0) {
+        loopEnd_ = std::numeric_limits<std::size_t>::max();
+      } else {
+        loopEnd_ = static_cast<std::size_t>(value);
+      }
       return true;
     }
     return false;
@@ -537,6 +597,18 @@ public:
     }
     if (name == "sample_root") {
       return static_cast<double>(rootMidiNote_);
+    }
+    if (name == "pan") {
+      return pan_;
+    }
+    if (name == "loop_mode") {
+      return static_cast<double>(loopMode_);
+    }
+    if (name == "loop_start") {
+      return static_cast<double>(loopStart_);
+    }
+    if (name == "loop_end") {
+      return (loopEnd_ == std::numeric_limits<std::size_t>::max()) ? 0.0 : static_cast<double>(loopEnd_);
     }
     return 0.0;
   }
@@ -557,6 +629,7 @@ public:
     if (!loadWavFile(wavPath, loaded)) {
       return false;
     }
+    sourceSample_ = loaded;
     sample_ = std::move(loaded);
     samplePath_ = wavPath;
     voices_.clear();
@@ -569,12 +642,223 @@ public:
 
   void clearSample() {
     sample_ = SampleData{};
+    sourceSample_ = SampleData{};
     samplePath_.clear();
     voices_.clear();
   }
 
   std::string samplePath() const {
     return samplePath_;
+  }
+
+  std::size_t sampleFrameCount() const {
+    return sample_.mono.size();
+  }
+
+  std::size_t sourceFrameCount() const {
+    return sourceSample_.mono.size();
+  }
+
+  std::uint32_t sampleRateValue() const {
+    return sample_.sampleRate;
+  }
+
+  bool trimFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
+    if (sourceSample_.mono.empty()) {
+      return false;
+    }
+    if (startFrame >= endFrameExclusive || endFrameExclusive > sourceSample_.mono.size()) {
+      return false;
+    }
+
+    sample_.mono = std::vector<float>(sourceSample_.mono.begin() + startFrame,
+                                      sourceSample_.mono.begin() + endFrameExclusive);
+    voices_.clear();
+    return !sample_.mono.empty();
+  }
+
+  bool restoreSource() {
+    if (sourceSample_.mono.empty()) {
+      return false;
+    }
+    sample_ = sourceSample_;
+    voices_.clear();
+    return true;
+  }
+
+  bool normalizeFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
+    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+      return false;
+    }
+
+    float maxAbs = 0.0f;
+    for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
+      maxAbs = std::max(maxAbs, std::abs(sample_.mono[i]));
+    }
+    if (maxAbs <= 0.000001f) {
+      return false;
+    }
+
+    const float gain = 1.0f / maxAbs;
+    for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
+      sample_.mono[i] = std::clamp(sample_.mono[i] * gain, -1.0f, 1.0f);
+    }
+    return true;
+  }
+
+  bool fadeInFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
+    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+      return false;
+    }
+    const double denom = std::max<double>(static_cast<double>(endFrameExclusive - startFrame - 1), 1.0);
+    for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
+      const double t = static_cast<double>(i - startFrame) / denom;
+      sample_.mono[i] = static_cast<float>(sample_.mono[i] * t);
+    }
+    return true;
+  }
+
+  bool fadeOutFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
+    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+      return false;
+    }
+    const double denom = std::max<double>(static_cast<double>(endFrameExclusive - startFrame - 1), 1.0);
+    for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
+      const double t = static_cast<double>(i - startFrame) / denom;
+      sample_.mono[i] = static_cast<float>(sample_.mono[i] * (1.0 - t));
+    }
+    return true;
+  }
+
+  bool reverseFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
+    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+      return false;
+    }
+    std::reverse(sample_.mono.begin() + startFrame, sample_.mono.begin() + endFrameExclusive);
+    voices_.clear();
+    return true;
+  }
+
+  bool resampleTo(std::uint32_t newRate) {
+    if (sample_.mono.empty() || newRate < 1000 || newRate > 192000) {
+      return false;
+    }
+    if (newRate == sample_.sampleRate) {
+      return false;
+    }
+
+    const std::size_t oldLen = sample_.mono.size();
+    // source-frames advanced per output-frame; >1 when downsampling.
+    const double ratio = static_cast<double>(sample_.sampleRate) / static_cast<double>(newRate);
+    const std::size_t newLen = std::max<std::size_t>(
+        1, static_cast<std::size_t>(std::llround(static_cast<double>(oldLen) / ratio)));
+
+    // Lanczos-3 windowed sinc. When downsampling (ratio > 1) the kernel is widened
+    // in source space by `ratio` so it band-limits to the new Nyquist (anti-aliasing).
+    constexpr int kA = 3;
+    const double scale = std::max(ratio, 1.0);      // kernel stretch in source space
+    const double invScale = 1.0 / scale;
+    const double support = static_cast<double>(kA) * scale;
+
+    auto lanczos = [](double x) -> double {
+      if (x == 0.0) return 1.0;
+      if (x <= -kA || x >= kA) return 0.0;
+      const double px = M_PI * x;
+      return (std::sin(px) / px) * (std::sin(px / kA) / (px / kA));
+    };
+
+    std::vector<float> out(newLen, 0.0f);
+    for (std::size_t i = 0; i < newLen; ++i) {
+      const double srcPos = static_cast<double>(i) * ratio;
+      const long first = static_cast<long>(std::floor(srcPos - support)) + 1;
+      const long last = static_cast<long>(std::floor(srcPos + support));
+
+      double acc = 0.0;
+      double wsum = 0.0;
+      for (long s = first; s <= last; ++s) {
+        const double w = lanczos((srcPos - static_cast<double>(s)) * invScale);
+        if (w == 0.0) continue;
+        const std::size_t idx = static_cast<std::size_t>(
+            std::clamp<long>(s, 0, static_cast<long>(oldLen) - 1));
+        acc += static_cast<double>(sample_.mono[idx]) * w;
+        wsum += w;
+      }
+      out[i] = (wsum != 0.0) ? static_cast<float>(std::clamp(acc / wsum, -1.0, 1.0)) : 0.0f;
+    }
+
+    sample_.mono = std::move(out);
+    sample_.sampleRate = newRate;
+    voices_.clear();
+    return true;
+  }
+
+  bool quantizeBits(int bits, std::size_t startFrame, std::size_t endFrameExclusive) {
+    if (sample_.mono.empty() || bits < 1 || bits > 32) {
+      return false;
+    }
+    if (startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+      return false;
+    }
+    const double levels = std::pow(2.0, bits - 1);
+    for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
+      const double q = std::round(static_cast<double>(sample_.mono[i]) * levels) / levels;
+      sample_.mono[i] = static_cast<float>(std::clamp(q, -1.0, 1.0));
+    }
+    voices_.clear();
+    return true;
+  }
+
+  // Smooth the forward/sustain loop seam by blending the loop tail with the
+  // audio just before loopStart (equal-power crossfade), so wrapping from
+  // loopEnd back to loopStart is click-free.
+  bool crossfadeLoop(std::size_t lengthFrames) {
+    if (sample_.mono.empty()) {
+      return false;
+    }
+    if (loopMode_ != 1 && loopMode_ != 3) {  // forward / sustain only
+      return false;
+    }
+    const std::size_t sampleSize = sample_.mono.size();
+    const std::size_t loopEnd = (loopEnd_ != std::numeric_limits<std::size_t>::max() && loopEnd_ <= sampleSize)
+        ? loopEnd_ : sampleSize;
+    const std::size_t loopStart = loopStart_;
+    if (loopStart < 1 || loopEnd <= loopStart) {
+      return false;
+    }
+
+    const std::size_t n = std::min({lengthFrames, loopStart, loopEnd - loopStart});
+    if (n == 0) {
+      return false;
+    }
+
+    const double denom = std::max<double>(static_cast<double>(n) - 1.0, 1.0);
+    for (std::size_t i = 0; i < n; ++i) {
+      const double t = static_cast<double>(i) / denom;
+      const double gOut = std::cos(t * M_PI / 2.0);   // loop tail fades out
+      const double gIn = std::sin(t * M_PI / 2.0);    // pre-loopStart fades in
+      const std::size_t tailIdx = loopEnd - n + i;
+      const std::size_t preIdx = loopStart - n + i;
+      const double mixed = static_cast<double>(sample_.mono[tailIdx]) * gOut +
+                           static_cast<double>(sample_.mono[preIdx]) * gIn;
+      sample_.mono[tailIdx] = static_cast<float>(std::clamp(mixed, -1.0, 1.0));
+    }
+    voices_.clear();
+    return true;
+  }
+
+  std::vector<float> waveformPreview(std::size_t maxPoints) const {
+    if (sample_.mono.empty() || maxPoints == 0) {
+      return {};
+    }
+
+    const std::size_t points = std::min<std::size_t>(maxPoints, sample_.mono.size());
+    std::vector<float> preview(points, 0.0f);
+    for (std::size_t i = 0; i < points; ++i) {
+      const double pos = static_cast<double>(i) * static_cast<double>(sample_.mono.size() - 1) /
+                         static_cast<double>(std::max<std::size_t>(points - 1, 1));
+      preview[i] = sample_.mono[static_cast<std::size_t>(std::llround(pos))];
+    }
+    return preview;
   }
 
 private:
@@ -584,13 +868,21 @@ private:
     double level = 0.0;
     double pitchRatio = 1.0;
     bool active = true;
+    bool releasing = false;
+    double envelope = 1.0;
+    double direction = 1.0;  // 1.0 = forward, -1.0 = reverse (bidirectional loop)
   };
 
   SampleData sample_;
+  SampleData sourceSample_;
   std::vector<Voice> voices_;
   std::string samplePath_;
   int rootMidiNote_ = 60;
   double gain_ = 1.0;
+  double pan_ = 0.5;
+  int loopMode_ = 0;  // 0=none, 1=forward, 2=bidi, 3=sustain
+  std::size_t loopStart_ = 0;
+  std::size_t loopEnd_ = std::numeric_limits<std::size_t>::max();
 };
 
 class Lv2PlaceholderInstrumentPlugin final : public BuiltinInstrumentPluginBase {
@@ -1073,6 +1365,211 @@ private:
   bool runtimeActive_ = false;
 };
 
+class Lv2DynamicEffectPlugin final : public extracker::IEffectPlugin {
+public:
+  Lv2DynamicEffectPlugin(const std::string& uri,
+                         const std::filesystem::path& binaryPath,
+                         int audioInputPort,
+                         int audioOutputPort,
+                         std::vector<int> controlInputPorts,
+                         std::vector<int> controlOutputPorts)
+      : uri_(uri),
+        binaryPath_(binaryPath),
+        audioInputPort_(audioInputPort),
+        audioOutputPort_(audioOutputPort),
+        controlInputPorts_(std::move(controlInputPorts)),
+        controlOutputPorts_(std::move(controlOutputPorts)),
+        moduleHandle_(nullptr),
+        descriptor_(nullptr),
+        instance_(nullptr),
+        loaded_(false),
+        runtimeActive_(false) {
+    controlInputValues_.assign(controlInputPorts_.size(), 0.0f);
+    controlOutputValues_.assign(controlOutputPorts_.size(), 0.0f);
+    loaded_ = tryLoadDescriptor();
+  }
+
+  ~Lv2DynamicEffectPlugin() override {
+    shutdownRuntimeInstance();
+    if (moduleHandle_ != nullptr) {
+      dlclose(moduleHandle_);
+      moduleHandle_ = nullptr;
+    }
+  }
+
+  void process(std::vector<double>& monoBuffer, std::uint32_t sampleRate) override {
+    if (monoBuffer.empty() || sampleRate == 0) {
+      return;
+    }
+    if (!ensureRuntimeInstance(sampleRate, monoBuffer.size())) {
+      return;
+    }
+    for (std::size_t i = 0; i < monoBuffer.size(); ++i) {
+      audioInputBuffer_[i] = static_cast<float>(monoBuffer[i]);
+    }
+    std::fill(audioOutputBuffer_.begin(), audioOutputBuffer_.end(), 0.0f);
+
+    descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioInputPort_), audioInputBuffer_.data());
+    descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioOutputPort_), audioOutputBuffer_.data());
+    for (std::size_t i = 0; i < controlInputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlInputPorts_[i]), &controlInputValues_[i]);
+    }
+    for (std::size_t i = 0; i < controlOutputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlOutputPorts_[i]), &controlOutputValues_[i]);
+    }
+
+    descriptor_->run(instance_, static_cast<std::uint32_t>(monoBuffer.size()));
+
+    for (std::size_t i = 0; i < monoBuffer.size(); ++i) {
+      const double sample = static_cast<double>(audioOutputBuffer_[i]);
+      monoBuffer[i] = std::isfinite(sample) ? sample : 0.0;
+    }
+  }
+
+  bool setParameter(const std::string& name, double value) override {
+    const std::string prefix = "lv2_control_in_";
+    if (name.rfind(prefix, 0) == 0) {
+      std::size_t ordinal = 0;
+      std::istringstream parse(name.substr(prefix.size()));
+      parse >> ordinal;
+      if (!parse || !parse.eof() || ordinal >= controlInputValues_.size()) {
+        return false;
+      }
+      controlInputValues_[ordinal] = static_cast<float>(value);
+      return true;
+    }
+    return false;
+  }
+
+  double getParameter(const std::string& name) const override {
+    const std::string inPrefix = "lv2_control_in_";
+    if (name.rfind(inPrefix, 0) == 0) {
+      std::size_t ordinal = 0;
+      std::istringstream parse(name.substr(inPrefix.size()));
+      parse >> ordinal;
+      if (!parse || !parse.eof() || ordinal >= controlInputValues_.size()) {
+        return 0.0;
+      }
+      return static_cast<double>(controlInputValues_[ordinal]);
+    }
+    const std::string outPrefix = "lv2_control_out_";
+    if (name.rfind(outPrefix, 0) == 0) {
+      std::size_t ordinal = 0;
+      std::istringstream parse(name.substr(outPrefix.size()));
+      parse >> ordinal;
+      if (!parse || !parse.eof() || ordinal >= controlOutputValues_.size()) {
+        return 0.0;
+      }
+      return static_cast<double>(controlOutputValues_[ordinal]);
+    }
+    if (name == "lv2_loaded") { return loaded_ ? 1.0 : 0.0; }
+    if (name == "lv2_runtime_active") { return runtimeActive_ ? 1.0 : 0.0; }
+    return 0.0;
+  }
+
+  std::string name() const override {
+    return "lv2:" + uri_;
+  }
+
+private:
+  void shutdownRuntimeInstance() {
+    if (instance_ == nullptr || descriptor_ == nullptr) {
+      runtimeActive_ = false;
+      return;
+    }
+    if (runtimeActive_ && descriptor_->deactivate != nullptr) {
+      descriptor_->deactivate(instance_);
+    }
+    if (descriptor_->cleanup != nullptr) {
+      descriptor_->cleanup(instance_);
+    }
+    instance_ = nullptr;
+    runtimeActive_ = false;
+  }
+
+  bool ensureRuntimeInstance(std::uint32_t sampleRate, std::size_t frameCount) {
+    if (runtimeActive_) {
+      audioInputBuffer_.resize(frameCount, 0.0f);
+      audioOutputBuffer_.resize(frameCount, 0.0f);
+      return true;
+    }
+    if (!loaded_ || descriptor_ == nullptr || audioInputPort_ < 0 || audioOutputPort_ < 0 ||
+        descriptor_->instantiate == nullptr || descriptor_->run == nullptr ||
+        descriptor_->connectPort == nullptr) {
+      return false;
+    }
+    Lv2Feature uridMapFeature{"http://lv2plug.in/ns/ext/urid#map", &kStaticUridMapData};
+    const Lv2Feature* features[] = {&uridMapFeature, nullptr};
+    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), nullptr, features);
+    if (instance_ == nullptr) {
+      return false;
+    }
+    audioInputBuffer_.assign(frameCount, 0.0f);
+    audioOutputBuffer_.assign(frameCount, 0.0f);
+    if (controlInputValues_.size() < controlInputPorts_.size()) {
+      controlInputValues_.resize(controlInputPorts_.size(), 0.0f);
+    }
+    if (controlOutputValues_.size() < controlOutputPorts_.size()) {
+      controlOutputValues_.resize(controlOutputPorts_.size(), 0.0f);
+    }
+    descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioInputPort_), audioInputBuffer_.data());
+    descriptor_->connectPort(instance_, static_cast<std::uint32_t>(audioOutputPort_), audioOutputBuffer_.data());
+    for (std::size_t i = 0; i < controlInputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlInputPorts_[i]), &controlInputValues_[i]);
+    }
+    for (std::size_t i = 0; i < controlOutputPorts_.size(); ++i) {
+      descriptor_->connectPort(instance_, static_cast<std::uint32_t>(controlOutputPorts_[i]), &controlOutputValues_[i]);
+    }
+    if (descriptor_->activate != nullptr) {
+      descriptor_->activate(instance_);
+    }
+    runtimeActive_ = true;
+    return true;
+  }
+
+  bool tryLoadDescriptor() {
+    moduleHandle_ = dlopen(binaryPath_.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (moduleHandle_ == nullptr) {
+      return false;
+    }
+    void* symbol = dlsym(moduleHandle_, "lv2_descriptor");
+    if (symbol == nullptr) {
+      dlclose(moduleHandle_);
+      moduleHandle_ = nullptr;
+      return false;
+    }
+    auto descriptorFunction = reinterpret_cast<Lv2DescriptorFunction>(symbol);
+    for (std::uint32_t index = 0; index < 1024; ++index) {
+      const Lv2Descriptor* descriptor = descriptorFunction(index);
+      if (descriptor == nullptr) { break; }
+      if (descriptor->uri != nullptr && uri_ == descriptor->uri) {
+        descriptor_ = descriptor;
+        return true;
+      }
+    }
+    dlclose(moduleHandle_);
+    moduleHandle_ = nullptr;
+    descriptor_ = nullptr;
+    return false;
+  }
+
+  std::string uri_;
+  std::filesystem::path binaryPath_;
+  int audioInputPort_;
+  int audioOutputPort_;
+  std::vector<int> controlInputPorts_;
+  std::vector<int> controlOutputPorts_;
+  void* moduleHandle_;
+  const Lv2Descriptor* descriptor_;
+  Lv2Handle instance_;
+  std::vector<float> audioInputBuffer_;
+  std::vector<float> audioOutputBuffer_;
+  std::vector<float> controlInputValues_;
+  std::vector<float> controlOutputValues_;
+  bool loaded_;
+  bool runtimeActive_;
+};
+
 class Lv2ManifestAdapter final : public extracker::IExternalPluginAdapter {
 public:
   std::string adapterName() const override {
@@ -1105,6 +1602,19 @@ public:
         portInfo.controlInMeta  = plugin.controlInputMeta;
         portInfo.controlOutMeta = plugin.controlOutputMeta;
         host.registerPluginPortInfo(pluginId, portInfo);
+        if (plugin.audioInputPort >= 0 && plugin.audioOutputPort >= 0) {
+          host.registerEffectFactory(
+              pluginId,
+              [plugin]() {
+                return std::make_unique<Lv2DynamicEffectPlugin>(
+                    plugin.uri,
+                    plugin.binaryPath,
+                    plugin.audioInputPort,
+                    plugin.audioOutputPort,
+                    plugin.controlInputPorts,
+                    plugin.controlOutputPorts);
+              });
+        }
         discovered += 1;
       }
     }
@@ -1500,6 +2010,9 @@ PluginHost::PluginHost()
       availablePluginIds_{},
       pluginPortInfoMap_{},
       pluginFactories_{},
+      effectFactories_{},
+      effectSlots_{},
+      effectPlugins_{},
       externalAdapters_{},
       loadedPluginCount_(0),
       noteOnEventCount_(0),
@@ -1736,7 +2249,17 @@ bool PluginHost::triggerNoteOnResolved(std::uint8_t instrument,
     return true;
   }
 
+  // Legacy compatibility: allow instrument column values beyond instrument slots
+  // to address sample slots when no explicit sample field is present.
   if (!isValidInstrument(instrument)) {
+    const std::uint16_t legacySampleSlot = static_cast<std::uint16_t>(instrument);
+    if (isValidSampleSlot(legacySampleSlot) &&
+        !sampleSlotPaths_[legacySampleSlot].empty() &&
+        sampleSlotPlugins_[legacySampleSlot]) {
+      sampleSlotPlugins_[legacySampleSlot]->noteOn(midiNote, velocity, retrigger);
+      noteOnEventCount_ += 1;
+      return true;
+    }
     return false;
   }
 
@@ -1770,6 +2293,14 @@ bool PluginHost::triggerNoteOffResolved(std::uint8_t instrument, std::uint16_t s
   }
 
   if (!isValidInstrument(instrument)) {
+    const std::uint16_t legacySampleSlot = static_cast<std::uint16_t>(instrument);
+    if (isValidSampleSlot(legacySampleSlot) &&
+        !sampleSlotPaths_[legacySampleSlot].empty() &&
+        sampleSlotPlugins_[legacySampleSlot]) {
+      sampleSlotPlugins_[legacySampleSlot]->noteOff(midiNote);
+      noteOffEventCount_ += 1;
+      return true;
+    }
     return false;
   }
 
@@ -1939,6 +2470,175 @@ std::string PluginHost::samplePathForSlot(std::uint16_t sampleSlot) const {
     return "";
   }
   return sampleSlotPaths_[sampleSlot];
+}
+
+std::size_t PluginHost::sampleFrameCountForSlot(std::uint16_t sampleSlot) const {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return 0;
+  }
+
+  const auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return 0;
+  }
+  return samplePlugin->sampleFrameCount();
+}
+
+std::uint32_t PluginHost::sampleRateForSlot(std::uint16_t sampleSlot) const {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return 0;
+  }
+
+  const auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return 0;
+  }
+  return samplePlugin->sampleRateValue();
+}
+
+std::size_t PluginHost::sampleSourceFrameCountForSlot(std::uint16_t sampleSlot) const {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return 0;
+  }
+
+  const auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return 0;
+  }
+  return samplePlugin->sourceFrameCount();
+}
+
+bool PluginHost::trimSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+
+  auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return false;
+  }
+  return samplePlugin->trimFrames(startFrame, endFrameExclusive);
+}
+
+bool PluginHost::restoreSampleSlotSource(std::uint16_t sampleSlot) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+
+  auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return false;
+  }
+  return samplePlugin->restoreSource();
+}
+
+bool PluginHost::normalizeSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+
+  auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return false;
+  }
+  return samplePlugin->normalizeFrames(startFrame, endFrameExclusive);
+}
+
+bool PluginHost::fadeInSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+
+  auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return false;
+  }
+  return samplePlugin->fadeInFrames(startFrame, endFrameExclusive);
+}
+
+bool PluginHost::fadeOutSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+
+  auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return false;
+  }
+  return samplePlugin->fadeOutFrames(startFrame, endFrameExclusive);
+}
+
+bool PluginHost::reverseSampleSlot(std::uint16_t sampleSlot, std::size_t startFrame, std::size_t endFrameExclusive) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+
+  auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return false;
+  }
+  return samplePlugin->reverseFrames(startFrame, endFrameExclusive);
+}
+
+bool PluginHost::resampleSampleSlot(std::uint16_t sampleSlot, std::uint32_t newRate) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+
+  auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return false;
+  }
+  return samplePlugin->resampleTo(newRate);
+}
+
+bool PluginHost::bitDepthSampleSlot(std::uint16_t sampleSlot, int bits, std::size_t startFrame, std::size_t endFrameExclusive) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+
+  auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return false;
+  }
+  return samplePlugin->quantizeBits(bits, startFrame, endFrameExclusive);
+}
+
+bool PluginHost::crossfadeLoopSampleSlot(std::uint16_t sampleSlot, std::size_t lengthFrames) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+
+  auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return false;
+  }
+  return samplePlugin->crossfadeLoop(lengthFrames);
+}
+
+std::vector<float> PluginHost::sampleWaveformForSlot(std::uint16_t sampleSlot, std::size_t maxPoints) const {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return {};
+  }
+
+  const auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin) {
+    return {};
+  }
+  return samplePlugin->waveformPreview(maxPoints);
 }
 
 bool PluginHost::setSampleNameForSlot(std::uint16_t sampleSlot, const std::string& name) {
@@ -2176,6 +2876,117 @@ std::unique_ptr<IInstrumentPlugin> PluginHost::createPluginInstance(const std::s
     return nullptr;
   }
   return it->second();
+}
+
+std::unique_ptr<IEffectPlugin> PluginHost::createEffectInstance(const std::string& pluginId) const {
+  auto it = effectFactories_.find(pluginId);
+  if (it == effectFactories_.end()) {
+    return nullptr;
+  }
+  return it->second();
+}
+
+bool PluginHost::isValidEffectSlot(std::uint8_t slot) const {
+  return slot < kMaxEffectSlots;
+}
+
+bool PluginHost::registerEffectFactory(const std::string& pluginId, EffectFactory factory) {
+  if (pluginId.empty() || !factory) {
+    return false;
+  }
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  effectFactories_[pluginId] = std::move(factory);
+  return true;
+}
+
+bool PluginHost::assignEffect(std::uint8_t slot, const std::string& pluginId) {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  if (!isValidEffectSlot(slot) || pluginId.empty()) {
+    return false;
+  }
+  if (effectFactories_.find(pluginId) == effectFactories_.end()) {
+    return false;
+  }
+  auto effect = createEffectInstance(pluginId);
+  if (!effect) {
+    return false;
+  }
+  effectSlots_[slot] = pluginId;
+  effectPlugins_[slot] = std::move(effect);
+  return true;
+}
+
+bool PluginHost::removeEffect(std::uint8_t slot) {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  if (!isValidEffectSlot(slot)) {
+    return false;
+  }
+  effectSlots_[slot].clear();
+  effectPlugins_[slot].reset();
+  return true;
+}
+
+bool PluginHost::hasEffectAssignment(std::uint8_t slot) const {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  if (!isValidEffectSlot(slot)) {
+    return false;
+  }
+  return !effectSlots_[slot].empty();
+}
+
+std::string PluginHost::pluginForEffect(std::uint8_t slot) const {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
+  if (!lock.owns_lock() || !isValidEffectSlot(slot)) {
+    return "";
+  }
+  return effectSlots_[slot];
+}
+
+bool PluginHost::setEffectParameter(std::uint8_t slot, const std::string& name, double value) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
+  if (!lock.owns_lock() || !isValidEffectSlot(slot) || !effectPlugins_[slot]) {
+    return false;
+  }
+  return effectPlugins_[slot]->setParameter(name, value);
+}
+
+double PluginHost::getEffectParameter(std::uint8_t slot, const std::string& name) const {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
+  if (!lock.owns_lock() || !isValidEffectSlot(slot) || !effectPlugins_[slot]) {
+    return 0.0;
+  }
+  return effectPlugins_[slot]->getParameter(name);
+}
+
+void PluginHost::renderEffectChain(std::vector<double>& monoBuffer, std::uint32_t sampleRate) {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  for (std::size_t i = 0; i < kMaxEffectSlots; ++i) {
+    if (effectPlugins_[i]) {
+      effectPlugins_[i]->process(monoBuffer, sampleRate);
+    }
+  }
+}
+
+bool PluginHost::setSampleSlotParameter(std::uint16_t sampleSlot, const std::string& name, double value) {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+  if (!sampleSlotPlugins_[sampleSlot]) {
+    return false;
+  }
+  return sampleSlotPlugins_[sampleSlot]->setParameter(name, value);
+}
+
+double PluginHost::getSampleSlotParameter(std::uint16_t sampleSlot, const std::string& name) const {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return 0.0;
+  }
+  if (!sampleSlotPlugins_[sampleSlot]) {
+    return 0.0;
+  }
+  return sampleSlotPlugins_[sampleSlot]->getParameter(name);
 }
 
 }  // namespace extracker

@@ -17,6 +17,8 @@ public:
   enum class BackendKind {
     Auto,
     Alsa,
+    Jack,
+    PipeWire,
     Null
   };
 
@@ -27,7 +29,12 @@ public:
   void setSampleRate(std::uint32_t sampleRate);
   void setBufferFrames(std::uint32_t bufferFrames);
   void setPluginHost(PluginHost* pluginHost);
-  void noteOn(int midiNote, double frequencyHz, double velocity = 1.0, bool retrigger = false, std::uint8_t instrument = 0);
+  void noteOn(int midiNote,
+              double frequencyHz,
+              double velocity = 1.0,
+              bool retrigger = false,
+              std::uint8_t instrument = 0,
+              double pan = 0.5);
   void noteOff(int midiNote, std::uint8_t instrument = 0);
   void allNotesOff();
   void setTestToneFrequencyHz(double frequencyHz);
@@ -35,6 +42,8 @@ public:
   double testToneFrequencyHz() const;
   std::size_t testToneVoiceCount() const;
   double testToneVoiceHz(std::size_t voiceIndex) const;
+  double testToneVoicePan(std::size_t voiceIndex) const;
+  double testToneVoiceLevel(std::size_t voiceIndex) const;
 
   std::string status() const;
   std::string backendName() const;

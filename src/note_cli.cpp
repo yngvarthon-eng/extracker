@@ -134,6 +134,39 @@ void handleNoteCommand(PatternEditor& editor,
         std::cout << "Note set at row " << row << ", channel " << channel << '\n';
       }
     }
+  } else if (subcommand == "off") {
+    const std::string usage = "Usage: note off [dry] <row> <ch> <fadeout_ticks>";
+    bool dryRun = false;
+    int row = -1;
+    if (!parseDryLeadingInt(usage, dryRun, row)) {
+      return;
+    }
+
+    int channel = -1;
+    int fadeoutTicks = -1;
+
+    if (!(noteInput >> channel >> fadeoutTicks)) {
+      std::cout << usage << '\n';
+    } else {
+      if (!ensureNoTrailing(usage)) {
+        return;
+      }
+
+      const int clampedFadeoutTicks = std::max(fadeoutTicks, 0);
+      if (dryRun) {
+        std::cout << "Note off dry-run: row " << row
+                  << ", channel " << channel
+                  << ", fadeout ticks " << clampedFadeoutTicks
+                  << '\n';
+      } else {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        editor.setGateTicks(row, channel, static_cast<std::uint32_t>(clampedFadeoutTicks));
+        std::cout << "Note off set at row " << row
+                  << ", channel " << channel
+                  << ", fadeout ticks " << clampedFadeoutTicks
+                  << '\n';
+      }
+    }
   } else if (subcommand == "clear") {
     const std::string usage = "Usage: note clear [dry] <row> <ch>";
     bool dryRun = false;
@@ -253,7 +286,7 @@ void handleNoteCommand(PatternEditor& editor,
       }
     }
   } else {
-    std::cout << "Usage: note <set|clear|vel|gate|fx> ..." << '\n';
+    std::cout << "Usage: note <set|off|clear|vel|gate|fx> ..." << '\n';
   }
 }
 

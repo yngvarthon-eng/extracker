@@ -241,6 +241,36 @@ int main() {
   }
 
   {
+    extracker::PatternEditor tpbPattern(4, 1);
+    tpbPattern.setEffect(0, 0, 0x17, 9);
+
+    extracker::Transport tpbTransport;
+    tpbTransport.setTempoBpm(123.0);
+    tpbTransport.setTicksPerBeat(24);
+    tpbTransport.setTicksPerRow(6);
+    tpbTransport.setPatternRows(4);
+    tpbTransport.resetTickCount();
+
+    extracker::AudioEngine tpbAudio;
+    extracker::PluginHost tpbPlugins;
+    extracker::Sequencer tpbSequencer;
+
+    tpbSequencer.update(tpbPattern, tpbTransport, tpbAudio, tpbPlugins);
+    if (tpbTransport.ticksPerBeat() != 9) {
+      std::cerr << "TPB effect command did not update ticks-per-beat" << '\n';
+      return 1;
+    }
+    if (std::abs(tpbTransport.tempoBpm() - 123.0) > 0.001) {
+      std::cerr << "TPB effect command unexpectedly changed tempo" << '\n';
+      return 1;
+    }
+    if (tpbTransport.ticksPerRow() != 6) {
+      std::cerr << "TPB effect command unexpectedly changed ticks-per-row" << '\n';
+      return 1;
+    }
+  }
+
+  {
     extracker::PatternEditor arpPattern(8, 1);
     arpPattern.insertNote(0, 0, 60, 0, 0, 120, true, 0x00, 0x47);
 
@@ -396,6 +426,92 @@ int main() {
     fineSlideSequencer.update(fineSlidePattern, fineSlideTransport, fineSlideAudio, fineSlidePlugins);
     if (fineSlideAudio.testToneFrequencyHz() <= 261.0) {
       std::cerr << "Fine slide up effect did not increase initial pitch" << '\n';
+      return 1;
+    }
+  }
+
+  {
+    extracker::PatternEditor fineTunePattern(8, 1);
+    fineTunePattern.insertNote(0, 0, 60, 0, 0, 120, true, 0x0E, 0x55); // E5 +5 semitones
+
+    extracker::Transport fineTuneTransport;
+    fineTuneTransport.setPatternRows(8);
+    fineTuneTransport.resetTickCount();
+
+    extracker::AudioEngine fineTuneAudio;
+    extracker::PluginHost fineTunePlugins;
+    extracker::Sequencer fineTuneSequencer;
+
+    fineTuneSequencer.update(fineTunePattern, fineTuneTransport, fineTuneAudio, fineTunePlugins);
+    const double tunedHz = fineTuneAudio.testToneFrequencyHz();
+    const double expectedHz = 261.6255653 * std::pow(2.0, 5.0 / 12.0);
+    if (std::abs(tunedHz - expectedHz) > 6.0) {
+      std::cerr << "Fine tune E5x did not shift pitch by expected semitone amount" << '\n';
+      return 1;
+    }
+  }
+
+  {
+    extracker::PatternEditor panPattern(8, 2);
+    panPattern.insertNote(0, 0, 60, 0, 0, 120, true, 0x08, 0x00); // hard left
+    panPattern.insertNote(0, 1, 60, 1, 0, 120, true, 0x08, 0xFF); // hard right
+
+    extracker::Transport panTransport;
+    panTransport.setPatternRows(8);
+    panTransport.resetTickCount();
+
+    extracker::AudioEngine panAudio;
+    extracker::PluginHost panPlugins;
+    extracker::Sequencer panSequencer;
+
+    panSequencer.update(panPattern, panTransport, panAudio, panPlugins);
+    if (panSequencer.activeVoiceCount() != 2) {
+      std::cerr << "Pan effect scenario did not create expected active voices" << '\n';
+      return 1;
+    }
+
+    const double pan0 = panAudio.testToneVoicePan(0);
+    const double pan1 = panAudio.testToneVoicePan(1);
+    const double minPan = std::min(pan0, pan1);
+    const double maxPan = std::max(pan0, pan1);
+    if (minPan > 0.15 || maxPan < 0.85) {
+      std::cerr << "Pan effect did not route voices toward hard-left/hard-right as expected" << '\n';
+      return 1;
+    }
+
+    extracker::PatternEditor panCarryPattern(8, 1);
+    panCarryPattern.insertNote(0, 0, 60, 0, 0, 120, true, 0x08, 0x00); // set pan left
+    panCarryPattern.insertNote(1, 0, 62, 0, 0, 120, true);              // no FX, should carry pan
+
+    extracker::Transport panCarryTransport;
+    panCarryTransport.setPatternRows(8);
+    panCarryTransport.setTicksPerRow(1);
+    panCarryTransport.resetTickCount();
+
+    extracker::AudioEngine panCarryAudio;
+    extracker::PluginHost panCarryPlugins;
+    extracker::Sequencer panCarrySequencer;
+
+    panCarrySequencer.update(panCarryPattern, panCarryTransport, panCarryAudio, panCarryPlugins);
+    panCarryTransport.play();
+    bool reachedRow1 = false;
+    for (int i = 0; i < 80; ++i) {
+      panCarrySequencer.update(panCarryPattern, panCarryTransport, panCarryAudio, panCarryPlugins);
+      if (panCarryTransport.currentRow() == 1) {
+        reachedRow1 = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    }
+    panCarryTransport.stop();
+
+    if (!reachedRow1) {
+      std::cerr << "Pan carry test did not reach row 1" << '\n';
+      return 1;
+    }
+
+    if (panCarryAudio.testToneVoiceCount() == 0 || panCarryAudio.testToneVoicePan(0) > 0.15) {
+      std::cerr << "Continuous pan effect did not carry to next row" << '\n';
       return 1;
     }
   }

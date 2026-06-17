@@ -1,6 +1,8 @@
 build/
 build-make/
+build-make-gui/
 .vscode/
+.idea/
 *.o
 *.obj
 *.so

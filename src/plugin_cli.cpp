@@ -254,6 +254,113 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     if (!hasAny) {
       std::cout << "  (none)" << '\n';
     }
+  } else if (subcommand == "effect") {
+    std::string effectSub;
+    pluginInput >> effectSub;
+
+    if (effectSub == "list" || effectSub.empty()) {
+      bool hasAny = false;
+      for (std::size_t i = 0; i < PluginHost::kMaxEffectSlots; ++i) {
+        if (plugins.hasEffectAssignment(static_cast<std::uint8_t>(i))) {
+          std::cout << "  slot " << i << ": "
+                    << plugins.pluginForEffect(static_cast<std::uint8_t>(i)) << '\n';
+          hasAny = true;
+        }
+      }
+      if (!hasAny) {
+        std::cout << "Effect chain: (empty)" << '\n';
+      }
+    } else if (effectSub == "assign") {
+      std::string slotToken;
+      std::string pluginId;
+      pluginInput >> slotToken >> pluginId;
+      int slot = -1;
+      if (!tryParseControlIndex(slotToken, slot) || slot < 0 ||
+          slot >= static_cast<int>(PluginHost::kMaxEffectSlots) ||
+          pluginId.empty() || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin effect assign <slot 0-7> <plugin-id>" << '\n';
+      } else if (plugins.assignEffect(static_cast<std::uint8_t>(slot), pluginId)) {
+        std::cout << "Assigned " << pluginId << " to effect slot " << slot << '\n';
+      } else {
+        std::cout << "Failed to assign effect; check plugin has audio I/O and slot is valid" << '\n';
+      }
+    } else if (effectSub == "remove") {
+      std::string slotToken;
+      pluginInput >> slotToken;
+      int slot = -1;
+      if (!tryParseControlIndex(slotToken, slot) || slot < 0 ||
+          slot >= static_cast<int>(PluginHost::kMaxEffectSlots) ||
+          cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin effect remove <slot 0-7>" << '\n';
+      } else if (plugins.removeEffect(static_cast<std::uint8_t>(slot))) {
+        std::cout << "Removed effect from slot " << slot << '\n';
+      } else {
+        std::cout << "Failed to remove effect from slot " << slot << '\n';
+      }
+    } else if (effectSub == "set") {
+      std::string slotToken;
+      std::string controlPortToken;
+      double value = 0.0;
+      pluginInput >> slotToken >> controlPortToken >> value;
+      int slot = -1;
+      if (!tryParseControlIndex(slotToken, slot) || slot < 0 ||
+          slot >= static_cast<int>(PluginHost::kMaxEffectSlots) ||
+          controlPortToken.empty() || !pluginInput || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin effect set <slot> <control-port-index|symbol> <value>" << '\n';
+      } else if (!plugins.hasEffectAssignment(static_cast<std::uint8_t>(slot))) {
+        std::cout << "No effect assigned to slot " << slot << '\n';
+      } else {
+        const std::string pluginId = plugins.pluginForEffect(static_cast<std::uint8_t>(slot));
+        PluginPortInfo info;
+        if (!plugins.getPluginPortInfo(pluginId, info)) {
+          std::cout << "Effect plugin has no LV2 control metadata" << '\n';
+        } else {
+          std::size_t controlOrdinal = info.controlInMeta.size();
+          const PluginControlPortMeta* meta = findControlMetaByToken(info.controlInMeta, controlPortToken, controlOrdinal);
+          if (meta == nullptr) {
+            std::cout << "Unknown control input port: " << controlPortToken << '\n';
+          } else {
+            const std::string paramName = "lv2_control_in_" + std::to_string(controlOrdinal);
+            if (plugins.setEffectParameter(static_cast<std::uint8_t>(slot), paramName, value)) {
+              std::cout << "Set effect slot " << slot << " control port "
+                        << describeControlPort(*meta) << " to " << value << '\n';
+            } else {
+              std::cout << "Failed to set control port" << '\n';
+            }
+          }
+        }
+      }
+    } else if (effectSub == "get") {
+      std::string slotToken;
+      std::string controlPortToken;
+      pluginInput >> slotToken >> controlPortToken;
+      int slot = -1;
+      if (!tryParseControlIndex(slotToken, slot) || slot < 0 ||
+          slot >= static_cast<int>(PluginHost::kMaxEffectSlots) ||
+          controlPortToken.empty() || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin effect get <slot> <control-port-index|symbol>" << '\n';
+      } else if (!plugins.hasEffectAssignment(static_cast<std::uint8_t>(slot))) {
+        std::cout << "No effect assigned to slot " << slot << '\n';
+      } else {
+        const std::string pluginId = plugins.pluginForEffect(static_cast<std::uint8_t>(slot));
+        PluginPortInfo info;
+        if (!plugins.getPluginPortInfo(pluginId, info)) {
+          std::cout << "Effect plugin has no LV2 control metadata" << '\n';
+        } else {
+          std::size_t controlOrdinal = info.controlInMeta.size();
+          if (const PluginControlPortMeta* meta = findControlMetaByToken(info.controlInMeta, controlPortToken, controlOrdinal)) {
+            const std::string paramName = "lv2_control_in_" + std::to_string(controlOrdinal);
+            const double value = plugins.getEffectParameter(static_cast<std::uint8_t>(slot), paramName);
+            std::cout << "Effect slot " << slot << " control port "
+                      << describeControlPort(*meta) << " = " << value << '\n';
+          } else {
+            std::cout << "Unknown control port: " << controlPortToken << '\n';
+          }
+        }
+      }
+    } else {
+      std::cout << "Usage: plugin effect <list|assign|remove|set|get>" << '\n';
+    }
   } else if (subcommand == "sample") {
     std::cout << "Sample management has moved to the 'sample' command.\n";
     std::cout << "  sample load <slot> <name> <wav-file>   load a WAV, give it a name\n";
@@ -261,7 +368,7 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     std::cout << "  sample rename <slot> <name>            rename a loaded sample\n";
     std::cout << "  sample list                            list all loaded samples\n";
   } else {
-    std::cout << "Usage: plugin <scan|list|load|assign|set|get|info|status> ..." << '\n';
+    std::cout << "Usage: plugin <scan|list|load|assign|set|get|info|status|effect> ..." << '\n';
   }
 }
 
@@ -284,15 +391,23 @@ void handleSineCommand(PluginHost& plugins, std::istringstream& sineInput) {
 }
 
 void handleHelpCommand() {
+  std::cout << "help                       show this help" << '\n';
+  std::cout << "h                          alias for help" << '\n';
   std::cout << "play                       start playback" << '\n';
+  std::cout << "p                          alias for play" << '\n';
   std::cout << "stop                       stop playback" << '\n';
+  std::cout << "s                          alias for stop" << '\n';
   std::cout << "tempo <bpm>                set tempo" << '\n';
-  std::cout << "loop <on|off>              enable/disable looping for active play range" << '\n';
+  std::cout << "bpm <value>                alias for tempo" << '\n';
+  std::cout << "loop <on|off|clear>        enable/disable looping or clear active play range" << '\n';
   std::cout << "loop range <from> <to>     define loop/play range without starting" << '\n';
-  std::cout << "status                     show engine/transport/plugin state" << '\n';
+  std::cout << "status [--json [--minimal] [--pretty]] show engine/transport/plugin state" << '\n';
+  std::cout << "st [--json [--minimal] [--pretty]]     alias for status" << '\n';
   std::cout << "reset                      stop playback and reset counters" << '\n';
   std::cout << "save <file>                save module to file (defaults to .ex)" << '\n';
+  std::cout << "w <file>                   alias for save" << '\n';
   std::cout << "load <file>                load module from file (defaults to .ex)" << '\n';
+  std::cout << "r <file>                   alias for load" << '\n';
   std::cout << "plugin scan                rescan LV2 paths for available plugins" << '\n';
   std::cout << "plugin list                list discovered plugins" << '\n';
   std::cout << "plugin load <id>           load plugin by id (e.g. builtin.sine)" << '\n';
@@ -301,7 +416,32 @@ void handleHelpCommand() {
   std::cout << "plugin get <i> <p>         get LV2 control by port index or symbol" << '\n';
   std::cout << "plugin info <id>           show port layout for a plugin" << '\n';
   std::cout << "plugin status              show instrument->plugin assignments" << '\n';
+  std::cout << "plugin effect list         show master effect chain slots" << '\n';
+  std::cout << "plugin effect assign <s> <id>  assign LV2 effect to slot s (0-7)" << '\n';
+  std::cout << "plugin effect remove <s>   remove effect from slot s" << '\n';
+  std::cout << "plugin effect set <s> <p> <v>  set effect control port by index or symbol" << '\n';
+  std::cout << "plugin effect get <s> <p>  get effect control port value" << '\n';
   std::cout << "sample load <s> <name> <f> load WAV into slot s with a name" << '\n';
+  std::cout << "song pos                 compact song position and mode status" << '\n';
+  std::cout << "song p                   alias for song pos" << '\n';
+  std::cout << "song gp                  alias for song pos" << '\n';
+  std::cout << "song st                  alias for song status" << '\n';
+  std::cout << "song ls                  alias for song list" << '\n';
+  std::cout << "song g <entry>           alias for song goto <entry>" << '\n';
+  std::cout << "song first               jump to first song entry" << '\n';
+  std::cout << "song f                   alias for song first" << '\n';
+  std::cout << "song last                jump to last song entry" << '\n';
+  std::cout << "song l                   alias for song last" << '\n';
+  std::cout << "song next [wrap]         move to next song entry (optionally wrap)" << '\n';
+  std::cout << "song n [wrap]            alias for song next" << '\n';
+  std::cout << "song prev [wrap]         move to previous song entry (optionally wrap)" << '\n';
+  std::cout << "song b [wrap]            alias for song prev" << '\n';
+  std::cout << "song se <e> <p>          alias for song set <entry> <pattern>" << '\n';
+  std::cout << "song si <e> <p>          alias for song insert <entry> <pattern>" << '\n';
+  std::cout << "song ap <p>              alias for song append <pattern>" << '\n';
+  std::cout << "song rm <e>              alias for song remove <entry>" << '\n';
+  std::cout << "song mv <e> <d>          alias for song move <entry> <up|down>" << '\n';
+  std::cout << "song pl <m>              alias for song play <pattern|song|status>" << '\n';
   std::cout << "sample unload <s>          unload sample slot s" << '\n';
   std::cout << "sample rename <s> <name>   rename sample slot s" << '\n';
   std::cout << "sample play <s> [note]     preview sample slot s" << '\n';
@@ -311,6 +451,8 @@ void handleHelpCommand() {
   std::cout << "sine <instrument>          convenience command for builtin.sine" << '\n';
   std::cout << "note set r c n i [v fx fv] set note in pattern (optional vel/effect)" << '\n';
   std::cout << "note set dry ...           parse and preview note set without writing" << '\n';
+  std::cout << "note off dry r c t         preview note fadeout time (gate ticks)" << '\n';
+  std::cout << "note off r c t             set note fadeout time (gate ticks)" << '\n';
   std::cout << "note clear dry r c         preview note clear without writing" << '\n';
   std::cout << "note clear r c             clear note at row/channel" << '\n';
   std::cout << "note vel dry r c v         preview velocity set without writing" << '\n';
@@ -320,6 +462,16 @@ void handleHelpCommand() {
   std::cout << "note fx dry r c f fv       preview effect set without writing" << '\n';
   std::cout << "note fx r c f fv           set effect command/value for step" << '\n';
   std::cout << "pattern print [from] [to]  print pattern rows (default 0..15)" << '\n';
+  std::cout << "pattern duplicate [index]  duplicate current or selected pattern and switch to copy" << '\n';
+  std::cout << "pattern dup [index]        alias for pattern duplicate" << '\n';
+  std::cout << "pattern switch <index>     switch to pattern (1-indexed)" << '\n';
+  std::cout << "pattern sw <index>         alias for pattern switch" << '\n';
+  std::cout << "pattern remove             remove the current pattern" << '\n';
+  std::cout << "pattern del                alias for pattern remove" << '\n';
+  std::cout << "pattern list               list patterns and show current (same as pattern status)" << '\n';
+  std::cout << "pattern ls                 alias for pattern list" << '\n';
+  std::cout << "pattern insert <before|after> insert a new pattern before or after current" << '\n';
+  std::cout << "pattern in <before|after>  alias for pattern insert" << '\n';
   std::cout << "pattern play [f] [t]       play selected row range, or full pattern" << '\n';
   std::cout << "pattern template <name>    load a starter groove template" << '\n';
   std::cout << "pattern transpose [dry [preview [verbose]]] s [f t c] [step n] transpose notes by semitones" << '\n';
@@ -333,6 +485,7 @@ void handleHelpCommand() {
   std::cout << "pattern undo                undo last committed bulk pattern edit" << '\n';
   std::cout << "pattern redo                redo last undone bulk pattern edit" << '\n';
   std::cout << "record on [channel]        arm step recording" << '\n';
+  std::cout << "rec [channel]              alias for record on" << '\n';
   std::cout << "record off                 disarm step recording" << '\n';
   std::cout << "record channel <...>       set/show record channel without re-arming" << '\n';
   std::cout << "record cursor <...>        set/show/move record cursor row (e.g. 12, +4, -1, start, end, next, prev)" << '\n';
@@ -362,7 +515,7 @@ void handleHelpCommand() {
   std::cout << "midi clock autoconnect [name] [index] auto-connect virtual MIDI clock source" << '\n';
   std::cout << "midi clock diagnose [name] quick routing diagnostics for clock source" << '\n';
   std::cout << "midi clock diagnose live [name] live clock health probe (1s)" << '\n';
-  std::cout << "quit                       exit" << '\n';
+  std::cout << "quit / exit / q            exit" << '\n';
 }
 
 }  // namespace extracker

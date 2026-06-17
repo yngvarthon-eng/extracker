@@ -35,6 +35,74 @@
 #include "extracker/sequencer.hpp"
 #include "extracker/transport.hpp"
 
+namespace {
+
+std::string escapeModuleMessage(const std::string& text) {
+  std::string escaped;
+  escaped.reserve(text.size());
+  for (char ch : text) {
+    switch (ch) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped.push_back(ch);
+        break;
+    }
+  }
+  return escaped;
+}
+
+std::string unescapeModuleMessage(const std::string& text) {
+  std::string decoded;
+  decoded.reserve(text.size());
+  bool escaping = false;
+  for (char ch : text) {
+    if (!escaping) {
+      if (ch == '\\') {
+        escaping = true;
+      } else {
+        decoded.push_back(ch);
+      }
+      continue;
+    }
+
+    switch (ch) {
+      case 'n':
+        decoded.push_back('\n');
+        break;
+      case 'r':
+        decoded.push_back('\r');
+        break;
+      case 't':
+        decoded.push_back('\t');
+        break;
+      case '\\':
+        decoded.push_back('\\');
+        break;
+      default:
+        decoded.push_back(ch);
+        break;
+    }
+    escaping = false;
+  }
+  if (escaping) {
+    decoded.push_back('\\');
+  }
+  return decoded;
+}
+
+}  // namespace
+
 int main() {
   extracker::AudioEngine audio;
   extracker::Module module;
@@ -321,12 +389,6 @@ int main() {
   if (!plugins.assignInstrument(1, "builtin.square")) {
     std::cout << "Failed to assign builtin.square to instrument 1" << '\n';
   }
-  module.currentEditor().insertNote(0, 0, 48, 0, 0, 120, true);
-  module.currentEditor().insertNote(0, 1, 55, 1, 0, 96, false);
-  module.currentEditor().insertNote(1, 0, 52, 0, 0, 80, false);
-  module.currentEditor().insertNote(1, 1, 59, 1, 0, 70, true);
-  module.currentEditor().insertNote(2, 0, 55, 0, 0, 100, false);
-  module.currentEditor().insertNote(4, 1, 55, 1, 0, 127, true);
   transport.setTempoBpm(125.0);
   transport.setTicksPerBeat(6);
   transport.setTicksPerRow(1);
@@ -374,6 +436,17 @@ int main() {
     }
     out << "\n";
 
+    out << "PATTERN_SWING";
+    for (std::size_t patternIndex = 0; patternIndex < module.patternCount(); ++patternIndex) {
+      out << " " << static_cast<int>(module.patternSwing(patternIndex));
+    }
+    out << "\n";
+
+    out << "INSERT_SWING_INHERIT " << (module.inheritSwingOnInsert() ? 1 : 0) << "\n";
+    out << "ROW_EDIT_SCOPE " << (module.rowEditAllChannels() ? 1 : 0) << "\n";
+
+    out << "TRANSPORT " << transport.tempoBpm() << " " << transport.ticksPerBeat() << " " << transport.ticksPerRow() << "\n";
+
     out << "MIDI_MAP";
     for (std::size_t ch = 0; ch < midiChannelMap.size(); ++ch) {
       out << " " << midiChannelMap[ch];
@@ -388,6 +461,7 @@ int main() {
         out << "SAMPLE_ENTRY " << sampleSlot << " " << std::quoted(sampleName) << " " << std::quoted(samplePath) << "\n";
       }
     }
+    out << "MODULE_MESSAGE " << std::quoted(escapeModuleMessage(module.message())) << "\n";
     extracker::writeRecordState(out, recordState);
 
     return true;
@@ -405,7 +479,7 @@ int main() {
     std::size_t fileRows = 0;
     std::size_t fileChannels = 0;
     in >> magic >> fileRows >> fileChannels;
-    if (!in || fileRows != module.currentEditor().rows() || fileChannels != module.currentEditor().channels()) {
+    if (!in || fileRows == 0 || fileChannels == 0) {
       return false;
     }
 
@@ -434,62 +508,111 @@ int main() {
       }
 
       module.reset(fileRows, fileChannels, filePatternCount);
+
+      auto isSongTailToken = [](const std::string& token) {
+        return token == "SONG_ORDER" || token == "PATTERN_SWING" ||
+               token == "INSERT_SWING_INHERIT" || token == "ROW_EDIT_SCOPE" ||
+               token == "TRANSPORT" || token == "MIDI_MAP" ||
+               token == "MIDI_TRANSPORT" || token == "SAMPLE_BANK" ||
+               token == "SAMPLE_ENTRY" || token == "MODULE_MESSAGE" ||
+               token.rfind("RECORD_", 0) == 0;
+      };
+
+      std::string pendingToken;
+      bool hasPendingToken = false;
+
       for (std::size_t patternIndex = 0; patternIndex < filePatternCount; ++patternIndex) {
         std::string patternToken;
         std::size_t storedPatternIndex = 0;
-        in >> patternToken >> storedPatternIndex;
+        if (hasPendingToken) {
+          patternToken = pendingToken;
+          hasPendingToken = false;
+        } else {
+          in >> patternToken;
+        }
+        in >> storedPatternIndex;
         if (!in || patternToken != "PATTERN" || storedPatternIndex != patternIndex) {
           return false;
         }
 
         auto& editor = module.patternEditor(patternIndex);
-        for (std::size_t row = 0; row < editor.rows(); ++row) {
-          for (std::size_t channel = 0; channel < editor.channels(); ++channel) {
-            int parsedRow = 0;
-            int parsedChannel = 0;
-            int hasNote = 0;
-            int note = -1;
-            int instrument = 0;
-            int sample = 0xFFFF;
-            int gateTicks = 0;
-            int velocity = 100;
-            int retrigger = 0;
-            int effectCommand = 0;
-            int effectValue = 0;
-
-            in >> parsedRow >> parsedChannel >> hasNote >> note >> instrument >> sample >> gateTicks >> velocity >> retrigger >> effectCommand >> effectValue;
-            if (!in) {
+        while (true) {
+          std::string firstToken;
+          if (!(in >> firstToken)) {
+            if (patternIndex + 1 < filePatternCount) {
               return false;
             }
+            break;
+          }
 
-            if (hasNote != 0) {
-              editor.insertNote(
-                  parsedRow,
-                  parsedChannel,
-                  note,
-                  static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
-                  static_cast<std::uint32_t>(std::max(gateTicks, 0)),
-                  static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
-                  retrigger != 0,
-                  static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
-                  static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
-              if (sample != 0xFFFF) {
-                editor.setSample(parsedRow, parsedChannel, static_cast<std::uint16_t>(std::clamp(sample, 0, 65535)));
-              }
-            } else if (effectCommand != 0 || effectValue != 0) {
-              editor.setEffect(
-                  parsedRow,
-                  parsedChannel,
-                  static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
-                  static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+          if (firstToken == "PATTERN" || isSongTailToken(firstToken)) {
+            pendingToken = firstToken;
+            hasPendingToken = true;
+            break;
+          }
+
+          int parsedRow = 0;
+          {
+            std::istringstream rowParser(firstToken);
+            char extra = '\0';
+            if (!(rowParser >> parsedRow) || (rowParser >> extra)) {
+              return false;
             }
+          }
+
+          int parsedChannel = 0;
+          int hasNote = 0;
+          int note = -1;
+          int instrument = 0;
+          int sample = 0xFFFF;
+          int gateTicks = 0;
+          int velocity = 100;
+          int retrigger = 0;
+          int effectCommand = 0;
+          int effectValue = 0;
+
+          in >> parsedChannel >> hasNote >> note >> instrument >> sample >> gateTicks >> velocity >> retrigger >> effectCommand >> effectValue;
+          if (!in) {
+            return false;
+          }
+
+          if (parsedRow < 0 || parsedChannel < 0 ||
+              static_cast<std::size_t>(parsedRow) >= editor.rows() ||
+              static_cast<std::size_t>(parsedChannel) >= editor.channels()) {
+            continue;
+          }
+
+          if (hasNote != 0) {
+            editor.insertNote(
+                parsedRow,
+                parsedChannel,
+                note,
+                static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
+                static_cast<std::uint32_t>(std::max(gateTicks, 0)),
+                static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
+                retrigger != 0,
+                static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+                static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+            if (sample != 0xFFFF) {
+              editor.setSample(parsedRow, parsedChannel, static_cast<std::uint16_t>(std::clamp(sample, 0, 65535)));
+            }
+          } else if (effectCommand != 0 || effectValue != 0) {
+            editor.setEffect(
+                parsedRow,
+                parsedChannel,
+                static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+                static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
           }
         }
       }
 
       std::vector<std::size_t> songOrder;
       std::string tailToken;
-      while (in >> tailToken) {
+      while (hasPendingToken || (in >> tailToken)) {
+        if (hasPendingToken) {
+          tailToken = pendingToken;
+          hasPendingToken = false;
+        }
         if (tailToken == "SONG_ORDER") {
           songOrder.clear();
           for (std::size_t i = 0; i < fileSongLength; ++i) {
@@ -499,6 +622,51 @@ int main() {
               return false;
             }
             songOrder.push_back(entry);
+          }
+        } else if (tailToken == "PATTERN_SWING") {
+          std::vector<std::uint8_t> parsedSwing;
+          parsedSwing.reserve(module.patternCount());
+          for (std::size_t patternIndex = 0; patternIndex < module.patternCount(); ++patternIndex) {
+            int swingPercent = 50;
+            if (!(in >> swingPercent)) {
+              return false;
+            }
+            parsedSwing.push_back(static_cast<std::uint8_t>(std::clamp(swingPercent, 50, 75)));
+          }
+          for (std::size_t patternIndex = 0; patternIndex < parsedSwing.size(); ++patternIndex) {
+            module.setPatternSwing(patternIndex, parsedSwing[patternIndex]);
+          }
+        } else if (tailToken == "INSERT_SWING_INHERIT") {
+          int enabled = 0;
+          if (!(in >> enabled)) {
+            return false;
+          }
+          module.setInheritSwingOnInsert(enabled != 0);
+        } else if (tailToken == "ROW_EDIT_SCOPE") {
+          int allChannels = 0;
+          if (!(in >> allChannels)) {
+            return false;
+          }
+          module.setRowEditAllChannels(allChannels != 0);
+        } else if (tailToken == "TRANSPORT") {
+          std::string transportLine;
+          std::getline(in, transportLine);
+          std::istringstream transportParser(transportLine);
+          double tempoBpm = transport.tempoBpm();
+          int ticksPerBeat = static_cast<int>(transport.ticksPerBeat());
+          int ticksPerRow = static_cast<int>(transport.ticksPerRow());
+          if (transportParser >> tempoBpm >> ticksPerBeat) {
+            if (tempoBpm > 0.0) {
+              transport.setTempoBpm(tempoBpm);
+            }
+            if (ticksPerBeat > 0) {
+              transport.setTicksPerBeat(static_cast<std::uint32_t>(ticksPerBeat));
+            }
+            if (transportParser >> ticksPerRow) {
+              if (ticksPerRow > 0) {
+                transport.setTicksPerRow(static_cast<std::uint32_t>(ticksPerRow));
+              }
+            }
           }
         } else if (tailToken == "MIDI_MAP") {
           for (std::size_t ch = 0; ch < midiChannelMap.size(); ++ch) {
@@ -530,12 +698,11 @@ int main() {
           if (!resolvedSamplePath.is_absolute()) {
             resolvedSamplePath = moduleDirectory / resolvedSamplePath;
           }
-          if (!plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
-            return false;
+          if (plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+            plugins.setSampleNameForSlot(
+                static_cast<std::uint16_t>(sampleSlot),
+                std::filesystem::path(samplePath).stem().string());
           }
-          plugins.setSampleNameForSlot(
-              static_cast<std::uint16_t>(sampleSlot),
-              std::filesystem::path(samplePath).stem().string());
         } else if (tailToken == "SAMPLE_ENTRY") {
           int sampleSlot = -1;
           std::string sampleName;
@@ -550,10 +717,15 @@ int main() {
           if (!resolvedSamplePath.is_absolute()) {
             resolvedSamplePath = moduleDirectory / resolvedSamplePath;
           }
-          if (!plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+          if (plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+            plugins.setSampleNameForSlot(static_cast<std::uint16_t>(sampleSlot), sampleName);
+          }
+        } else if (tailToken == "MODULE_MESSAGE") {
+          std::string escapedMessage;
+          if (!(in >> std::quoted(escapedMessage))) {
             return false;
           }
-          plugins.setSampleNameForSlot(static_cast<std::uint16_t>(sampleSlot), sampleName);
+          module.setMessage(unescapeModuleMessage(escapedMessage));
         } else {
           bool handledRecordToken = false;
           if (!extracker::applyRecordFileToken(
@@ -571,6 +743,7 @@ int main() {
         module.setSongOrder(songOrder);
       }
       module.switchToPattern(std::min(fileCurrentPattern, module.patternCount() - 1));
+      transport.setSwingPercent(module.currentPatternSwing());
       (void)fileCurrentSongPosition;
       return true;
     }
@@ -626,7 +799,52 @@ int main() {
 
     std::string tailToken;
     while (in >> tailToken) {
-      if (tailToken == "MIDI_MAP") {
+      if (tailToken == "PATTERN_SWING") {
+        std::vector<std::uint8_t> parsedSwing;
+        parsedSwing.reserve(module.patternCount());
+        for (std::size_t patternIndex = 0; patternIndex < module.patternCount(); ++patternIndex) {
+          int swingPercent = 50;
+          if (!(in >> swingPercent)) {
+            return false;
+          }
+          parsedSwing.push_back(static_cast<std::uint8_t>(std::clamp(swingPercent, 50, 75)));
+        }
+        for (std::size_t patternIndex = 0; patternIndex < parsedSwing.size(); ++patternIndex) {
+          module.setPatternSwing(patternIndex, parsedSwing[patternIndex]);
+        }
+      } else if (tailToken == "INSERT_SWING_INHERIT") {
+        int enabled = 0;
+        if (!(in >> enabled)) {
+          return false;
+        }
+        module.setInheritSwingOnInsert(enabled != 0);
+      } else if (tailToken == "ROW_EDIT_SCOPE") {
+        int allChannels = 0;
+        if (!(in >> allChannels)) {
+          return false;
+        }
+        module.setRowEditAllChannels(allChannels != 0);
+      } else if (tailToken == "TRANSPORT") {
+        std::string transportLine;
+        std::getline(in, transportLine);
+        std::istringstream transportParser(transportLine);
+        double tempoBpm = transport.tempoBpm();
+        int ticksPerBeat = static_cast<int>(transport.ticksPerBeat());
+        int ticksPerRow = static_cast<int>(transport.ticksPerRow());
+        if (transportParser >> tempoBpm >> ticksPerBeat) {
+          if (tempoBpm > 0.0) {
+            transport.setTempoBpm(tempoBpm);
+          }
+          if (ticksPerBeat > 0) {
+            transport.setTicksPerBeat(static_cast<std::uint32_t>(ticksPerBeat));
+          }
+          if (transportParser >> ticksPerRow) {
+            if (ticksPerRow > 0) {
+              transport.setTicksPerRow(static_cast<std::uint32_t>(ticksPerRow));
+            }
+          }
+        }
+      } else if (tailToken == "MIDI_MAP") {
         for (std::size_t ch = 0; ch < midiChannelMap.size(); ++ch) {
           int mapped = -1;
           if (!(in >> mapped)) {
@@ -657,13 +875,12 @@ int main() {
         if (!resolvedSamplePath.is_absolute()) {
           resolvedSamplePath = moduleDirectory / resolvedSamplePath;
         }
-        if (!plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
-          return false;
+        if (plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+          // Derive a default name from the filename stem
+          plugins.setSampleNameForSlot(
+              static_cast<std::uint16_t>(sampleSlot),
+              std::filesystem::path(samplePath).stem().string());
         }
-        // Derive a default name from the filename stem
-        plugins.setSampleNameForSlot(
-            static_cast<std::uint16_t>(sampleSlot),
-            std::filesystem::path(samplePath).stem().string());
       } else if (tailToken == "SAMPLE_ENTRY") {
         int sampleSlot = -1;
         std::string sampleName;
@@ -678,10 +895,15 @@ int main() {
         if (!resolvedSamplePath.is_absolute()) {
           resolvedSamplePath = moduleDirectory / resolvedSamplePath;
         }
-        if (!plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+        if (plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
+          plugins.setSampleNameForSlot(static_cast<std::uint16_t>(sampleSlot), sampleName);
+        }
+      } else if (tailToken == "MODULE_MESSAGE") {
+        std::string escapedMessage;
+        if (!(in >> std::quoted(escapedMessage))) {
           return false;
         }
-        plugins.setSampleNameForSlot(static_cast<std::uint16_t>(sampleSlot), sampleName);
+        module.setMessage(unescapeModuleMessage(escapedMessage));
       } else {
         bool handledRecordToken = false;
         if (!extracker::applyRecordFileToken(
@@ -694,6 +916,8 @@ int main() {
         }
       }
     }
+
+    transport.setSwingPercent(module.currentPatternSwing());
 
     return true;
   };
@@ -708,6 +932,12 @@ int main() {
   std::function<std::vector<extracker::MidiPortEntry>(const std::string&)> parseAconnectPortsFn = parseAconnectPorts;
   std::function<std::string(std::string)> toLowerFn = toLower;
   std::function<bool(const std::string&, int&, int&)> parseHintEndpointFn = parseHintEndpoint;
+  std::function<std::size_t()> songLengthFn = [&module]() {
+    return module.songLength();
+  };
+  std::function<std::size_t(std::size_t)> songEntryAtFn = [&module](std::size_t index) {
+    return module.songEntryAt(index);
+  };
   std::function<bool()> midiInputRunningFn = [&midiInput]() {
     return midiInput.isRunning();
   };
@@ -775,14 +1005,13 @@ int main() {
           }
         }
 
-        std::uint32_t rowBeforeDispatch = transport.currentRow();
         if (!skipDispatchThisTick) {
           sequencer.update(module.currentEditor(), transport, audio, plugins);
         }
 
         if (!skipDispatchThisTick && songModeEnabled.load() && !playRangeActive) {
-          std::uint32_t rowAfterDispatch = transport.currentRow();
-          if (rowAfterDispatch < rowBeforeDispatch && module.songLength() > 0) {
+          bool patternWrapped = sequencer.consumePatternWrapEvent();
+          if (patternWrapped && module.songLength() > 0) {
             std::size_t currentPos = std::min(songPlaybackPosition.load(), module.songLength() - 1);
             std::size_t nextPos = currentPos + 1;
             if (nextPos >= module.songLength()) {
@@ -795,6 +1024,7 @@ int main() {
             }
             songPlaybackPosition.store(nextPos);
             module.switchToPattern(module.songEntryAt(nextPos));
+            transport.setSwingPercent(module.currentPatternSwing());
             sequencer.reset();
             audio.allNotesOff();
             transport.resetTickCount();
@@ -817,64 +1047,73 @@ int main() {
     }
   });
 
-  std::cout << "Commands: help, play, stop, tempo <bpm>, loop <on|off|range>, status, reset, save <file>, load <file>, quit" << '\n';
+  std::cout << "Commands: help (h), play (p), stop (s), tempo <bpm> (bpm <value>), loop <on|off|clear|range>, status [--json [--minimal] [--pretty]] (st), reset, save <file> (w), load <file> (r), message <set|get> <text>, quit (q)" << '\n';
   std::cout << "Plugin commands: plugin list, plugin load <id>, plugin assign <instrument> <id>, sample <load|unload|rename|play|stop|list|status> ..., sine <instrument>" << '\n';
-  std::cout << "Pattern commands: note set <row> <ch> <midi> <instr> [vel] [fx] [fxval], note set dry <row> <ch> <midi> <instr> [vel] [fx] [fxval], note clear <row> <ch>, note clear dry <row> <ch>, note vel <row> <ch> <vel>, note vel dry <row> <ch> <vel>, note gate <row> <ch> <ticks>, note gate dry <row> <ch> <ticks>, note fx <row> <ch> <fx> <fxval>, note fx dry <row> <ch> <fx> <fxval>, pattern print [from] [to], pattern display [from] [to], pattern watch [update_interval_ms], pattern play [from] [to] [step <n>], pattern template <blank|house|electro>, pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>] [chance <p>], pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>] [chance <p>], pattern copy <from> <to> [chFrom] [chTo] [step <n>], pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>], pattern humanize [dry [preview [verbose]]] <velRange> <gateRangePercent> <seed> [from] [to] [ch] [step <n>], pattern randomize [dry [preview [verbose]]] <probabilityPercent> <seed> [from] [to] [ch] [step <n>], pattern scale-duration [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern invert-notes [dry [preview [verbose]]] [centerNote] [from] [to] [ch] [step <n>], pattern filter-notes [dry [preview [verbose]]] <minNote> <maxNote> [minVel] [maxVel] [from] [to] [ch] [delete], pattern undo, pattern redo" << '\n';
-  std::cout << "Song commands: song status, song list, song set <entry> <pattern>, song insert <entry> <pattern>, song append <pattern>, song remove <entry>, song move <entry> <up|down>, song goto <entry>, song play <pattern|song|status>" << '\n';
-  std::cout << "Record commands: record on [channel], record off, record channel <index|status>, record cursor <row|+delta|-delta|start|end|next|prev|status>, record note <midi> [instr] [vel] [fx] [fxval], record note <midi> vel <vel> [fx] [fxval], record note <midi> fx <fx> <fxval>, record note <midi> instr <i> [vel <v>] [fx <f> <fv>], record note dry <midi> ..., record quantize <on|off|status>, record overdub <on|off|status>, record jump <ticks|ratio|status>, record undo, record redo" << '\n';
+  std::cout << "Pattern commands: note set <row> <ch> <midi> <instr> [vel] [fx] [fxval], note set dry <row> <ch> <midi> <instr> [vel] [fx] [fxval], note off <row> <ch> <fadeout_ticks>, note off dry <row> <ch> <fadeout_ticks>, note clear <row> <ch>, note clear dry <row> <ch>, note vel <row> <ch> <vel>, note vel dry <row> <ch> <vel>, note gate <row> <ch> <ticks>, note gate dry <row> <ch> <ticks>, note fx <row> <ch> <fx> <fxval>, note fx dry <row> <ch> <fx> <fxval>, pattern print [from] [to], pattern display [from] [to], pattern watch [update_interval_ms], pattern play [from] [to] [step <n>], pattern template <blank|house|electro>, pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>] [chance <p>], pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>] [chance <p>], pattern copy <from> <to> [chFrom] [chTo] [step <n>], pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>], pattern humanize [dry [preview [verbose]]] <velRange> <gateRangePercent> <seed> [from] [to] [ch] [step <n>], pattern randomize [dry [preview [verbose]]] <probabilityPercent> <seed> [from] [to] [ch] [step <n>], pattern scale-duration [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern invert-notes [dry [preview [verbose]]] [centerNote] [from] [to] [ch] [step <n>], pattern filter-notes [dry [preview [verbose]]] <minNote> <maxNote> [minVel] [maxVel] [from] [to] [ch] [delete], pattern undo, pattern redo" << '\n';
+  std::cout << "Song commands: pattern duplicate [index] (pattern dup), pattern switch <index> (pattern sw), pattern list (pattern ls), pattern insert <before|after> (pattern in), pattern insert-swing <on|off|status>, pattern remove (pattern del), song status (song st), song list (song ls), song pos (song p, song gp), song set <entry> <pattern> (song se), song insert <entry> <pattern> (song si), song append <pattern> (song ap), song remove <entry> (song rm), song move <entry> <up|down> (song mv), song goto <entry> (song g), song first (song f), song last (song l), song next [wrap] (song n), song prev [wrap] (song b), song play <pattern|song|status> (song pl)" << '\n';
+  std::cout << "Record commands: record on [channel] (rec [channel]), record off, record channel <index|status>, record cursor <row|+delta|-delta|start|end|next|prev|status>, record note <midi> [instr] [vel] [fx] [fxval], record note <midi> vel <vel> [fx] [fxval], record note <midi> fx <fx> <fxval>, record note <midi> instr <i> [vel <v>] [fx <f> <fv>], record note dry <midi> ..., record quantize <on|off|status>, record overdub <on|off|status>, record jump <ticks|ratio|status>, record undo, record redo" << '\n';
   std::cout << "MIDI commands: midi on, midi off, midi status, midi quick [all|compact], midi thru <on|off>, midi instrument <index>, midi learn <on|off|status>, midi map <ch> <instr|clear>, midi map <status|clear all>, midi transport <on|off|toggle|status|timeout|lock|reset>, midi clock <help|quick|sources|autoconnect|diagnose>" << '\n';
   std::cout << "exTracker> " << std::flush;
 
   extracker::CommandRegistry commandRegistry;
 
-  extracker::CoreCommandContext coreContext{transport,
-                                            module.currentEditor(),
-                                            stateMutex,
-                                            loopEnabled,
-                                            playRangeFrom,
-                                            playRangeTo,
-                                            playRangeActive,
-                                            recordEnabled,
-                                            recordQuantizeEnabled,
-                                            recordOverdubEnabled,
-                                            recordInsertJump,
-                                            recordCanUndo,
-                                            recordCanRedo,
-                                            recordChannel,
-                                            recordCursorRow,
-                                            midiInput,
-                                            midiThruEnabled,
-                                            midiInstrument,
-                                            midiLearnEnabled,
-                                            midiTransportSyncEnabled,
-                                            midiTransportRunning,
-                                            midiClockTimeout,
-                                            midiFallbackLockTempo,
-                                            hasMidiClockTimestamp,
-                                            midiClockEstimatedBpm,
-                                            midiChannelMap,
-                                            sequencer,
-                                            plugins,
-                                            audio,
-                                            midiClockAliveFn,
-                                            transportSourceFn,
-                                            normalizeModulePathFn,
-                                            savePatternToFileFn,
-                                            loadPatternFromFileFn};
+  auto makeCoreContext = [&]() -> extracker::CoreCommandContext {
+    return extracker::CoreCommandContext{transport,
+                                         module.currentEditor(),
+                                         stateMutex,
+                                         loopEnabled,
+                                         playRangeFrom,
+                                         playRangeTo,
+                                         playRangeActive,
+                                         recordEnabled,
+                                         recordQuantizeEnabled,
+                                         recordOverdubEnabled,
+                                         recordInsertJump,
+                                         recordCanUndo,
+                                         recordCanRedo,
+                                         recordChannel,
+                                         recordCursorRow,
+                                         midiInput,
+                                         midiThruEnabled,
+                                         midiInstrument,
+                                         midiLearnEnabled,
+                                         midiTransportSyncEnabled,
+                                         midiTransportRunning,
+                                         midiClockTimeout,
+                                         midiFallbackLockTempo,
+                                         hasMidiClockTimestamp,
+                                         midiClockEstimatedBpm,
+                                         midiChannelMap,
+                                         sequencer,
+                                         plugins,
+                                         audio,
+                                         module,
+                                         midiClockAliveFn,
+                                         transportSourceFn,
+                                         songLengthFn,
+                                         songEntryAtFn,
+                                         &songModeEnabled,
+                                         &songPlaybackPosition,
+                                         normalizeModulePathFn,
+                                         savePatternToFileFn,
+                                         loadPatternFromFileFn};
+  };
 
-  extracker::RecordCommandContext recordContext{module.currentEditor(),
-                                                transport,
-                                                stateMutex,
-                                                recordState,
-                                                recordChannel,
-                                                recordCursorRow,
-                                                recordEnabled,
-                                                recordQuantizeEnabled,
-                                                recordOverdubEnabled,
-                                                recordInsertJump,
-                                                midiInstrument,
-                                                chooseRecordRowFn,
-                                                applyRecordWriteFn};
+  auto makeRecordContext = [&]() -> extracker::RecordCommandContext {
+    return extracker::RecordCommandContext{module.currentEditor(),
+                                           transport,
+                                           stateMutex,
+                                           recordState,
+                                           recordChannel,
+                                           recordCursorRow,
+                                           recordEnabled,
+                                           recordQuantizeEnabled,
+                                           recordOverdubEnabled,
+                                           recordInsertJump,
+                                           midiInstrument,
+                                           chooseRecordRowFn,
+                                           applyRecordWriteFn};
+  };
 
   extracker::MidiCommandContext midiContext{midiInput,
                                  onMidiEventFn,
@@ -901,19 +1140,21 @@ int main() {
                                    midiEndpointHintFn,
                                    executeSystemCommandFn};
 
-  extracker::PatternCommandContext patternContext{module.currentEditor(),
-                                                   stateMutex,
-                                                   transport,
-                                                   sequencer,
-                                                   audio,
-                                                   playRangeFrom,
-                                                   playRangeTo,
-                                                   playRangeStep,
-                                                   playRangeActive,
-                                                   loopEnabled,
-                                                   recordCanUndo,
-                                                   recordCanRedo,
-                                                   recordCursorRow};
+  auto makePatternContext = [&]() -> extracker::PatternCommandContext {
+    return extracker::PatternCommandContext{module.currentEditor(),
+                                            stateMutex,
+                                            transport,
+                                            sequencer,
+                                            audio,
+                                            playRangeFrom,
+                                            playRangeTo,
+                                            playRangeStep,
+                                            playRangeActive,
+                                            loopEnabled,
+                                            recordCanUndo,
+                                            recordCanRedo,
+                                            recordCursorRow};
+  };
 
   extracker::CommandBindings commandBindings = extracker::createDefaultCommandBindings(
       extracker::DefaultCommandBindingCallbacks{
@@ -933,29 +1174,105 @@ int main() {
             extracker::handleNoteCommand(module.currentEditor(), stateMutex, input);
           },
           [&](std::istringstream& input) {
-            extracker::handlePatternCommand(patternContext, input);
+            extracker::handlePatternCommand(makePatternContext(), input);
           },
           [&](std::istringstream& input) {
-            extracker::handleRecordCommand(input, recordContext);
+            extracker::handleRecordCommand(input, makeRecordContext());
           },
           [&](std::istringstream& input) {
             extracker::handleMidiCommand(input, midiContext);
           },
           [&](const std::string& command, std::istringstream& input) {
-            extracker::handleCoreCommand(command, input, coreContext);
+            extracker::handleCoreCommand(command, input, makeCoreContext());
           }});
   extracker::registerCommandHandlers(commandRegistry, commandBindings);
 
-  std::string line;
-  while (std::getline(std::cin, line)) {
-    std::istringstream input(line);
+  commandRegistry["fx"] = [](std::istringstream& input) {
+    std::string sub;
+    input >> sub;
+    if (sub != "list") {
+      std::cout << "Usage: fx list\n";
+      return;
+    }
+    struct FxEntry {
+      const char* code;
+      const char* name;
+      const char* value;
+      bool implemented;
+    };
+    static const FxEntry fx[] = {
+      { "00", "Arpeggio",          "xxyy  (x=+semitone1, y=+semitone2)",    true  },
+      { "01", "Slide Up",          "speed",                                  true  },
+      { "02", "Slide Down",        "speed",                                  true  },
+      { "03", "Tone Portamento",   "speed",                                  true  },
+      { "04", "Vibrato",           "xxyy  (x=speed, y=depth)",               true  },
+      { "05", "Vol Slide+Porta",   "xxyy  (x=up, y=down)",                   true  },
+      { "06", "Vol Slide+Vibrato", "xxyy  (x=up, y=down)",                   true  },
+      { "07", "Tremolo",           "xxyy  (x=speed, y=depth)",               true  },
+      { "08", "Pan",               "00..FF  (internal synth stereo pan)",      true  },
+      { "09", "Retrigger",         "ticks",                                   true  },
+      { "0A", "Volume Slide",      "xxyy  (x=up nibble, y=down nibble)",      true  },
+      { "0B", "Pattern Jump",      "row",                                     true  },
+      { "0C", "Set Volume",        "00..7F",                                  true  },
+      { "0D", "Pattern Break",     "row",                                     true  },
+      { "0E", "Extended",          "subcommand (E0/E1/E2/E3/E4/E5/E6/E7/E8/E9/EA/EB/EC/ED/EE/EF)", true  },
+      { "0F", "Speed/Tempo",       "<32 = set TPR, >=32 = set BPM",           true  },
+      { "17", "Set TPB",           "ticks-per-beat (1..255)",                 true  },
+    };
+    std::cout << "FX  Name                Value                              OK\n";
+    std::cout << "--- ------------------- ---------------------------------- ---\n";
+    std::cout << "Input formats: CCVV (1706), CCV+Enter (170), edit existing FX value with VV in GUI FX mode\n";
+    for (const auto& e : fx) {
+      char line[128];
+      std::snprintf(line, sizeof(line), "%-3s %-19s %-34s %s\n",
+        e.code, e.name, e.value, e.implemented ? "yes" : "no");
+      std::cout << line;
+    }
+  };
+
+  auto trim = [](const std::string& text) -> std::string {
+    const auto start = text.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) {
+      return {};
+    }
+    const auto end = text.find_last_not_of(" \t\r\n");
+    return text.substr(start, end - start + 1);
+  };
+
+  auto splitChainedCommands = [&](const std::string& rawLine) {
+    std::vector<std::string> commands;
+    std::string current;
+    for (char ch : rawLine) {
+      if (ch == ';') {
+        std::string candidate = trim(current);
+        if (!candidate.empty()) {
+          commands.push_back(std::move(candidate));
+        }
+        current.clear();
+      } else {
+        current.push_back(ch);
+      }
+    }
+    std::string candidate = trim(current);
+    if (!candidate.empty()) {
+      commands.push_back(std::move(candidate));
+    }
+    return commands;
+  };
+
+  bool shouldExit = false;
+  auto executeCommandLine = [&](const std::string& commandLine) {
+    std::istringstream input(commandLine);
     std::string command;
     input >> command;
 
-    if (command == "quit" || command == "exit") {
-      break;
-    } else if (command == "pattern" || command == "song") {
-      // Handle both pattern management and pattern commands
+    if (command == "quit" || command == "exit" || command == "q") {
+      shouldExit = true;
+      return;
+    }
+
+    if (command == "pattern" || command == "song") {
+      // Handle both pattern management and pattern commands.
       std::vector<std::string> tokens;
       std::string token;
       while (input >> token) {
@@ -966,29 +1283,48 @@ int main() {
         extracker::ModuleCommandContext moduleContext{module, &songModeEnabled, &songPlaybackPosition};
         extracker::handleModuleCommand(command, tokens, moduleContext);
       } else {
-        // Check if this is a module pattern-management command (list, switch, insert, remove)
+        // Check if this is a module pattern-management command (list, switch, insert, remove).
         if (!tokens.empty() && (tokens[0] == "list" || tokens[0] == "status" ||
                                 tokens[0] == "switch" || tokens[0] == "insert" ||
-                                tokens[0] == "remove")) {
+                                tokens[0] == "remove" || tokens[0] == "duplicate" ||
+                                tokens[0] == "dup" || tokens[0] == "sw" || tokens[0] == "del" || tokens[0] == "ls" || tokens[0] == "in")) {
           extracker::ModuleCommandContext moduleContext{module, &songModeEnabled, &songPlaybackPosition};
           extracker::handleModuleCommand(command, tokens, moduleContext);
         } else {
-          // Regular pattern commands
-          std::istringstream patternInput(line);
+          // Regular pattern commands.
+          std::istringstream patternInput(commandLine);
           std::string dummy;
           patternInput >> dummy;  // consume "pattern"
-          extracker::handlePatternCommand(patternContext, patternInput);
+          extracker::handlePatternCommand(makePatternContext(), patternInput);
         }
       }
-    } else if (!command.empty()) {
-      auto commandIt = commandRegistry.find(command);
-      if (commandIt != commandRegistry.end()) {
-        commandIt->second(input);
-      } else {
-        std::cout << "Unknown command: " << command << '\n';
-      }
+      return;
     }
 
+    if (command.empty()) {
+      return;
+    }
+
+    auto commandIt = commandRegistry.find(command);
+    if (commandIt != commandRegistry.end()) {
+      commandIt->second(input);
+    } else {
+      std::cout << "Unknown command: " << command << '\n';
+    }
+  };
+
+  std::string line;
+  while (std::getline(std::cin, line)) {
+    const auto chainedCommands = splitChainedCommands(line);
+    for (const auto& commandLine : chainedCommands) {
+      executeCommandLine(commandLine);
+      if (shouldExit) {
+        break;
+      }
+    }
+    if (shouldExit) {
+      break;
+    }
     std::cout << "exTracker> " << std::flush;
   }
 

@@ -1,5 +1,6 @@
 #include "pattern_grid.h"
 #include "app.h"
+#include "extracker/pattern_editor.hpp"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <algorithm>
 #include <chrono>
@@ -56,7 +57,9 @@ PatternGrid::PatternGrid(ExTrackerApp& app) : app(app) {
   setWantsKeyboardFocus(true);
 }
 
-PatternGrid::~PatternGrid() = default;
+PatternGrid::~PatternGrid() {
+  stopTimer();
+}
 
 void PatternGrid::setSelectionChangedCallback(std::function<void(int, int)> callback) {
   selectionChangedCallback = std::move(callback);
@@ -70,9 +73,25 @@ void PatternGrid::setTogglePlaybackCallback(std::function<void()> callback) {
   togglePlaybackCallback = std::move(callback);
 }
 
+void PatternGrid::setFocusModuleMessageCallback(std::function<void()> callback) {
+  focusModuleMessageCallback = std::move(callback);
+}
+
+void PatternGrid::setSearchNavigationCallback(std::function<void(bool)> callback) {
+  searchNavigationCallback = std::move(callback);
+}
+
 void PatternGrid::setInsertDefaults(std::uint32_t gateTicks, std::uint8_t velocity) {
   insertGateTicks = gateTicks;
   insertVelocity = std::max<std::uint8_t>(velocity, 1);
+}
+
+void PatternGrid::setPreviewDurationMs(std::uint32_t durationMs) {
+  previewDurationMs = std::clamp<std::uint32_t>(durationMs, 20, 2000);
+}
+
+void PatternGrid::setFollowPreviewOnSelect(bool enabled) {
+  followPreviewOnSelect = enabled;
 }
 
 void PatternGrid::setKeyboardOctave(int octave) {
@@ -105,7 +124,7 @@ void PatternGrid::setCompactDensity(bool compact) {
   compactDensity = compact;
   cellWidth = compactDensity ? 6 : 8;
   cellHeight = compactDensity ? 22 : 30;
-  headerHeight = compactDensity ? 34 : 40;
+  headerHeight = compactDensity ? 32 : 40;  // Channel numbers + channel info + hint band
   labelWidth = compactDensity ? 32 : 40;
   resized();
   repaint();
@@ -115,12 +134,21 @@ bool PatternGrid::isCompactDensity() const {
   return compactDensity;
 }
 
+void PatternGrid::jumpToCell(int row, int channel) {
+  const int maxRow = std::max(0, static_cast<int>(app.module.currentEditor().rows()) - 1);
+  const int maxChannel = std::max(0, static_cast<int>(app.module.currentEditor().channels()) - 1);
+  const int targetRow = std::clamp(row, 0, maxRow);
+  const int targetChannel = std::clamp(channel, 0, maxChannel);
+  grabKeyboardFocus();
+  selectCell(targetRow, targetChannel, false);
+}
+
 int PatternGrid::preferredCellWidth() const {
   return compactDensity ? 6 : 8;
 }
 
 int PatternGrid::preferredHeaderHeight() const {
-  return compactDensity ? 34 : 40;
+  return compactDensity ? 30 : 36;
 }
 
 int PatternGrid::preferredLabelWidth() const {
@@ -203,7 +231,7 @@ void PatternGrid::clampSelectionToBounds() {
 
 void PatternGrid::paint(juce::Graphics& g) {
   // Background
-  g.fillAll(juce::Colours::darkgrey);
+  g.fillAll(app.darkMode ? juce::Colour(0xFF111111) : juce::Colours::darkgrey);
 
   drawHeaders(g);
   drawGrid(g);
@@ -233,37 +261,107 @@ void PatternGrid::resized() {
 }
 
 void PatternGrid::drawHeaders(juce::Graphics& g) {
-  g.setColour(juce::Colours::darkslategrey);
+  g.setColour(app.darkMode ? juce::Colour(0xFF0D1117) : juce::Colours::darkslategrey);
   g.fillRect(0, 0, getWidth(), headerHeight);
 
-  // Draw channel headers
+  const int channelNumberBandHeight = compactDensity ? 14 : 16;
+  const int channelInfoBandHeight = 14;
+  const int channelInfoBandY = channelNumberBandHeight;
+  const int hintBandY = channelNumberBandHeight + channelInfoBandHeight;
+  const int hintBandHeight = std::max(0, headerHeight - hintBandY);
+
+  // Draw channel numbers band
   g.setColour(juce::Colours::white);
   g.setFont(10.0f);
 
-  for (int ch = 0; ch < static_cast<int>(app.module.currentEditor().channels()); ++ch) {
+  int numChannels = static_cast<int>(app.module.currentEditor().channels());
+  for (int ch = 0; ch < numChannels; ++ch) {
     int x = labelWidth + ch * cellWidth;
-    g.drawText(juce::String(ch), x, 0, cellWidth, headerHeight, juce::Justification::centred);
+
+    // Check if channel is muted
+    bool isMuted = false;
+    if (static_cast<std::size_t>(ch) < app.channelMuted.size()) {
+      isMuted = app.channelMuted[static_cast<std::size_t>(ch)];
+    }
+
+    if (isMuted) {
+      g.setColour(juce::Colour(0xFFFF6666));  // Red for muted
+    } else {
+      g.setColour(juce::Colours::white);
+    }
+
+    juce::String label = juce::String(ch);
+    if (isMuted) {
+      label += "⊘";
+    }
+    g.drawText(label, x, 0, cellWidth, channelNumberBandHeight, juce::Justification::centred);
   }
 
+  g.setColour(juce::Colours::dimgrey);
+  g.drawHorizontalLine(channelNumberBandHeight - 1, 0.0f, static_cast<float>(getWidth()));
+
+  // Draw channel info band
   g.setColour(juce::Colours::lightgrey);
-  g.setFont(9.0f);
-  juce::String hint = "KB Oct " + juce::String(keyboardOctave) + "  Step " + juce::String(editStep);
-  if (fxInputMode) {
-    hint = "[FX] " + hint;
+  g.setFont(compactDensity ? 9.0f : 10.0f);
+
+  for (int ch = 0; ch < numChannels; ++ch) {
+    int x = labelWidth + ch * cellWidth;
+    int y = channelInfoBandY;
+
+    // Instrument
+    std::string infoText;
+    if (static_cast<std::size_t>(ch) < app.channelInstruments.size()) {
+      infoText = "I:" + toUpperHex(app.channelInstruments[static_cast<std::size_t>(ch)], 2);
+    } else {
+      infoText = "I:--";
+    }
+
+    // Pan
+    std::uint8_t pan = app.sequencer.panByChannel(static_cast<std::size_t>(ch));
+    if (pan < 0x50) {
+      infoText += " L";
+    } else if (pan > 0xB0) {
+      infoText += " R";
+    } else {
+      infoText += " C";
+    }
+
+    // Voice count
+    int voiceCount = 0;
+    if (static_cast<std::size_t>(ch) < app.channelInstruments.size()) {
+      voiceCount = static_cast<int>(app.plugins.activeVoiceCountForInstrument(
+          app.channelInstruments[static_cast<std::size_t>(ch)]));
+    }
+    infoText += " " + std::to_string(std::min(voiceCount, 9)) + "v";
+
+    g.drawText(juce::String(infoText), x + 1, y + 1, cellWidth - 2, channelInfoBandHeight - 2,
+               juce::Justification::centred);
   }
+
+  g.setColour(juce::Colours::dimgrey);
+  g.drawHorizontalLine(hintBandY - 1, 0.0f, static_cast<float>(getWidth()));
+
+  // Draw hint band
+  g.setColour(juce::Colours::lightgrey);
+  g.setFont(compactDensity ? 7.0f : 8.0f);
+  juce::String hint = "KB" + juce::String(keyboardOctave) + " Stp" + juce::String(editStep);
+  if (fxInputMode) hint = "[FX] " + hint;
+  if (volumeInputMode) hint = "[VOL] " + hint;
+  if (sampleInputMode) hint = "[SMP] " + hint;
   if (selectedRow >= 0 && selectedChannel >= 0) {
     int minRow = selectedRow;
     int maxRow = selectedRow;
     int minChannel = selectedChannel;
     int maxChannel = selectedChannel;
     getBlockBounds(minRow, maxRow, minChannel, maxChannel);
-    const int blockRows = maxRow - minRow + 1;
-    const int blockChannels = maxChannel - minChannel + 1;
-    hint += "  Sel " + juce::String(blockRows) + "x" + juce::String(blockChannels);
+    hint += "  Sel:" + juce::String(maxRow - minRow + 1) + "x" + juce::String(maxChannel - minChannel + 1);
   }
-  hint += "  FX toggle: | or ` or F2";
-  hint += "  Shift+Arrows/Drag mark  Ctrl/Cmd+C/X/V  Ctrl/Cmd+Up/Down transpose";
-  g.drawText(hint, 0, 0, getWidth() - 6, headerHeight, juce::Justification::centredRight);
+  hint += "  FXadv:" + juce::String(fxCommitAutoAdvance ? "ON" : "OFF") + "(F6)";
+  hint += "  FX:|/`/F2  VOL:'/F3  SMP:;/F4";
+  hint += "  Alt+drag:scrub  Shift+arrows/drag:mark  Ctrl+C/X/V  Ctrl+Up/Down:transpose";
+  if (hintBandHeight > 0) {
+    g.drawText(hint, 4, hintBandY, getWidth() - 8, hintBandHeight, juce::Justification::centredLeft, true);
+  }
 }
 
 void PatternGrid::drawGrid(juce::Graphics& g) {
@@ -278,9 +376,10 @@ void PatternGrid::drawGrid(juce::Graphics& g) {
   }
 
   for (int row = 0; row < numRows; ++row) {
+    int y = startY + row * cellHeight;
+
     for (int ch = 0; ch < numChannels; ++ch) {
       int x = labelWidth + ch * cellWidth;
-      int y = startY + row * cellHeight;
       std::size_t index = static_cast<std::size_t>(row * numChannels + ch);
 
       drawCell(g,
@@ -289,6 +388,7 @@ void PatternGrid::drawGrid(juce::Graphics& g) {
                  cachedGate[index],
                  cachedVelocity[index],
                  cachedInstrument[index],
+                 cachedSample[index],
                  cachedEffectCommand[index],
                  cachedEffectValue[index],
                row,
@@ -298,10 +398,15 @@ void PatternGrid::drawGrid(juce::Graphics& g) {
     }
 
     // Draw row number
-    int y = startY + row * cellHeight;
     g.setColour(juce::Colours::lightgrey);
     g.setFont(9.0f);
     g.drawText(juce::String(row), 0, y, labelWidth, cellHeight, juce::Justification::centred);
+
+    // Shade every 4th tick (rows 0, 4, 8, 12... in 0-indexed) - draw AFTER cells as overlay
+    if (row % 4 == 0) {
+      g.setColour(app.darkMode ? juce::Colour(0x28FFFFFF) : juce::Colour(0x40383838));
+      g.fillRect(labelWidth, y, getWidth() - labelWidth, cellHeight);
+    }
 
     // Highlight playback row
       if (static_cast<int>(playbackRow) == row) {
@@ -353,6 +458,26 @@ void PatternGrid::drawGrid(juce::Graphics& g) {
     g.setFont(compactDensity ? 11.0f : 12.0f);
     g.drawText("FX ON (|/`/F2)", badge, juce::Justification::centred);
   }
+
+  if (volumeInputMode) {
+    juce::Rectangle<int> badge(labelWidth + 144, headerHeight + 6, 140, compactDensity ? 18 : 22);
+    g.setColour(juce::Colour(0xCC1F1F1F));
+    g.fillRoundedRectangle(badge.toFloat(), 5.0f);
+    g.setColour(juce::Colour(0xFFFFCC00));
+    g.drawRoundedRectangle(badge.toFloat(), 5.0f, 1.0f);
+    g.setFont(compactDensity ? 11.0f : 12.0f);
+    g.drawText("VOL ON ('/F3)", badge, juce::Justification::centred);
+  }
+
+  if (sampleInputMode) {
+    juce::Rectangle<int> badge(labelWidth + 292, headerHeight + 6, 150, compactDensity ? 18 : 22);
+    g.setColour(juce::Colour(0xCC1F1F1F));
+    g.fillRoundedRectangle(badge.toFloat(), 5.0f);
+    g.setColour(juce::Colour(0xFFFFCC00));
+    g.drawRoundedRectangle(badge.toFloat(), 5.0f, 1.0f);
+    g.setFont(compactDensity ? 11.0f : 12.0f);
+    g.drawText("SMP ON (;/F4)", badge, juce::Justification::centred);
+  }
 }
 
 void PatternGrid::drawCell(juce::Graphics& g,
@@ -361,6 +486,7 @@ void PatternGrid::drawCell(juce::Graphics& g,
                            std::uint32_t gateTicks,
                            std::uint8_t velocity,
                            std::uint8_t instrument,
+                           std::uint16_t sample,
                            std::uint8_t effectCommand,
                            std::uint8_t effectValue,
                            int row,
@@ -375,13 +501,13 @@ void PatternGrid::drawCell(juce::Graphics& g,
   if (isCellInBlockSelection(row, channel)) {
     g.setColour(hasNote ? juce::Colour(0xFF2F6A44) : juce::Colour(0xFF4A5D77));
   } else if (hoveredRow == row && hoveredChannel == channel) {
-    g.setColour(juce::Colours::darkblue);
+    g.setColour(app.darkMode ? juce::Colour(0xFF001A33) : juce::Colours::darkblue);
   } else if (hasNote) {
-    g.setColour(juce::Colours::darkgreen);
+    g.setColour(app.darkMode ? juce::Colour(0xFF143C14) : juce::Colours::darkgreen);
   } else if (hasEffect) {
     g.setColour(juce::Colour(0xFF2A2A4A));
   } else {
-    g.setColour(juce::Colours::grey);
+    g.setColour(app.darkMode ? juce::Colour(0xFF1E1E1E) : juce::Colours::grey);
   }
 
   g.fillRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
@@ -391,32 +517,52 @@ void PatternGrid::drawCell(juce::Graphics& g,
     g.drawRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2, 2);
   }
 
-  // Tracker-style tick text (single line):
-  // Empty no-fx:  ... ... ... ....
-  // Empty with fx: ... ... ... F06
-  // Filled:        C-4 100 a64 0E00
-  const std::string effectText = (effectCommand != 0 || effectValue != 0)
-      ? toUpperHex(effectCommand, 1) + toUpperHex(effectValue, 2)
-      : "...";
+    // Tracker-style tick text (single line):
+    // Empty no-fx:   ... ... ... ....
+    // Empty with fx: ... ... ... 1706
+    // Filled:         C-4 100 a64 0E00
+  std::string effectText = (effectCommand != 0 || effectValue != 0)
+      ? toUpperHex(effectCommand, 2) + toUpperHex(effectValue, 2)
+      : "....";
+  const bool showLiveFxPreview = row == selectedRow && channel == selectedChannel && fxInputMode;
+  if (showLiveFxPreview) {
+    effectText = fxInputBuffer;
+    while (effectText.size() < 4) {
+      effectText += '.';
+    }
+  }
+
+  const bool isVolumeOnlyEffect = (!hasNote && effectCommand == 0x0C && effectValue > 0);
+
+  int sampleSlot = -1;
+  if (sample != 0xFFFF) {
+    sampleSlot = static_cast<int>(sample);
+  } else {
+    sampleSlot = app.plugins.sampleSlotForInstrument(instrument);
+    if (sampleSlot < 0 && !app.plugins.samplePathForSlot(static_cast<std::uint16_t>(instrument)).empty()) {
+      sampleSlot = instrument;
+    }
+  }
+  const std::string sampleSlotText = sampleSlot >= 0 ? toUpperHex(static_cast<unsigned int>(sampleSlot), 3) : "...";
 
   juce::String tickText;
   if (hasNote) {
     const std::string noteText = formatTrackerNote(note);
-    int sampleSlot = app.plugins.sampleSlotForInstrument(instrument);
-    if (sampleSlot < 0 && !app.plugins.samplePathForSlot(static_cast<std::uint16_t>(instrument)).empty()) {
-      sampleSlot = instrument;
-    }
-    const std::string sampleSlotText = sampleSlot >= 0 ? toUpperHex(static_cast<unsigned int>(sampleSlot), 3) : "...";
-    const std::string volumeFxText = std::string("a") + toUpperHex(velocity, 2);
+    const bool velocityIsDefault = (velocity == extracker::PatternEditor::kDefaultVelocity);
+    const std::string volumeFxText = velocityIsDefault ? "..." : std::string("a") + toUpperHex(velocity, 2);
     tickText = juce::String(noteText) + " " + juce::String(sampleSlotText) + " " +
                juce::String(volumeFxText) + " " + juce::String(effectText);
+  } else if (isVolumeOnlyEffect) {
+    const std::string volumeFxText = std::string("a") + toUpperHex(effectValue, 2);
+    tickText = juce::String("... ") + juce::String(sampleSlotText) + " " +
+               juce::String(volumeFxText) + " " + juce::String(effectText);
   } else if (hasEffect) {
-    tickText = juce::String("... ... ... ") + juce::String(effectText);
+    tickText = juce::String("... ") + juce::String(sampleSlotText) + " ... " + juce::String(effectText);
   } else {
-    tickText = "... ... ... ....";
+    tickText = juce::String("... ") + juce::String(sampleSlotText) + " ... ....";
   }
 
-  g.setColour(juce::Colours::white);
+  g.setColour(showLiveFxPreview ? juce::Colour(0xFFFFCC00) : juce::Colours::white);
   g.setFont(compactDensity ? 15.0f : 18.0f);
   const int innerX = x + 2;
   const int innerY = y + 2;
@@ -424,14 +570,21 @@ void PatternGrid::drawCell(juce::Graphics& g,
   const int innerH = cellHeight - 4;
   g.drawText(tickText, innerX, innerY, innerW, innerH, juce::Justification::centredLeft, true);
 
-  // FX entry mode overlay: show partial hex buffer in amber on the selected cell
-  // Format mirrors the display: 1 char command + 2 chars value = "F80"
-  if (row == selectedRow && channel == selectedChannel && fxInputMode) {
-    std::string fxVisual = fxInputBuffer;
-    while (fxVisual.size() < 3) fxVisual += '.';
+  if (row == selectedRow && channel == selectedChannel && volumeInputMode) {
+    std::string volVisual = volumeInputBuffer;
+    while (volVisual.size() < 2) volVisual += '.';
+    volVisual = std::string("a") + volVisual;
     g.setColour(juce::Colour(0xFFFFCC00));
     g.setFont(compactDensity ? 15.0f : 18.0f);
-    g.drawText(juce::String(fxVisual), innerX, innerY, innerW, innerH, juce::Justification::centredRight, false);
+    g.drawText(juce::String(volVisual), innerX, innerY, innerW, innerH, juce::Justification::centredRight, false);
+  }
+
+  if (row == selectedRow && channel == selectedChannel && sampleInputMode) {
+    std::string sampleVisual = sampleInputBuffer;
+    while (sampleVisual.size() < 3) sampleVisual += '.';
+    g.setColour(juce::Colour(0xFFFFCC00));
+    g.setFont(compactDensity ? 15.0f : 18.0f);
+    g.drawText(juce::String(sampleVisual), innerX, innerY, innerW, innerH, juce::Justification::centred, false);
   }
 }
 
@@ -480,10 +633,14 @@ void PatternGrid::repaintCell(int row, int channel) {
 void PatternGrid::mouseDown(const juce::MouseEvent& event) {
   int row = getRowAtY(event.y);
   int channel = getChannelAtX(event.x);
+  const bool auditionScrub = event.mods.isAltDown();
 
   if (row >= 0 && channel >= 0) {
     grabKeyboardFocus();
     selectCell(row, channel);
+    if (auditionScrub) {
+      previewSelectedStepIfEnabled(true);
+    }
 
     std::unique_lock<std::mutex> lock(app.stateMutex, std::defer_lock);
     if (!lockStateWithRetry(lock)) {
@@ -493,15 +650,22 @@ void PatternGrid::mouseDown(const juce::MouseEvent& event) {
     if (event.mods.isRightButtonDown()) {
       // Right-click: clear note
       app.module.currentEditor().clearStep(row, channel);
-    } else if (event.mods.isLeftButtonDown()) {
+    } else if (event.mods.isLeftButtonDown() && !auditionScrub) {
       // Left-click: select existing note, or insert a default note into an empty cell.
       if (!app.module.currentEditor().hasNoteAt(row, channel)) {
         const std::uint8_t instrument = defaultInsertInstrument(app, channel);
+        std::uint16_t sample = app.module.currentEditor().sampleAt(row, channel);
         app.module.currentEditor().insertNote(row, channel, 60, instrument, insertGateTicks, insertVelocity, true);
-              // If an active sample slot is armed, explicitly set it so the sample field takes priority
-              if (app.activeSampleSlot >= 0 && app.activeSampleSlot <= 255) {
-                app.module.currentEditor().setSample(row, channel, static_cast<std::uint16_t>(app.activeSampleSlot));
-              }
+        // If an active sample slot is armed, explicitly set it so the sample field takes priority.
+        if (app.activeSampleSlot >= 0 && app.activeSampleSlot <= 255) {
+          sample = static_cast<std::uint16_t>(app.activeSampleSlot);
+          app.module.currentEditor().setSample(row, channel, sample);
+        }
+        lock.unlock();
+        previewPlacedNote(instrument, sample, 60, insertVelocity);
+        refreshSnapshot();
+        repaintCell(row, channel);
+        return;
       }
     }
 
@@ -515,6 +679,12 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& event) {
   int row = getRowAtY(event.y);
   int channel = getChannelAtX(event.x);
   if (row < 0 || channel < 0) {
+    return;
+  }
+
+  if (event.mods.isAltDown()) {
+    selectCell(row, channel, false);
+    previewSelectedStepIfEnabled(true);
     return;
   }
 
@@ -536,11 +706,83 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& event) {
 
 bool PatternGrid::keyPressed(const juce::KeyPress& key) {
   const juce::juce_wchar rawChar = key.getTextCharacter();
+  const auto mods = key.getModifiers();
+
+  if (mods.isCommandDown() && juce::CharacterFunctions::toLowerCase(rawChar) == 'm') {
+    if (focusModuleMessageCallback) {
+      focusModuleMessageCallback();
+      return true;
+    }
+  }
+
+  if (mods.isCommandDown() && key.getKeyCode() == juce::KeyPress::F4Key && searchNavigationCallback) {
+    searchNavigationCallback(!mods.isShiftDown());
+    return true;
+  }
+
+  if (key == juce::KeyPress::F6Key) {
+    fxCommitAutoAdvance = !fxCommitAutoAdvance;
+    repaint();
+    return true;
+  }
 
   // FX mode toggle supports multiple layouts: `, |, or F2.
   if (rawChar == '`' || rawChar == '|' || key == juce::KeyPress::F2Key) {
     fxInputMode = !fxInputMode;
     fxInputBuffer.clear();
+    fxInputPrefilledCommand = false;
+    fxInputPrefilledValueDigits = 0;
+    if (fxInputMode) {
+      volumeInputMode = false;
+      volumeInputBuffer.clear();
+      sampleInputMode = false;
+      sampleInputBuffer.clear();
+
+      if (selectedRow >= 0 && selectedChannel >= 0) {
+        std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+        if (lock.owns_lock()) {
+          const auto effectCommand = app.module.currentEditor().effectCommandAt(selectedRow, selectedChannel);
+          const auto effectValue = app.module.currentEditor().effectValueAt(selectedRow, selectedChannel);
+          if (effectCommand != 0 || effectValue != 0) {
+            fxInputBuffer = toUpperHex(effectCommand, 2) + toUpperHex(effectValue, 2);
+            fxInputPrefilledCommand = true;
+            fxInputPrefilledValueDigits = 0;
+          }
+        }
+      }
+    }
+    if (selectedRow >= 0 && selectedChannel >= 0) {
+      repaintCell(selectedRow, selectedChannel);
+    }
+    return true;
+  }
+
+  // Volume mode toggle: ' or F3. Input is 2 hex digits to set the volume column.
+  if (rawChar == '\'' || key == juce::KeyPress::F3Key) {
+    volumeInputMode = !volumeInputMode;
+    volumeInputBuffer.clear();
+    if (volumeInputMode) {
+      fxInputMode = false;
+      fxInputBuffer.clear();
+      sampleInputMode = false;
+      sampleInputBuffer.clear();
+    }
+    if (selectedRow >= 0 && selectedChannel >= 0) {
+      repaintCell(selectedRow, selectedChannel);
+    }
+    return true;
+  }
+
+  // Sample mode toggle: ; or F4. Input is 3 hex digits for sample slot (000-0FF).
+  if (rawChar == ';' || key == juce::KeyPress::F4Key) {
+    sampleInputMode = !sampleInputMode;
+    sampleInputBuffer.clear();
+    if (sampleInputMode) {
+      fxInputMode = false;
+      fxInputBuffer.clear();
+      volumeInputMode = false;
+      volumeInputBuffer.clear();
+    }
     if (selectedRow >= 0 && selectedChannel >= 0) {
       repaintCell(selectedRow, selectedChannel);
     }
@@ -549,16 +791,81 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
 
   // In FX entry mode: hex digits go into the effect buffer
   if (fxInputMode) {
+    auto commitFxInputBuffer = [this](bool advanceRow) -> bool {
+      if (fxInputBuffer.empty() || selectedRow < 0 || selectedChannel < 0) {
+        return false;
+      }
+
+      std::string normalized = fxInputBuffer;
+      std::replace(normalized.begin(), normalized.end(), '.', '0');
+      if (normalized.size() == 3) {
+        // 3-char compatibility mode:
+        // - CVV legacy shorthand (e.g. F06 -> 0F06)
+        // - CCV shorthand for low command bytes (e.g. 170 -> 1700)
+        //   This makes full-byte commands practical without always typing 4 chars.
+        const unsigned int firstTwo = std::stoul(normalized.substr(0, 2), nullptr, 16);
+        if (firstTwo <= 0x1F) {
+          normalized.push_back('0');
+        } else {
+          normalized.insert(normalized.begin(), '0');
+        }
+      }
+      if (normalized.size() != 4) {
+        return false;
+      }
+
+      unsigned int cmd = std::stoul(normalized.substr(0, 2), nullptr, 16);
+      unsigned int val = std::stoul(normalized.substr(2, 2), nullptr, 16);
+      std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+      if (!lock.owns_lock()) {
+        return false;
+      }
+
+      app.module.currentEditor().setEffect(
+          selectedRow,
+          selectedChannel,
+          static_cast<std::uint8_t>(cmd),
+          static_cast<std::uint8_t>(val));
+      int nextRow = std::min(static_cast<int>(app.module.currentEditor().rows()) - 1, selectedRow + editStep);
+      lock.unlock();
+
+      fxInputBuffer.clear();
+      fxInputPrefilledCommand = false;
+      fxInputPrefilledValueDigits = 0;
+      refreshSnapshot();
+      if (selectionChangedCallback) {
+        selectionChangedCallback(selectedRow, selectedChannel);
+      }
+      if (advanceRow) {
+        selectCell(nextRow, selectedChannel);
+      } else {
+        repaintCell(selectedRow, selectedChannel);
+      }
+      return true;
+    };
+
     if (key == juce::KeyPress::escapeKey) {
       fxInputMode = false;
       fxInputBuffer.clear();
+      fxInputPrefilledCommand = false;
+      fxInputPrefilledValueDigits = 0;
       if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
       return true;
     }
 
     if (key == juce::KeyPress::backspaceKey || key == juce::KeyPress::deleteKey) {
       if (!fxInputBuffer.empty()) {
-        fxInputBuffer.pop_back();
+        if (fxInputPrefilledCommand) {
+          fxInputBuffer = fxInputBuffer.substr(0, std::min<std::size_t>(2, fxInputBuffer.size()));
+          fxInputPrefilledCommand = false;
+          fxInputPrefilledValueDigits = 0;
+        } else {
+          fxInputBuffer.pop_back();
+          if (fxInputBuffer.size() < 2) {
+            fxInputPrefilledCommand = false;
+            fxInputPrefilledValueDigits = 0;
+          }
+        }
         if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
       } else if (selectedRow >= 0 && selectedChannel >= 0) {
         std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
@@ -573,46 +880,50 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
       return true;
     }
 
-    // Enter commits whatever is in the partial buffer (zero-padded to 3 chars)
+    // Enter commits whatever is in the buffer.
+    // 3 chars are interpreted as CVV or CCV shorthand, 4 as CCVV.
+    // Fresh entry no longer auto-commits at 3 chars because that prevents
+    // entering full CCVV values like 1706.
     if (key == juce::KeyPress::returnKey && !fxInputBuffer.empty() && selectedRow >= 0 && selectedChannel >= 0) {
-      std::string padded = fxInputBuffer;
-      while (padded.size() < 3) padded += '0';
-      unsigned int cmd = std::stoul(padded.substr(0, 1), nullptr, 16);
-      unsigned int val = std::stoul(padded.substr(1, 2), nullptr, 16);
-      std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
-      if (lock.owns_lock()) {
-        app.module.currentEditor().setEffect(selectedRow, selectedChannel,
-            static_cast<std::uint8_t>(cmd), static_cast<std::uint8_t>(val));
-        int nextRow = std::min(static_cast<int>(app.module.currentEditor().rows()) - 1, selectedRow + editStep);
-        lock.unlock();
-        fxInputBuffer.clear();
-        refreshSnapshot();
-        if (selectionChangedCallback) selectionChangedCallback(selectedRow, selectedChannel);
-        selectCell(nextRow, selectedChannel);
-      }
+      commitFxInputBuffer(fxCommitAutoAdvance);
       return true;
     }
 
-    // 3-char hex entry: 1 char = command (0-F), 2 chars = value (00-FF)
-    // Matches the display format "F80" exactly.
+    // FX entry accepts:
+    // - CVV  (legacy shorthand, e.g. F06)
+    // - CCV  (shorthand, e.g. 170 -> 1700)
+    // - CCVV (full command byte, e.g. 1706)
     char c = static_cast<char>(juce::CharacterFunctions::toLowerCase(rawChar));
     if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
       if (selectedRow >= 0 && selectedChannel >= 0) {
-        fxInputBuffer += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        if (fxInputBuffer.size() == 3) {
-          unsigned int cmd = std::stoul(fxInputBuffer.substr(0, 1), nullptr, 16);
-          unsigned int val = std::stoul(fxInputBuffer.substr(1, 2), nullptr, 16);
-          std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
-          if (lock.owns_lock()) {
-            app.module.currentEditor().setEffect(selectedRow, selectedChannel,
-                static_cast<std::uint8_t>(cmd), static_cast<std::uint8_t>(val));
-            int nextRow = std::min(static_cast<int>(app.module.currentEditor().rows()) - 1, selectedRow + editStep);
-            lock.unlock();
-            fxInputBuffer.clear();
-            refreshSnapshot();
-            if (selectionChangedCallback) selectionChangedCallback(selectedRow, selectedChannel);
-            selectCell(nextRow, selectedChannel);
+        const char upper = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (fxInputPrefilledCommand) {
+          if (fxInputBuffer.size() < 4) {
+            fxInputBuffer.resize(4, '.');
+          }
+          if (fxInputPrefilledValueDigits == 0) {
+            fxInputBuffer[2] = upper;
+            fxInputBuffer[3] = '.';
+            fxInputPrefilledValueDigits = 1;
+            repaintCell(selectedRow, selectedChannel);
           } else {
+            fxInputBuffer[3] = upper;
+            fxInputPrefilledValueDigits = 2;
+            if (!commitFxInputBuffer(fxCommitAutoAdvance)) {
+              fxInputBuffer[3] = '.';
+              fxInputPrefilledValueDigits = 1;
+              repaintCell(selectedRow, selectedChannel);
+            }
+          }
+          return true;
+        }
+
+        if (fxInputBuffer.size() >= 4) {
+          return true;
+        }
+        fxInputBuffer += upper;
+        if (fxInputBuffer.size() == 4) {
+          if (!commitFxInputBuffer(fxCommitAutoAdvance)) {
             fxInputBuffer.pop_back(); // lock failed, revert last char
             repaintCell(selectedRow, selectedChannel);
           }
@@ -642,14 +953,195 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
     }
   }
 
+  if (volumeInputMode) {
+    auto applyVolumeInputAtSelection = [this](unsigned int parsed) -> bool {
+      if (selectedRow < 0 || selectedChannel < 0) {
+        return false;
+      }
+
+      std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+      if (!lock.owns_lock()) {
+        return false;
+      }
+
+      auto& editor = app.module.currentEditor();
+      const auto velocity = static_cast<std::uint8_t>(std::clamp(static_cast<int>(parsed), 1, 127));
+      if (editor.hasNoteAt(selectedRow, selectedChannel)) {
+        editor.setVelocity(selectedRow, selectedChannel, velocity);
+      } else {
+        // No note on this row: write a tracker-style Cxx volume command instead.
+        editor.setEffect(selectedRow, selectedChannel, 0x0C, velocity);
+      }
+
+      const int nextRow = std::min(static_cast<int>(editor.rows()) - 1, selectedRow + editStep);
+      lock.unlock();
+
+      volumeInputBuffer.clear();
+      refreshSnapshot();
+      if (selectionChangedCallback) {
+        selectionChangedCallback(selectedRow, selectedChannel);
+      }
+      selectCell(nextRow, selectedChannel);
+      return true;
+    };
+
+    if (key == juce::KeyPress::escapeKey) {
+      volumeInputMode = false;
+      volumeInputBuffer.clear();
+      if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
+      return true;
+    }
+
+    if (key == juce::KeyPress::backspaceKey || key == juce::KeyPress::deleteKey) {
+      if (!volumeInputBuffer.empty()) {
+        volumeInputBuffer.pop_back();
+        if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
+      }
+      return true;
+    }
+
+    if (key == juce::KeyPress::returnKey && !volumeInputBuffer.empty() && selectedRow >= 0 && selectedChannel >= 0) {
+      std::string padded = volumeInputBuffer;
+      while (padded.size() < 2) padded += '0';
+      const unsigned int parsed = std::stoul(padded.substr(0, 2), nullptr, 16);
+
+      (void)applyVolumeInputAtSelection(parsed);
+      return true;
+    }
+
+    char c = static_cast<char>(juce::CharacterFunctions::toLowerCase(rawChar));
+    if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+      if (selectedRow >= 0 && selectedChannel >= 0) {
+        volumeInputBuffer += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (volumeInputBuffer.size() == 2) {
+          const unsigned int parsed = std::stoul(volumeInputBuffer.substr(0, 2), nullptr, 16);
+          if (!applyVolumeInputAtSelection(parsed)) {
+            volumeInputBuffer.pop_back();
+            repaintCell(selectedRow, selectedChannel);
+          }
+        } else {
+          repaintCell(selectedRow, selectedChannel);
+        }
+      }
+      return true;
+    }
+
+    const bool isNavOrShortcut = key == juce::KeyPress::leftKey || key == juce::KeyPress::rightKey
+        || key == juce::KeyPress::upKey || key == juce::KeyPress::downKey
+        || key == juce::KeyPress::homeKey || key == juce::KeyPress::endKey
+        || key == juce::KeyPress::pageUpKey || key == juce::KeyPress::pageDownKey
+        || key == juce::KeyPress::returnKey || key == juce::KeyPress::tabKey
+        || key == juce::KeyPress::spaceKey
+        || key.getModifiers().isCommandDown();
+    if (isNavOrShortcut) {
+      if (!volumeInputBuffer.empty()) {
+        volumeInputBuffer.clear();
+        if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
+      }
+    } else {
+      return false;
+    }
+  }
+
+  if (sampleInputMode) {
+    auto applySampleInputAtSelection = [this](unsigned int parsed) -> bool {
+      if (selectedRow < 0 || selectedChannel < 0) {
+        return false;
+      }
+
+      std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+      if (!lock.owns_lock()) {
+        return false;
+      }
+
+      auto& editor = app.module.currentEditor();
+      const auto sample = static_cast<std::uint16_t>(std::clamp(static_cast<int>(parsed), 0, 255));
+      editor.setSample(selectedRow, selectedChannel, sample);
+
+      const int nextRow = std::min(static_cast<int>(editor.rows()) - 1, selectedRow + editStep);
+      lock.unlock();
+
+      sampleInputBuffer.clear();
+      refreshSnapshot();
+      if (selectionChangedCallback) {
+        selectionChangedCallback(selectedRow, selectedChannel);
+      }
+      selectCell(nextRow, selectedChannel);
+      return true;
+    };
+
+    if (key == juce::KeyPress::escapeKey) {
+      sampleInputMode = false;
+      sampleInputBuffer.clear();
+      if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
+      return true;
+    }
+
+    if (key == juce::KeyPress::backspaceKey || key == juce::KeyPress::deleteKey) {
+      if (!sampleInputBuffer.empty()) {
+        sampleInputBuffer.pop_back();
+        if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
+      } else if (selectedRow >= 0 && selectedChannel >= 0) {
+        std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+        if (lock.owns_lock()) {
+          app.module.currentEditor().setSample(selectedRow, selectedChannel, 0xFFFF);
+          lock.unlock();
+          refreshSnapshot();
+          repaintCell(selectedRow, selectedChannel);
+          if (selectionChangedCallback) selectionChangedCallback(selectedRow, selectedChannel);
+        }
+      }
+      return true;
+    }
+
+    if (key == juce::KeyPress::returnKey && !sampleInputBuffer.empty() && selectedRow >= 0 && selectedChannel >= 0) {
+      std::string padded = sampleInputBuffer;
+      while (padded.size() < 3) padded += '0';
+      const unsigned int parsed = std::stoul(padded.substr(0, 3), nullptr, 16);
+      (void)applySampleInputAtSelection(parsed);
+      return true;
+    }
+
+    char c = static_cast<char>(juce::CharacterFunctions::toLowerCase(rawChar));
+    if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+      if (selectedRow >= 0 && selectedChannel >= 0) {
+        sampleInputBuffer += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (sampleInputBuffer.size() == 3) {
+          const unsigned int parsed = std::stoul(sampleInputBuffer.substr(0, 3), nullptr, 16);
+          if (!applySampleInputAtSelection(parsed)) {
+            sampleInputBuffer.pop_back();
+            repaintCell(selectedRow, selectedChannel);
+          }
+        } else {
+          repaintCell(selectedRow, selectedChannel);
+        }
+      }
+      return true;
+    }
+
+    const bool isNavOrShortcut = key == juce::KeyPress::leftKey || key == juce::KeyPress::rightKey
+        || key == juce::KeyPress::upKey || key == juce::KeyPress::downKey
+        || key == juce::KeyPress::homeKey || key == juce::KeyPress::endKey
+        || key == juce::KeyPress::pageUpKey || key == juce::KeyPress::pageDownKey
+        || key == juce::KeyPress::returnKey || key == juce::KeyPress::tabKey
+        || key == juce::KeyPress::spaceKey
+        || key.getModifiers().isCommandDown();
+    if (isNavOrShortcut) {
+      if (!sampleInputBuffer.empty()) {
+        sampleInputBuffer.clear();
+        if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
+      }
+    } else {
+      return false;
+    }
+  }
+
   if (key == juce::KeyPress::spaceKey) {
     if (togglePlaybackCallback) {
       togglePlaybackCallback();
       return true;
     }
   }
-
-  const auto mods = key.getModifiers();
 
   if (mods.isCommandDown()) {
     if (key == juce::KeyPress::upKey) {
@@ -694,6 +1186,26 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
     return false;
   }
 
+  if (mods.isShiftDown() && text == 'o') {
+    std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+      return true;
+    }
+
+    if (!app.module.currentEditor().hasNoteAt(selectedRow, selectedChannel)) {
+      return true;
+    }
+
+    app.module.currentEditor().setGateTicks(selectedRow, selectedChannel, 0);
+    lock.unlock();
+    refreshSnapshot();
+    repaintCell(selectedRow, selectedChannel);
+    if (selectionChangedCallback) {
+      selectionChangedCallback(selectedRow, selectedChannel);
+    }
+    return true;
+  }
+
   const int maxRow = static_cast<int>(app.module.currentEditor().rows()) - 1;
   const int maxChannel = static_cast<int>(app.module.currentEditor().channels()) - 1;
   auto moveSelection = [this, maxRow, maxChannel](int row, int channel, bool extendSelection) {
@@ -714,6 +1226,42 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
 
     selectCell(targetRow, targetChannel, false);
   };
+
+  if (mods.isAltDown() &&
+      (key == juce::KeyPress::upKey || key == juce::KeyPress::downKey ||
+       key == juce::KeyPress::leftKey || key == juce::KeyPress::rightKey)) {
+    std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+      return true;
+    }
+
+    if (!app.module.currentEditor().hasNoteAt(selectedRow, selectedChannel)) {
+      return true;
+    }
+
+    const int velocityStep = mods.isShiftDown() ? 8 : 1;
+    const int gateStep = mods.isShiftDown() ? 4 : 1;
+
+    if (key == juce::KeyPress::upKey || key == juce::KeyPress::downKey) {
+      const int delta = (key == juce::KeyPress::upKey) ? velocityStep : -velocityStep;
+      const int current = static_cast<int>(app.module.currentEditor().velocityAt(selectedRow, selectedChannel));
+      const auto next = static_cast<std::uint8_t>(std::clamp(current + delta, 1, 127));
+      app.module.currentEditor().setVelocity(selectedRow, selectedChannel, next);
+    } else {
+      const int delta = (key == juce::KeyPress::rightKey) ? gateStep : -gateStep;
+      const int current = static_cast<int>(app.module.currentEditor().gateTicksAt(selectedRow, selectedChannel));
+      const auto next = static_cast<std::uint32_t>(std::max(current + delta, 0));
+      app.module.currentEditor().setGateTicks(selectedRow, selectedChannel, next);
+    }
+
+    lock.unlock();
+    refreshSnapshot();
+    repaintCell(selectedRow, selectedChannel);
+    if (selectionChangedCallback) {
+      selectionChangedCallback(selectedRow, selectedChannel);
+    }
+    return true;
+  }
 
   if (key == juce::KeyPress::returnKey) {
     int rowDelta = key.getModifiers().isShiftDown() ? -editStep : editStep;
@@ -852,6 +1400,8 @@ void PatternGrid::selectCell(int row, int channel, bool preserveBlock) {
   if (selectionChangedCallback) {
     selectionChangedCallback(row, channel);
   }
+
+  previewSelectedStepIfEnabled();
 }
 
 bool PatternGrid::commitNoteFromKeyboard(int midiNote) {
@@ -861,22 +1411,98 @@ bool PatternGrid::commitNoteFromKeyboard(int midiNote) {
   }
 
   std::uint8_t instrument = defaultInsertInstrument(app, selectedChannel);
+  std::uint16_t sample = app.module.currentEditor().sampleAt(selectedRow, selectedChannel);
   if (app.module.currentEditor().hasNoteAt(selectedRow, selectedChannel)) {
     instrument = app.module.currentEditor().instrumentAt(selectedRow, selectedChannel);
+    sample = app.module.currentEditor().sampleAt(selectedRow, selectedChannel);
   }
 
   app.module.currentEditor().insertNote(selectedRow, selectedChannel, midiNote, instrument, insertGateTicks, insertVelocity, true);
-    // If an active sample slot is armed, explicitly set it so the sample field takes priority
-    if (app.activeSampleSlot >= 0 && app.activeSampleSlot <= 255) {
-      app.module.currentEditor().setSample(selectedRow, selectedChannel, static_cast<std::uint16_t>(app.activeSampleSlot));
-    }
+  // If an active sample slot is armed, explicitly set it so the sample field takes priority.
+  if (app.activeSampleSlot >= 0 && app.activeSampleSlot <= 255) {
+    sample = static_cast<std::uint16_t>(app.activeSampleSlot);
+    app.module.currentEditor().setSample(selectedRow, selectedChannel, sample);
+  }
 
   int nextRow = std::min(static_cast<int>(app.module.currentEditor().rows()) - 1, selectedRow + editStep);
   lock.unlock();
+  previewPlacedNote(instrument, sample, midiNote, insertVelocity);
   refreshSnapshot();
   repaint();
   selectCell(nextRow, selectedChannel);
   return true;
+}
+
+void PatternGrid::previewPlacedNote(std::uint8_t instrument,
+                                    std::uint16_t sample,
+                                    int midiNote,
+                                    std::uint8_t velocity) {
+  const bool triggered = app.plugins.triggerNoteOnResolved(
+      instrument,
+      sample,
+      midiNote,
+      std::clamp<std::uint8_t>(velocity, 1, 127),
+      true);
+  if (!triggered) {
+    return;
+  }
+
+  PendingPreviewNoteOff pending;
+  pending.instrument = instrument;
+  pending.sample = sample;
+  pending.midiNote = midiNote;
+  pending.dueMs = juce::Time::getMillisecondCounter() + previewDurationMs;
+  pendingPreviewNoteOffs.push_back(pending);
+
+  if (!isTimerRunning()) {
+    startTimer(16);
+  }
+}
+
+void PatternGrid::previewSelectedStepIfEnabled(bool force) {
+  if ((!followPreviewOnSelect && !force) || selectedRow < 0 || selectedChannel < 0) {
+    return;
+  }
+
+  std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    return;
+  }
+
+  if (!app.module.currentEditor().hasNoteAt(selectedRow, selectedChannel)) {
+    return;
+  }
+
+  const int midiNote = app.module.currentEditor().noteAt(selectedRow, selectedChannel);
+  const std::uint8_t instrument = app.module.currentEditor().instrumentAt(selectedRow, selectedChannel);
+  const std::uint16_t sample = app.module.currentEditor().sampleAt(selectedRow, selectedChannel);
+  const std::uint8_t velocity = app.module.currentEditor().velocityAt(selectedRow, selectedChannel);
+  lock.unlock();
+
+  previewPlacedNote(instrument, sample, midiNote, velocity);
+}
+
+void PatternGrid::timerCallback() {
+  if (pendingPreviewNoteOffs.empty()) {
+    stopTimer();
+    return;
+  }
+
+  const std::uint32_t now = juce::Time::getMillisecondCounter();
+  auto next = pendingPreviewNoteOffs.begin();
+  while (next != pendingPreviewNoteOffs.end()) {
+    const auto due = next->dueMs;
+    if (static_cast<std::int32_t>(now - due) >= 0) {
+      app.plugins.triggerNoteOffResolved(next->instrument, next->sample, next->midiNote);
+      next = pendingPreviewNoteOffs.erase(next);
+    } else {
+      ++next;
+    }
+  }
+
+  if (pendingPreviewNoteOffs.empty()) {
+    stopTimer();
+  }
 }
 
 bool PatternGrid::clearSelectedCell() {
@@ -917,6 +1543,8 @@ bool PatternGrid::copySelectionToClipboard() {
       std::size_t index = static_cast<std::size_t>((row - minRow) * clipboardChannels + (channel - minChannel));
       ClipboardStep step;
       step.hasNote = app.module.currentEditor().hasNoteAt(row, channel);
+      step.effectCommand = app.module.currentEditor().effectCommandAt(row, channel);
+      step.effectValue = app.module.currentEditor().effectValueAt(row, channel);
       if (step.hasNote) {
         step.note = app.module.currentEditor().noteAt(row, channel);
         step.instrument = app.module.currentEditor().instrumentAt(row, channel);
@@ -924,8 +1552,6 @@ bool PatternGrid::copySelectionToClipboard() {
         step.gateTicks = app.module.currentEditor().gateTicksAt(row, channel);
         step.velocity = app.module.currentEditor().velocityAt(row, channel);
         step.retrigger = app.module.currentEditor().retriggerAt(row, channel);
-        step.effectCommand = app.module.currentEditor().effectCommandAt(row, channel);
-        step.effectValue = app.module.currentEditor().effectValueAt(row, channel);
       }
       clipboard[index] = step;
     }
@@ -1007,6 +1633,9 @@ bool PatternGrid::pasteClipboardAtSelection() {
         }
       } else {
         app.module.currentEditor().clearStep(targetRow, targetChannel);
+        if (step.effectCommand != 0 || step.effectValue != 0) {
+          app.module.currentEditor().setEffect(targetRow, targetChannel, step.effectCommand, step.effectValue);
+        }
       }
     }
   }
@@ -1185,8 +1814,9 @@ bool PatternGrid::refreshSnapshot() {
         cachedVelocity[index] = 0;
         cachedInstrument[index] = 0;
         cachedSample[index] = 0xFFFF;
-        cachedEffectCommand[index] = 0;
-        cachedEffectValue[index] = 0;
+        // Effects can exist on empty cells; keep them visible in the grid.
+        cachedEffectCommand[index] = app.module.currentEditor().effectCommandAt(row, ch);
+        cachedEffectValue[index] = app.module.currentEditor().effectValueAt(row, ch);
       }
     }
   }
@@ -1234,23 +1864,13 @@ bool PatternGrid::refreshSnapshotForPatternChange() {
       std::size_t index = static_cast<std::size_t>(row * numChannels + ch);
       bool hasNote = app.module.currentEditor().hasNoteAt(row, ch);
       cachedHasNote[index] = hasNote;
-      if (hasNote) {
-        cachedNote[index] = app.module.currentEditor().noteAt(row, ch);
-        cachedGate[index] = app.module.currentEditor().gateTicksAt(row, ch);
-        cachedVelocity[index] = app.module.currentEditor().velocityAt(row, ch);
-        cachedInstrument[index] = app.module.currentEditor().instrumentAt(row, ch);
-        cachedSample[index] = app.module.currentEditor().sampleAt(row, ch);
-        cachedEffectCommand[index] = app.module.currentEditor().effectCommandAt(row, ch);
-        cachedEffectValue[index] = app.module.currentEditor().effectValueAt(row, ch);
-      } else {
-        cachedNote[index] = -1;
-        cachedGate[index] = 0;
-        cachedVelocity[index] = 0;
-        cachedInstrument[index] = 0;
-        cachedSample[index] = 0xFFFF;
-        cachedEffectCommand[index] = 0;
-        cachedEffectValue[index] = 0;
-      }
+      cachedNote[index] = hasNote ? app.module.currentEditor().noteAt(row, ch) : -1;
+      cachedGate[index] = hasNote ? app.module.currentEditor().gateTicksAt(row, ch) : 0;
+      cachedVelocity[index] = hasNote ? app.module.currentEditor().velocityAt(row, ch) : 0;
+      cachedInstrument[index] = hasNote ? app.module.currentEditor().instrumentAt(row, ch) : 0;
+      cachedSample[index] = hasNote ? app.module.currentEditor().sampleAt(row, ch) : static_cast<std::uint16_t>(0xFFFF);
+      cachedEffectCommand[index] = app.module.currentEditor().effectCommandAt(row, ch);
+      cachedEffectValue[index] = app.module.currentEditor().effectValueAt(row, ch);
     }
   }
 

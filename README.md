@@ -239,12 +239,29 @@ MIDI clock quick:
 MIDI quick compact: transport=running timeout=2000ms clock=external autoconnect=off
 ```
 
-## Next milestones
+PipeWire/JACK backend milestone is now in place:
 
-1. Implement full LV2 port mapping and DSP bridge for discovered plugin IDs.
-2. Add command chaining and tracker-compatible edge-case behavior across channels.
-3. Extend plugin API coverage for effect processors.
-4. Add PipeWire/JACK backends beside ALSA.
+- PipeWire backend via `pw_stream` with stereo F32 output (probed first in Auto mode)
+- JACK backend via `jack_client_open` with planar L/R output ports (probed second in Auto mode)
+- ALSA backend falls back third; Null backend is the final fallback
+- Auto probe order: PipeWire → JACK → ALSA → Null
+- `BackendKind::PipeWire` and `BackendKind::Jack` added to `AudioEngine`
+- CMake options `EXTRACKER_ENABLE_PIPEWIRE` and `EXTRACKER_ENABLE_JACK` control detection via pkg-config (`libpipewire-0.3`, `jack`)
+
+## CLI Sample Edit Quick Reference
+
+- `sample edit info <slot>` shows metadata: path, sample rate, frames, volume, pan, root note, loop config.
+- `sample edit list` lists all loaded sample slots with duration and frame count.
+- `sample edit trim <slot> [dry] --from <val> --to <val> [--unit s|f]` crops the working copy to a frame or second range.
+- `sample edit normalize <slot> [dry]` scales peak amplitude to unity.
+- `sample edit fade <slot> in|out [dry] [--from <val>] [--to <val>] [--unit s|f]` applies a linear fade to the selection (defaults to full sample).
+- `sample edit restore <slot> [dry]` restores the working copy to the original loaded data.
+- `sample edit volume <slot> <0.0-2.0>` sets the playback volume multiplier (1.0 = unity, 2.0 = double).
+- `sample edit pan <slot> <L|C|R|0x##|0-255>` sets the stereo pan position (stored as 0-255; L=0x00, C=0x80, R=0xFF).
+- `sample edit transpose <slot> <semitones>` shifts the root note relative to C4 (positive = higher root = lower playback pitch at C4).
+- `sample edit loop <slot> on|off|bidi|sustain [--start <val>] [--end <val>] [--unit s|f]` configures the loop mode and optional loop region.
+
+## Next milestones
 
 ## Release process
 

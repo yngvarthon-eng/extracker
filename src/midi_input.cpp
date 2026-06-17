@@ -154,6 +154,12 @@ void MidiInput::run() {
         midiEvent.velocity = static_cast<std::uint8_t>(std::clamp<int>(event->data.note.velocity, 0, 127));
         midiEvent.type = MidiEvent::Type::NoteOff;
         handled = true;
+      } else if (event->type == SND_SEQ_EVENT_CONTROLLER) {
+        midiEvent.channel = static_cast<std::uint8_t>(event->data.control.channel & 0x0F);
+        midiEvent.controller = static_cast<std::uint8_t>(std::clamp<int>(event->data.control.param, 0, 127));
+        midiEvent.value = static_cast<std::uint8_t>(std::clamp<int>(event->data.control.value, 0, 127));
+        midiEvent.type = MidiEvent::Type::ControlChange;
+        handled = true;
       } else if (event->type == SND_SEQ_EVENT_CLOCK) {
         midiEvent.type = MidiEvent::Type::Clock;
         handled = true;

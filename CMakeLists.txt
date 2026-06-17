@@ -10,14 +10,22 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(EXTRACKER_ENABLE_ALSA "Enable ALSA output backend" ON)
+option(EXTRACKER_ENABLE_JACK "Enable JACK output backend" ON)
+option(EXTRACKER_ENABLE_PIPEWIRE "Enable PipeWire output backend" ON)
 
 find_package(Threads REQUIRED)
+find_package(PkgConfig QUIET)
 
-if(EXTRACKER_ENABLE_ALSA)
-  find_package(PkgConfig QUIET)
-  if(PKG_CONFIG_FOUND)
-    pkg_check_modules(ALSA QUIET alsa)
-  endif()
+if(EXTRACKER_ENABLE_ALSA AND PKG_CONFIG_FOUND)
+  pkg_check_modules(ALSA QUIET alsa)
+endif()
+
+if(EXTRACKER_ENABLE_JACK AND PKG_CONFIG_FOUND)
+  pkg_check_modules(JACK QUIET jack)
+endif()
+
+if(EXTRACKER_ENABLE_PIPEWIRE AND PKG_CONFIG_FOUND)
+  pkg_check_modules(PIPEWIRE QUIET libpipewire-0.3)
 endif()
 
 add_library(extracker_core
@@ -47,6 +55,20 @@ if(ALSA_FOUND)
   target_compile_options(extracker_core PRIVATE ${ALSA_CFLAGS_OTHER})
 endif()
 
+if(JACK_FOUND)
+  target_compile_definitions(extracker_core PRIVATE EXTRACKER_HAVE_JACK=1)
+  target_include_directories(extracker_core PRIVATE ${JACK_INCLUDE_DIRS})
+  target_link_libraries(extracker_core PRIVATE ${JACK_LIBRARIES})
+  target_compile_options(extracker_core PRIVATE ${JACK_CFLAGS_OTHER})
+endif()
+
+if(PIPEWIRE_FOUND)
+  target_compile_definitions(extracker_core PRIVATE EXTRACKER_HAVE_PIPEWIRE=1)
+  target_include_directories(extracker_core PRIVATE ${PIPEWIRE_INCLUDE_DIRS})
+  target_link_libraries(extracker_core PRIVATE ${PIPEWIRE_LIBRARIES})
+  target_compile_options(extracker_core PRIVATE ${PIPEWIRE_CFLAGS_OTHER})
+endif()
+
 add_executable(extracker
   src/main.cpp
   src/command_registry.cpp
@@ -62,6 +84,8 @@ add_executable(extracker
   src/plugin_cli.cpp
   src/record_cli.cpp
   src/sample_cli.cpp
+        src/sample_editor_utils.cpp
+        src/sample_editor_cli.cpp
 )
 target_link_libraries(extracker PRIVATE extracker_core)
 target_include_directories(extracker PRIVATE include)
@@ -121,6 +145,16 @@ if(BUILD_TESTING)
   target_include_directories(extracker_module_song_order_test PRIVATE include)
   target_link_libraries(extracker_module_song_order_test PRIVATE extracker_core)
   add_test(NAME extracker_module_song_order_test COMMAND extracker_module_song_order_test)
+
+  add_executable(extracker_module_duplicate_pattern_test tests/module_duplicate_pattern_test.cpp)
+  target_include_directories(extracker_module_duplicate_pattern_test PRIVATE include)
+  target_link_libraries(extracker_module_duplicate_pattern_test PRIVATE extracker_core)
+  add_test(NAME extracker_module_duplicate_pattern_test COMMAND extracker_module_duplicate_pattern_test)
+
+  add_executable(extracker_module_duplicate_pattern_by_index_test tests/module_duplicate_pattern_by_index_test.cpp)
+  target_include_directories(extracker_module_duplicate_pattern_by_index_test PRIVATE include)
+  target_link_libraries(extracker_module_duplicate_pattern_by_index_test PRIVATE extracker_core)
+  add_test(NAME extracker_module_duplicate_pattern_by_index_test COMMAND extracker_module_duplicate_pattern_by_index_test)
 
   add_executable(extracker_smoke_test tests/smoke_test.cpp)
   target_include_directories(extracker_smoke_test PRIVATE include)
@@ -216,13 +250,45 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_core_status_detail_test extracker)
   add_test(NAME extracker_cli_core_status_detail_test COMMAND extracker_cli_core_status_detail_test)
 
+  add_executable(extracker_cli_core_status_pattern_stats_test tests/cli_core_status_pattern_stats_test.cpp)
+  add_dependencies(extracker_cli_core_status_pattern_stats_test extracker)
+  add_test(NAME extracker_cli_core_status_pattern_stats_test COMMAND extracker_cli_core_status_pattern_stats_test)
+
   add_executable(extracker_cli_core_status_midi_map_test tests/cli_core_status_midi_map_test.cpp)
   add_dependencies(extracker_cli_core_status_midi_map_test extracker)
   add_test(NAME extracker_cli_core_status_midi_map_test COMMAND extracker_cli_core_status_midi_map_test)
 
+  add_executable(extracker_cli_core_status_json_test tests/cli_core_status_json_test.cpp)
+  add_dependencies(extracker_cli_core_status_json_test extracker)
+  add_test(NAME extracker_cli_core_status_json_test COMMAND extracker_cli_core_status_json_test)
+
+  add_executable(extracker_cli_core_status_json_minimal_test tests/cli_core_status_json_minimal_test.cpp)
+  add_dependencies(extracker_cli_core_status_json_minimal_test extracker)
+  add_test(NAME extracker_cli_core_status_json_minimal_test COMMAND extracker_cli_core_status_json_minimal_test)
+
+  add_executable(extracker_cli_core_status_json_pretty_test tests/cli_core_status_json_pretty_test.cpp)
+  add_dependencies(extracker_cli_core_status_json_pretty_test extracker)
+  add_test(NAME extracker_cli_core_status_json_pretty_test COMMAND extracker_cli_core_status_json_pretty_test)
+
+  add_executable(extracker_cli_core_status_json_pretty_minimal_test tests/cli_core_status_json_pretty_minimal_test.cpp)
+  add_dependencies(extracker_cli_core_status_json_pretty_minimal_test extracker)
+  add_test(NAME extracker_cli_core_status_json_pretty_minimal_test COMMAND extracker_cli_core_status_json_pretty_minimal_test)
+
+  add_executable(extracker_cli_core_status_json_usage_guard_test tests/cli_core_status_json_usage_guard_test.cpp)
+  add_dependencies(extracker_cli_core_status_json_usage_guard_test extracker)
+  add_test(NAME extracker_cli_core_status_json_usage_guard_test COMMAND extracker_cli_core_status_json_usage_guard_test)
+
+  add_executable(extracker_cli_core_status_json_option_order_test tests/cli_core_status_json_option_order_test.cpp)
+  add_dependencies(extracker_cli_core_status_json_option_order_test extracker)
+  add_test(NAME extracker_cli_core_status_json_option_order_test COMMAND extracker_cli_core_status_json_option_order_test)
+
   add_executable(extracker_cli_core_status_undo_redo_flags_test tests/cli_core_status_undo_redo_flags_test.cpp)
   add_dependencies(extracker_cli_core_status_undo_redo_flags_test extracker)
   add_test(NAME extracker_cli_core_status_undo_redo_flags_test COMMAND extracker_cli_core_status_undo_redo_flags_test)
+
+  add_executable(extracker_cli_core_command_chaining_test tests/cli_core_command_chaining_test.cpp)
+  add_dependencies(extracker_cli_core_command_chaining_test extracker)
+  add_test(NAME extracker_cli_core_command_chaining_test COMMAND extracker_cli_core_command_chaining_test)
 
   add_executable(extracker_cli_core_reset_state_test tests/cli_core_reset_state_test.cpp)
   add_dependencies(extracker_cli_core_reset_state_test extracker)
@@ -231,6 +297,22 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_core_tempo_save_load_guard_test tests/cli_core_tempo_save_load_guard_test.cpp)
   add_dependencies(extracker_cli_core_tempo_save_load_guard_test extracker)
   add_test(NAME extracker_cli_core_tempo_save_load_guard_test COMMAND extracker_cli_core_tempo_save_load_guard_test)
+
+  add_executable(extracker_cli_core_pattern_swing_save_load_test tests/cli_core_pattern_swing_save_load_test.cpp)
+  add_dependencies(extracker_cli_core_pattern_swing_save_load_test extracker)
+  add_test(NAME extracker_cli_core_pattern_swing_save_load_test COMMAND extracker_cli_core_pattern_swing_save_load_test)
+
+  add_executable(extracker_cli_core_gui_song_tail_token_compat_test tests/cli_core_gui_song_tail_token_compat_test.cpp)
+  add_dependencies(extracker_cli_core_gui_song_tail_token_compat_test extracker)
+  add_test(NAME extracker_cli_core_gui_song_tail_token_compat_test COMMAND extracker_cli_core_gui_song_tail_token_compat_test)
+
+  add_executable(extracker_cli_core_legacy_v2_pattern_swing_load_test tests/cli_core_legacy_v2_pattern_swing_load_test.cpp)
+  add_dependencies(extracker_cli_core_legacy_v2_pattern_swing_load_test extracker)
+  add_test(NAME extracker_cli_core_legacy_v2_pattern_swing_load_test COMMAND extracker_cli_core_legacy_v2_pattern_swing_load_test)
+
+  add_executable(extracker_cli_core_pattern_swing_malformed_tail_test tests/cli_core_pattern_swing_malformed_tail_test.cpp)
+  add_dependencies(extracker_cli_core_pattern_swing_malformed_tail_test extracker)
+  add_test(NAME extracker_cli_core_pattern_swing_malformed_tail_test COMMAND extracker_cli_core_pattern_swing_malformed_tail_test)
 
   add_executable(extracker_cli_core_save_load_failure_test tests/cli_core_save_load_failure_test.cpp)
   add_dependencies(extracker_cli_core_save_load_failure_test extracker)
@@ -260,6 +342,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_loop_range_status_test extracker)
   add_test(NAME extracker_cli_loop_range_status_test COMMAND extracker_cli_loop_range_status_test)
 
+  add_executable(extracker_cli_core_loop_clear_test tests/cli_core_loop_clear_test.cpp)
+  add_dependencies(extracker_cli_core_loop_clear_test extracker)
+  add_test(NAME extracker_cli_core_loop_clear_test COMMAND extracker_cli_core_loop_clear_test)
+
   add_executable(extracker_cli_song_order_basic_test tests/cli_song_order_basic_test.cpp)
   add_dependencies(extracker_cli_song_order_basic_test extracker)
   add_test(NAME extracker_cli_song_order_basic_test COMMAND extracker_cli_song_order_basic_test)
@@ -267,6 +353,130 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_song_order_pattern_switch_test tests/cli_song_order_pattern_switch_test.cpp)
   add_dependencies(extracker_cli_song_order_pattern_switch_test extracker)
   add_test(NAME extracker_cli_song_order_pattern_switch_test COMMAND extracker_cli_song_order_pattern_switch_test)
+
+  add_executable(extracker_cli_song_order_pattern_duplicate_test tests/cli_song_order_pattern_duplicate_test.cpp)
+  add_dependencies(extracker_cli_song_order_pattern_duplicate_test extracker)
+  add_test(NAME extracker_cli_song_order_pattern_duplicate_test COMMAND extracker_cli_song_order_pattern_duplicate_test)
+
+  add_executable(extracker_cli_pattern_dup_alias_test tests/cli_pattern_dup_alias_test.cpp)
+  add_dependencies(extracker_cli_pattern_dup_alias_test extracker)
+  add_test(NAME extracker_cli_pattern_dup_alias_test COMMAND extracker_cli_pattern_dup_alias_test)
+
+  add_executable(extracker_cli_pattern_sw_alias_test tests/cli_pattern_sw_alias_test.cpp)
+  add_dependencies(extracker_cli_pattern_sw_alias_test extracker)
+  add_test(NAME extracker_cli_pattern_sw_alias_test COMMAND extracker_cli_pattern_sw_alias_test)
+
+  add_executable(extracker_cli_pattern_del_alias_test tests/cli_pattern_del_alias_test.cpp)
+  add_dependencies(extracker_cli_pattern_del_alias_test extracker)
+  add_test(NAME extracker_cli_pattern_del_alias_test COMMAND extracker_cli_pattern_del_alias_test)
+
+  add_executable(extracker_cli_pattern_ls_alias_test tests/cli_pattern_ls_alias_test.cpp)
+  add_dependencies(extracker_cli_pattern_ls_alias_test extracker)
+  add_test(NAME extracker_cli_pattern_ls_alias_test COMMAND extracker_cli_pattern_ls_alias_test)
+
+  add_executable(extracker_cli_pattern_in_alias_test tests/cli_pattern_in_alias_test.cpp)
+  add_dependencies(extracker_cli_pattern_in_alias_test extracker)
+  add_test(NAME extracker_cli_pattern_in_alias_test COMMAND extracker_cli_pattern_in_alias_test)
+
+  add_executable(extracker_cli_bpm_alias_test tests/cli_bpm_alias_test.cpp)
+  add_dependencies(extracker_cli_bpm_alias_test extracker)
+  add_test(NAME extracker_cli_bpm_alias_test COMMAND extracker_cli_bpm_alias_test)
+
+  add_executable(extracker_cli_q_alias_test tests/cli_q_alias_test.cpp)
+  add_dependencies(extracker_cli_q_alias_test extracker)
+  add_test(NAME extracker_cli_q_alias_test COMMAND extracker_cli_q_alias_test)
+
+  add_executable(extracker_cli_st_alias_test tests/cli_st_alias_test.cpp)
+  add_dependencies(extracker_cli_st_alias_test extracker)
+  add_test(NAME extracker_cli_st_alias_test COMMAND extracker_cli_st_alias_test)
+
+  add_executable(extracker_cli_w_alias_test tests/cli_w_alias_test.cpp)
+  add_dependencies(extracker_cli_w_alias_test extracker)
+  add_test(NAME extracker_cli_w_alias_test COMMAND extracker_cli_w_alias_test)
+
+  add_executable(extracker_cli_r_alias_test tests/cli_r_alias_test.cpp)
+  add_dependencies(extracker_cli_r_alias_test extracker)
+  add_test(NAME extracker_cli_r_alias_test COMMAND extracker_cli_r_alias_test)
+
+  add_executable(extracker_cli_rec_alias_test tests/cli_rec_alias_test.cpp)
+  add_dependencies(extracker_cli_rec_alias_test extracker)
+  add_test(NAME extracker_cli_rec_alias_test COMMAND extracker_cli_rec_alias_test)
+
+  add_executable(extracker_cli_p_alias_test tests/cli_p_alias_test.cpp)
+  add_dependencies(extracker_cli_p_alias_test extracker)
+  add_test(NAME extracker_cli_p_alias_test COMMAND extracker_cli_p_alias_test)
+
+  add_executable(extracker_cli_h_alias_test tests/cli_h_alias_test.cpp)
+  add_dependencies(extracker_cli_h_alias_test extracker)
+  add_test(NAME extracker_cli_h_alias_test COMMAND extracker_cli_h_alias_test)
+
+  add_executable(extracker_cli_s_alias_test tests/cli_s_alias_test.cpp)
+  add_dependencies(extracker_cli_s_alias_test extracker)
+  add_test(NAME extracker_cli_s_alias_test COMMAND extracker_cli_s_alias_test)
+
+  add_executable(extracker_cli_song_order_pattern_duplicate_index_test tests/cli_song_order_pattern_duplicate_index_test.cpp)
+  add_dependencies(extracker_cli_song_order_pattern_duplicate_index_test extracker)
+  add_test(NAME extracker_cli_song_order_pattern_duplicate_index_test COMMAND extracker_cli_song_order_pattern_duplicate_index_test)
+
+  add_executable(extracker_cli_song_order_pattern_duplicate_index_usage_guard_test tests/cli_song_order_pattern_duplicate_index_usage_guard_test.cpp)
+  add_dependencies(extracker_cli_song_order_pattern_duplicate_index_usage_guard_test extracker)
+  add_test(NAME extracker_cli_song_order_pattern_duplicate_index_usage_guard_test COMMAND extracker_cli_song_order_pattern_duplicate_index_usage_guard_test)
+
+  add_executable(extracker_cli_song_order_pattern_duplicate_index_undo_redo_test tests/cli_song_order_pattern_duplicate_index_undo_redo_test.cpp)
+  add_dependencies(extracker_cli_song_order_pattern_duplicate_index_undo_redo_test extracker)
+  add_test(NAME extracker_cli_song_order_pattern_duplicate_index_undo_redo_test COMMAND extracker_cli_song_order_pattern_duplicate_index_undo_redo_test)
+
+  add_executable(extracker_cli_song_next_prev_test tests/cli_song_next_prev_test.cpp)
+  add_dependencies(extracker_cli_song_next_prev_test extracker)
+  add_test(NAME extracker_cli_song_next_prev_test COMMAND extracker_cli_song_next_prev_test)
+
+  add_executable(extracker_cli_song_next_prev_wrap_test tests/cli_song_next_prev_wrap_test.cpp)
+  add_dependencies(extracker_cli_song_next_prev_wrap_test extracker)
+  add_test(NAME extracker_cli_song_next_prev_wrap_test COMMAND extracker_cli_song_next_prev_wrap_test)
+
+  add_executable(extracker_cli_song_first_last_test tests/cli_song_first_last_test.cpp)
+  add_dependencies(extracker_cli_song_first_last_test extracker)
+  add_test(NAME extracker_cli_song_first_last_test COMMAND extracker_cli_song_first_last_test)
+
+  add_executable(extracker_cli_song_goto_alias_test tests/cli_song_goto_alias_test.cpp)
+  add_dependencies(extracker_cli_song_goto_alias_test extracker)
+  add_test(NAME extracker_cli_song_goto_alias_test COMMAND extracker_cli_song_goto_alias_test)
+
+  add_executable(extracker_cli_song_status_alias_test tests/cli_song_status_alias_test.cpp)
+  add_dependencies(extracker_cli_song_status_alias_test extracker)
+  add_test(NAME extracker_cli_song_status_alias_test COMMAND extracker_cli_song_status_alias_test)
+
+  add_executable(extracker_cli_song_list_alias_test tests/cli_song_list_alias_test.cpp)
+  add_dependencies(extracker_cli_song_list_alias_test extracker)
+  add_test(NAME extracker_cli_song_list_alias_test COMMAND extracker_cli_song_list_alias_test)
+
+  add_executable(extracker_cli_song_play_alias_test tests/cli_song_play_alias_test.cpp)
+  add_dependencies(extracker_cli_song_play_alias_test extracker)
+  add_test(NAME extracker_cli_song_play_alias_test COMMAND extracker_cli_song_play_alias_test)
+
+  add_executable(extracker_cli_song_move_alias_test tests/cli_song_move_alias_test.cpp)
+  add_dependencies(extracker_cli_song_move_alias_test extracker)
+  add_test(NAME extracker_cli_song_move_alias_test COMMAND extracker_cli_song_move_alias_test)
+
+  add_executable(extracker_cli_song_remove_alias_test tests/cli_song_remove_alias_test.cpp)
+  add_dependencies(extracker_cli_song_remove_alias_test extracker)
+  add_test(NAME extracker_cli_song_remove_alias_test COMMAND extracker_cli_song_remove_alias_test)
+
+  add_executable(extracker_cli_song_append_alias_test tests/cli_song_append_alias_test.cpp)
+  add_dependencies(extracker_cli_song_append_alias_test extracker)
+  add_test(NAME extracker_cli_song_append_alias_test COMMAND extracker_cli_song_append_alias_test)
+
+  add_executable(extracker_cli_song_set_alias_test tests/cli_song_set_alias_test.cpp)
+  add_dependencies(extracker_cli_song_set_alias_test extracker)
+  add_test(NAME extracker_cli_song_set_alias_test COMMAND extracker_cli_song_set_alias_test)
+
+  add_executable(extracker_cli_song_insert_alias_test tests/cli_song_insert_alias_test.cpp)
+  add_dependencies(extracker_cli_song_insert_alias_test extracker)
+  add_test(NAME extracker_cli_song_insert_alias_test COMMAND extracker_cli_song_insert_alias_test)
+
+  add_executable(extracker_cli_song_pos_test tests/cli_song_pos_test.cpp)
+  add_dependencies(extracker_cli_song_pos_test extracker)
+  add_test(NAME extracker_cli_song_pos_test COMMAND extracker_cli_song_pos_test)
 
   add_executable(extracker_cli_song_play_mode_test tests/cli_song_play_mode_test.cpp)
   add_dependencies(extracker_cli_song_play_mode_test extracker)
@@ -335,6 +545,18 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_pattern_copy_paste_step_stride_test tests/cli_pattern_copy_paste_step_stride_test.cpp)
   add_dependencies(extracker_cli_pattern_copy_paste_step_stride_test extracker)
   add_test(NAME extracker_cli_pattern_copy_paste_step_stride_test COMMAND extracker_cli_pattern_copy_paste_step_stride_test)
+
+  add_executable(extracker_cli_pattern_copy_paste_fx_only_test tests/cli_pattern_copy_paste_fx_only_test.cpp)
+  add_dependencies(extracker_cli_pattern_copy_paste_fx_only_test extracker)
+  add_test(NAME extracker_cli_pattern_copy_paste_fx_only_test COMMAND extracker_cli_pattern_copy_paste_fx_only_test)
+
+  add_executable(extracker_cli_pattern_fx_persistence_sequence_test tests/cli_pattern_fx_persistence_sequence_test.cpp)
+  add_dependencies(extracker_cli_pattern_fx_persistence_sequence_test extracker)
+  add_test(NAME extracker_cli_pattern_fx_persistence_sequence_test COMMAND extracker_cli_pattern_fx_persistence_sequence_test)
+
+  add_executable(extracker_cli_pattern_fx_only_undo_redo_test tests/cli_pattern_fx_only_undo_redo_test.cpp)
+  add_dependencies(extracker_cli_pattern_fx_only_undo_redo_test extracker)
+  add_test(NAME extracker_cli_pattern_fx_only_undo_redo_test COMMAND extracker_cli_pattern_fx_only_undo_redo_test)
 
   add_executable(extracker_cli_pattern_humanize_test tests/cli_pattern_humanize_test.cpp)
   add_dependencies(extracker_cli_pattern_humanize_test extracker)
@@ -512,6 +734,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_note_modifiers_dry_test extracker)
   add_test(NAME extracker_cli_note_modifiers_dry_test COMMAND extracker_cli_note_modifiers_dry_test)
 
+  add_executable(extracker_cli_note_off_fadeout_test tests/cli_note_off_fadeout_test.cpp)
+  add_dependencies(extracker_cli_note_off_fadeout_test extracker)
+  add_test(NAME extracker_cli_note_off_fadeout_test COMMAND extracker_cli_note_off_fadeout_test)
+
   add_executable(extracker_cli_note_usage_guard_test tests/cli_note_usage_guard_test.cpp)
   add_dependencies(extracker_cli_note_usage_guard_test extracker)
   add_test(NAME extracker_cli_note_usage_guard_test COMMAND extracker_cli_note_usage_guard_test)
@@ -552,6 +778,21 @@ if(BUILD_TESTING)
   target_include_directories(extracker_sample_slot_priority_collision_test PRIVATE include)
   target_link_libraries(extracker_sample_slot_priority_collision_test PRIVATE extracker_core)
   add_test(NAME extracker_sample_slot_priority_collision_test COMMAND extracker_sample_slot_priority_collision_test)
+
+  add_executable(extracker_sample_legacy_instrument_fallback_test tests/sample_legacy_instrument_fallback_test.cpp)
+  target_include_directories(extracker_sample_legacy_instrument_fallback_test PRIVATE include)
+  target_link_libraries(extracker_sample_legacy_instrument_fallback_test PRIVATE extracker_core)
+  add_test(NAME extracker_sample_legacy_instrument_fallback_test COMMAND extracker_sample_legacy_instrument_fallback_test)
+
+  add_executable(extracker_sample_edit_workflow_test tests/sample_edit_workflow_test.cpp)
+  target_include_directories(extracker_sample_edit_workflow_test PRIVATE include)
+  target_link_libraries(extracker_sample_edit_workflow_test PRIVATE extracker_core)
+  add_test(NAME extracker_sample_edit_workflow_test COMMAND extracker_sample_edit_workflow_test)
+
+  add_executable(extracker_sample_slot_params_test tests/sample_slot_params_test.cpp)
+  target_include_directories(extracker_sample_slot_params_test PRIVATE include)
+  target_link_libraries(extracker_sample_slot_params_test PRIVATE extracker_core)
+  add_test(NAME extracker_sample_slot_params_test COMMAND extracker_sample_slot_params_test)
 
   add_executable(extracker_cli_plugin_set_test tests/cli_plugin_set_test.cpp)
   add_dependencies(extracker_cli_plugin_set_test extracker extracker_lv2_test_plugin)

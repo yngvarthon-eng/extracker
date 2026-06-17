@@ -42,12 +42,12 @@ int main() {
     return 1;
   }
 
-  const bool sawCopy = output.find("Copied rows 0..3 channels 0..7 (2x8) [step 2]") != std::string::npos;
+  const bool sawCopy = output.find("Copied rows 0..3 channels 0..15 (2x16) [step 2]") != std::string::npos;
   const bool sawPaste = output.find("Pasted 2 step(s) at row 8 (channel offset 0, 0 skipped) [step 2]") != std::string::npos;
   const bool sawRow8 = output.find("Row 8: [60:i1:v100:f2:3]") != std::string::npos;
-  const bool sawRow9 = output.find("Row 9: [--] [--] [--] [--] [--] [--] [--] [--]") != std::string::npos;
+  const bool sawRow9 = output.find("Row 9: [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--]") != std::string::npos;
   const bool sawRow10 = output.find("Row 10: [62:i1:v102:f2:5]") != std::string::npos;
-  const bool sawRow11 = output.find("Row 11: [--] [--] [--] [--] [--] [--] [--] [--]") != std::string::npos;
+  const bool sawRow11 = output.find("Row 11: [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--] [--]") != std::string::npos;
 
   if (!sawCopy || !sawPaste || !sawRow8 || !sawRow9 || !sawRow10 || !sawRow11) {
     std::cerr << "Missing expected pattern copy/paste step stride output markers" << '\n';

@@ -6,7 +6,7 @@ namespace {
 
 constexpr int kMinMidiNote = 0;
 constexpr int kMaxMidiNote = 127;
-constexpr std::uint8_t kDefaultVelocity = 100;
+constexpr std::uint8_t kDefaultVelocity = extracker::PatternEditor::kDefaultVelocity;
 
 }  // namespace
 
@@ -208,6 +208,40 @@ std::size_t PatternEditor::rows() const {
 
 std::size_t PatternEditor::channels() const {
   return channels_;
+}
+
+std::size_t PatternEditor::noteCount() const {
+  std::size_t count = 0;
+  for (const auto& step : steps_) {
+    if (step.hasNote) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+std::pair<int, int> PatternEditor::activeRowSpan() const {
+  int first = -1;
+  int last = -1;
+
+  for (std::size_t row = 0; row < rows_; ++row) {
+    bool rowHasNote = false;
+    for (std::size_t channel = 0; channel < channels_; ++channel) {
+      if (steps_[row * channels_ + channel].hasNote) {
+        rowHasNote = true;
+        break;
+      }
+    }
+
+    if (rowHasNote) {
+      if (first < 0) {
+        first = static_cast<int>(row);
+      }
+      last = static_cast<int>(row);
+    }
+  }
+
+  return {first, last};
 }
 
 void PatternEditor::resizeRows(std::size_t newRows) {

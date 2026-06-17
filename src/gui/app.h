@@ -3,8 +3,10 @@
 #include <juce_core/juce_core.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_events/juce_events.h>
+#include <cstdint>
 #include <memory>
 #include <atomic>
+#include <array>
 #include <thread>
 #include <mutex>
 #include <vector>
@@ -25,6 +27,14 @@ enum class PlayMode {
 
 class ExTrackerApp : public juce::JUCEApplication {
 public:
+  enum class MidiEditorAction {
+    None = 0,
+    Velocity,
+    Gate,
+    EffectCommand,
+    EffectValue
+  };
+
   ExTrackerApp();
   ~ExTrackerApp() override;
 
@@ -40,6 +50,9 @@ public:
   // File I/O
   bool savePatternToFile(const std::string& path);
   bool loadPatternFromFile(const std::string& path);
+  void armMidiEditorLearn(MidiEditorAction action);
+  void clearMidiEditorCcMappings();
+  int midiEditorCcMappingCode(MidiEditorAction action) const;
 
   // Engine and state (owned by app)
   extracker::AudioEngine audio;
@@ -60,6 +73,9 @@ public:
   std::atomic<std::size_t> patternCountCache{1};
   std::atomic<std::size_t> currentSongOrderPositionCache{0};
 
+  // UI state
+  bool darkMode = false;
+
   // Pattern state
   bool loopEnabled = false;
   bool playRangeActive = false;
@@ -75,8 +91,13 @@ public:
   bool midiTransportSyncEnabled = false;
   std::atomic<bool> midiTransportRunning{false};
   std::array<int, 16> midiChannelMap{};
+  std::atomic<int> midiEditorLearnTarget{0};  // 0 means no armed target.
+  std::array<std::atomic<int>, 4> midiEditorCcMappings{};   // channel*128 + controller, or -1.
+  std::array<std::atomic<int>, 4> midiEditorPendingValues{};  // Latest CC values per action, or -1.
   std::vector<std::uint8_t> channelInstruments;
   std::vector<bool> channelMuted;
+  std::atomic<bool> recoveryAutoSaveEnabled{true};
+  std::atomic<std::uint64_t> lastRecoverySnapshotEpochMs{0};
 
 private:
   std::unique_ptr<MainWindow> mainWindow;
