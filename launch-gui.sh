@@ -4,7 +4,7 @@ cd "$(dirname "$0")/build-make-gui"
 
 # Personal instrument library — not covered by the built-in default search
 # paths, so point the SF2/SFZ/S3I scanners at it directly.
-INSTRUMENTS_DIR="$HOME/Musikk/musikk/instruments"
+INSTRUMENTS_DIR="$HOME/Musikk/musicworks/instruments"
 if [ -d "$INSTRUMENTS_DIR" ]; then
     export SF2_PATH="${SF2_PATH:-$INSTRUMENTS_DIR}"
     export SFZ_PATH="${SFZ_PATH:-$INSTRUMENTS_DIR}"
