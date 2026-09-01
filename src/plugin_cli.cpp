@@ -193,6 +193,16 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       } else {
         std::cout << "Failed to load SF2 melodic plugin: " << pluginId << '\n';
       }
+    } else if (pluginId.size() > 4 && pluginId.compare(0, 4, "sf2:") == 0) {
+      // Plain "sf2:<path>" -- the id `plugin list`/song files show for an
+      // SF2 instrument -- has its own on-demand loader (unlike sfz/s3i
+      // above) but fell through to assignInstrument below, which only
+      // resolves ids already registered by a prior `plugin scan`.
+      if (plugins.loadInstrumentAuto(pluginId, static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Assigned SF2 instrument " << pluginId << " to instrument " << instrument << '\n';
+      } else {
+        std::cout << "Failed to load SF2 file: " << pluginId << '\n';
+      }
     } else if (plugins.assignInstrument(static_cast<std::uint8_t>(instrument), pluginId)) {
       std::cout << "Assigned " << pluginId << " to instrument " << instrument << '\n';
     } else {

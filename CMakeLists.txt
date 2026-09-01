@@ -880,6 +880,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_sf2_melodic_test extracker)
   add_test(NAME extracker_cli_sf2_melodic_test COMMAND extracker_cli_sf2_melodic_test)
 
+  add_executable(extracker_cli_plugin_assign_sf2_prefix_test tests/cli_plugin_assign_sf2_prefix_test.cpp)
+  add_dependencies(extracker_cli_plugin_assign_sf2_prefix_test extracker)
+  add_test(NAME extracker_cli_plugin_assign_sf2_prefix_test COMMAND extracker_cli_plugin_assign_sf2_prefix_test)
+
   add_executable(extracker_cli_sfz_test tests/cli_sfz_test.cpp)
   add_dependencies(extracker_cli_sfz_test extracker)
   add_test(NAME extracker_cli_sfz_test COMMAND extracker_cli_sfz_test)
