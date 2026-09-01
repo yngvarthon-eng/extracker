@@ -1,6 +1,16 @@
 #!/bin/bash
 # Launch extracker GUI and connect any attached Keystation 88 MK3
 cd "$(dirname "$0")/build-make-gui"
+
+# Personal instrument library — not covered by the built-in default search
+# paths, so point the SF2/SFZ/S3I scanners at it directly.
+INSTRUMENTS_DIR="$HOME/Musikk/musikk/instruments"
+if [ -d "$INSTRUMENTS_DIR" ]; then
+    export SF2_PATH="${SF2_PATH:-$INSTRUMENTS_DIR}"
+    export SFZ_PATH="${SFZ_PATH:-$INSTRUMENTS_DIR}"
+    export S3I_PATH="${S3I_PATH:-$INSTRUMENTS_DIR}"
+fi
+
 ./extracker_gui &
 GUI_PID=$!
 
