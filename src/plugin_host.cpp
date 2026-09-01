@@ -6746,20 +6746,31 @@ bool PluginHost::loadInstrumentAuto(const std::string& pathOrId, std::uint8_t in
   }
 #endif
 
+  // SFZScanAdapter/BuiltinSfzScanAdapter and S3IScanAdapter register their
+  // discovered plugins as "sfz:<path>"/"s3i:<path>" (so they show up in
+  // `plugin list`), but loadSfzInstrument/loadS3iInstrument only accept a
+  // bare path. Unlike sf2 above, there's no separate on-demand-registration
+  // form to preserve here -- just strip the prefix so the id `plugin list`
+  // shows actually loads.
+  std::string resolvedPath = pathOrId;
+  if (pathOrId.compare(0, 4, "sfz:") == 0 || pathOrId.compare(0, 4, "s3i:") == 0) {
+    resolvedPath = pathOrId.substr(4);
+  }
+
   // Determine extension (lowercase) to decide how to load
   std::string ext;
-  const auto dot = pathOrId.rfind('.');
+  const auto dot = resolvedPath.rfind('.');
   if (dot != std::string::npos) {
-    ext = pathOrId.substr(dot);
+    ext = resolvedPath.substr(dot);
     for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   }
 
-  if (ext == ".xpm") return loadXpmInstrument(pathOrId, instrument);
-  if (ext == ".sfz") return loadSfzInstrument(pathOrId, instrument);
-  if (ext == ".sf2") return loadSf2Instrument(pathOrId, instrument);
-  if (ext == ".s3i") return loadS3iInstrument(pathOrId, instrument);
-  if (ext == ".xi")  return loadXiInstrument(pathOrId, instrument);
-  if (ext == ".iff" || ext == ".8svx") return loadIffSvxInstrument(pathOrId, instrument);
+  if (ext == ".xpm") return loadXpmInstrument(resolvedPath, instrument);
+  if (ext == ".sfz") return loadSfzInstrument(resolvedPath, instrument);
+  if (ext == ".sf2") return loadSf2Instrument(resolvedPath, instrument);
+  if (ext == ".s3i") return loadS3iInstrument(resolvedPath, instrument);
+  if (ext == ".xi")  return loadXiInstrument(resolvedPath, instrument);
+  if (ext == ".iff" || ext == ".8svx") return loadIffSvxInstrument(resolvedPath, instrument);
 
   // Builtin or registered plugin ID — use the standard path
   if (!loadPlugin(pathOrId)) return false;

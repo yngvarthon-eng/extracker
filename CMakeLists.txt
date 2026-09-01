@@ -904,6 +904,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_xpm_scan_test extracker)
   add_test(NAME extracker_cli_xpm_scan_test COMMAND extracker_cli_xpm_scan_test)
 
+  add_executable(extracker_cli_plugin_assign_scan_prefix_test tests/cli_plugin_assign_scan_prefix_test.cpp)
+  add_dependencies(extracker_cli_plugin_assign_scan_prefix_test extracker)
+  add_test(NAME extracker_cli_plugin_assign_scan_prefix_test COMMAND extracker_cli_plugin_assign_scan_prefix_test)
+
   add_executable(extracker_cli_plugin_control_index_token_test tests/cli_plugin_control_index_token_test.cpp)
   add_dependencies(extracker_cli_plugin_control_index_token_test extracker extracker_lv2_test_plugin)
   target_compile_definitions(

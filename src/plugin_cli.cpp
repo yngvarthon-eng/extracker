@@ -40,6 +40,24 @@ bool tryParseInstrumentToken(const std::string& token, int& outInstrument) {
   return true;
 }
 
+// SF2 has an on-demand loader that understands its "sf2:" id prefix
+// directly (see PluginHost::loadInstrumentAuto), but SFZ and S3I don't --
+// their scan adapters register plugin ids as "sfz:<path>"/"s3i:<path>" (so
+// they show up in `plugin list`), yet loadSfzInstrument/loadS3iInstrument
+// only accept a bare file path. Strip the scan prefix before handing the
+// id to those loaders, so assigning an id exactly as `plugin list` shows
+// it actually works instead of failing to open a path that includes the
+// literal "sfz:"/"s3i:" text.
+std::string stripScanIdPrefix(const std::string& pluginId) {
+  if (pluginId.compare(0, 4, "sfz:") == 0) {
+    return pluginId.substr(4);
+  }
+  if (pluginId.compare(0, 4, "s3i:") == 0) {
+    return pluginId.substr(4);
+  }
+  return pluginId;
+}
+
 const PluginControlPortMeta* findControlMetaByToken(
     const std::vector<PluginControlPortMeta>& controls,
     const std::string& token,
@@ -129,11 +147,12 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     } else if (pluginId.size() >= 4 &&
                (pluginId.substr(pluginId.size() - 4) == ".s3i" ||
                 pluginId.substr(pluginId.size() - 4) == ".S3I")) {
-      if (plugins.loadS3iInstrument(pluginId, static_cast<std::uint8_t>(instrument))) {
+      const std::string s3iPath = stripScanIdPrefix(pluginId);
+      if (plugins.loadS3iInstrument(s3iPath, static_cast<std::uint8_t>(instrument))) {
         std::cout << "Assigned S3I instrument " << pluginId << " to instrument " << instrument << '\n';
       } else {
         std::uint8_t s3iType = 0;
-        if (std::ifstream f(pluginId, std::ios::binary); f)
+        if (std::ifstream f(s3iPath, std::ios::binary); f)
           f.read(reinterpret_cast<char*>(&s3iType), 1);
         if (s3iType >= 3 && s3iType <= 7)
           std::cout << "Failed to load S3I file (Adlib rhythm instrument, not supported): " << pluginId << '\n';
@@ -162,7 +181,7 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     } else if (pluginId.size() >= 4 &&
                (pluginId.substr(pluginId.size() - 4) == ".sfz" ||
                 pluginId.substr(pluginId.size() - 4) == ".SFZ")) {
-      if (plugins.loadSfzInstrument(pluginId, static_cast<std::uint8_t>(instrument))) {
+      if (plugins.loadSfzInstrument(stripScanIdPrefix(pluginId), static_cast<std::uint8_t>(instrument))) {
         std::cout << "Assigned SFZ instrument " << pluginId << " to instrument " << instrument << '\n';
       } else {
         std::cout << "Failed to load SFZ file: " << pluginId << '\n';
