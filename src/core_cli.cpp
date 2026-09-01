@@ -476,6 +476,19 @@ bool handleCoreCommand(const std::string& command,
     return true;
   }
 
+  if (command == "volume" || command == "vol") {
+    int pct = -1;
+    coreInput >> pct;
+    if (pct < 0 || pct > 200) {
+      const int cur = static_cast<int>(std::lround(audio.getGlobalVolume() * 100.0f));
+      std::cout << "volume: " << cur << "%  (usage: volume <0-200>, 100=unity)\n";
+      return true;
+    }
+    audio.setGlobalVolume(static_cast<float>(pct) / 100.0f);
+    std::cout << "volume: " << pct << "%\n";
+    return true;
+  }
+
   if (command == "reset") {
     transport.stop();
     {

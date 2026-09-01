@@ -55,6 +55,12 @@ private:
 #else
   void* alsa_;
 #endif
+
+#ifdef _WIN32
+  struct WinMidiState;
+  WinMidiState* winMidi_;
+#endif
+
   std::thread thread_;
 };
 

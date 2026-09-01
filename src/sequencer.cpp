@@ -72,6 +72,7 @@ void Sequencer::reset() {
   effectMemoryByChannel_.clear();
   lastContinuousEffectCommandByChannel_.clear();
   panByChannel_.clear();
+  depthByChannel_.clear();
   legacyFilterEnabledByChannel_.clear();
   funkRepeatTicksByChannel_.clear();
   rowDelayTargetRow_ = kInvalidLoopRow;
@@ -82,6 +83,9 @@ void Sequencer::reset() {
   glissandoEnabledByChannel_.clear();
   vibratoWaveformByChannel_.clear();
   tremoloWaveformByChannel_.clear();
+  channelNoteState_.clear();
+  channelFilterParams_.clear();
+  channelEffectParams_.clear();
   patternWrappedSinceLastQuery_ = false;
   suppressNextPatternWrapDetection_ = false;
 }
@@ -140,6 +144,10 @@ void Sequencer::update(
     }
     if (panByChannel_.size() != pattern.channels()) {
       panByChannel_.assign(pattern.channels(), 0x80);
+      depthByChannel_.assign(pattern.channels(), 0x00);
+    }
+    if (volumeByChannel_.size() != pattern.channels()) {
+      volumeByChannel_.assign(pattern.channels(), 1.0f);
     }
     if (legacyFilterEnabledByChannel_.size() != pattern.channels()) {
       legacyFilterEnabledByChannel_.assign(pattern.channels(), false);
@@ -165,10 +173,31 @@ void Sequencer::update(
     if (tremoloWaveformByChannel_.size() != pattern.channels()) {
       tremoloWaveformByChannel_.assign(pattern.channels(), 0);
     }
+    if (channelNoteState_.size() != pattern.channels()) {
+      channelNoteState_.resize(pattern.channels());
+    }
+    if (channelFilterParams_.size() != pattern.channels()) {
+      channelFilterParams_.resize(pattern.channels());
+    }
+    if (channelEffectParams_.size() != pattern.channels()) {
+      channelEffectParams_.resize(pattern.channels());
+    }
 
     std::vector<RowNote> rowNotes;
     for (std::size_t channel = 0; channel < pattern.channels(); ++channel) {
       if (isChannelMuted(channel)) {
+        // Kill any voice sustained via channelNoteState_ but no longer in currentRowNotes_
+        if (channel < channelNoteState_.size()) {
+          auto& ns = channelNoteState_[channel];
+          if (ns.active) {
+            std::uint8_t prevSlot = (ns.sample != 0xFFFF && ns.sample <= 255)
+                ? static_cast<std::uint8_t>(ns.sample) : ns.instrument;
+            if (!pluginHost.triggerNoteOffResolved(ns.instrument, ns.sample, ns.midiNote)) {
+              audioEngine.noteOff(ns.midiNote, prevSlot);
+            }
+            ns.active = false;
+          }
+        }
         continue;
       }
 
@@ -234,6 +263,94 @@ void Sequencer::update(
             transport.setTicksPerBeat(static_cast<std::uint32_t>(effectValue));
           }
           break;
+        case 0x18: // Filter type (0=off, 1=LP, 2=HP, 3=BP, 4=Notch)
+        case 0x19: // Filter cutoff  (0..255 → 0.0..1.0)
+        case 0x1A: // Filter resonance (0..255 → 0.0..1.0)
+        {
+          if (channel < channelFilterParams_.size()) {
+            auto& fp = channelFilterParams_[channel];
+            if (effectCommand == 0x18) {
+              const auto t = static_cast<BiquadType>(std::min<std::uint8_t>(effectValue, 4));
+              fp.type = t;
+            } else if (effectCommand == 0x19) {
+              fp.cutoffNorm = static_cast<float>(effectValue) / 255.0f;
+              if (fp.type == BiquadType::Off) fp.type = BiquadType::LowPass;
+            } else {
+              fp.resonanceNorm = static_cast<float>(effectValue) / 255.0f;
+            }
+            // Determine target instrument: currently sustained note, else step note
+            std::uint8_t targetInstr = 0;
+            bool hasTarget = false;
+            if (channel < channelNoteState_.size() && channelNoteState_[channel].active) {
+              targetInstr = channelNoteState_[channel].instrument;
+              hasTarget   = true;
+            } else if (pattern.hasNoteAt(static_cast<int>(row), static_cast<int>(channel))) {
+              targetInstr = pattern.instrumentAt(static_cast<int>(row), static_cast<int>(channel));
+              hasTarget   = true;
+            }
+            if (hasTarget) {
+              audioEngine.setInstrumentFilter(targetInstr, fp.type, fp.cutoffNorm, fp.resonanceNorm);
+              pluginHost.setInstrumentFilter(targetInstr, fp.type, fp.cutoffNorm, fp.resonanceNorm);
+            }
+          }
+          break;
+        }
+        case 0x1B: // Delay time  (0-255 → 0-1000 ms)
+        case 0x1C: // Delay feedback (0-255 → 0..0.98)
+        case 0x1D: // Delay wet   (0-255 → 0..1)
+        case 0x1E: // Distortion type (0=off 1=soft 2=hard 3=fuzz)
+        case 0x1F: // Distortion drive (0-255 → 0..1)
+        case 0x20: // Chorus rate  (0-255 → 0.05..5 Hz)
+        case 0x21: // Chorus depth (0-255 → 0..1)
+        case 0x22: // Chorus wet   (0-255 → 0..1)
+        {
+          if (channel < channelEffectParams_.size()) {
+            auto& ep = channelEffectParams_[channel];
+            const float norm = static_cast<float>(effectValue) / 255.0f;
+            switch (effectCommand) {
+              case 0x1B: ep.delay.timeMs    = norm * 1000.0f; break;
+              case 0x1C: ep.delay.feedback  = norm * 0.98f;   break;
+              case 0x1D: ep.delay.wet       = norm;            break;
+              case 0x1E: ep.distortion.type = static_cast<DistortionType>(std::min<uint8_t>(effectValue, 3)); break;
+              case 0x1F: ep.distortion.drive = norm; ep.distortion.mix = 1.0f; break;
+              case 0x20: ep.chorus.rate     = 0.05f + norm * 4.95f; break;
+              case 0x21: ep.chorus.depth    = norm;            break;
+              case 0x22: ep.chorus.wet      = norm;            break;
+              default: break;
+            }
+            std::uint8_t targetInstr = 0;
+            bool hasTarget = false;
+            if (channel < channelNoteState_.size() && channelNoteState_[channel].active) {
+              targetInstr = channelNoteState_[channel].instrument; hasTarget = true;
+            } else if (pattern.hasNoteAt(static_cast<int>(row), static_cast<int>(channel))) {
+              targetInstr = pattern.instrumentAt(static_cast<int>(row), static_cast<int>(channel)); hasTarget = true;
+            }
+            if (hasTarget) {
+              audioEngine.setInstrumentEffects(targetInstr, ep);
+              pluginHost.setInstrumentEffects(targetInstr, ep);
+            }
+          }
+          break;
+        }
+        case 0x23: // Surround depth (0=front, 255=rear)
+        {
+          if (channel < depthByChannel_.size())
+            depthByChannel_[channel] = effectValue;
+          // Determine instrument on this channel and update its depth
+          std::uint8_t targetInstr = 0;
+          bool hasTarget = false;
+          if (channel < channelNoteState_.size() && channelNoteState_[channel].active) {
+            targetInstr = channelNoteState_[channel].instrument; hasTarget = true;
+          } else if (pattern.hasNoteAt(static_cast<int>(row), static_cast<int>(channel))) {
+            targetInstr = pattern.instrumentAt(static_cast<int>(row), static_cast<int>(channel)); hasTarget = true;
+          }
+          if (hasTarget) {
+            const float d = static_cast<float>(effectValue) / 255.0f;
+            audioEngine.setInstrumentDepth(targetInstr, d);
+            pluginHost.setInstrumentDepth(targetInstr, d);
+          }
+          break;
+        }
         default:
           break;
       }
@@ -292,6 +409,35 @@ void Sequencer::update(
 
       int note = pattern.noteAt(static_cast<int>(row), static_cast<int>(channel));
       if (note < 0) {
+        // Note-off marker (^^^): cut the note playing on this channel immediately.
+        // Uses channelNoteState_ (persists across rows) rather than activeNotes_ (previous-row only).
+        if (pattern.hasNoteAt(static_cast<int>(row), static_cast<int>(channel))) {
+          if (channel < channelNoteState_.size() && channelNoteState_[channel].active) {
+            auto& ns = channelNoteState_[channel];
+            if (effectCommand == 0x14) {
+              // Effect 0x14: fade out instead of hard cut.
+              // Velocity decrements each tick until zero, then note-off is sent.
+              ns.fadingOut = true;
+              ns.fadeDecrement = effectValue > 0 ? effectValue : 8;
+            } else {
+              ns.active = false;
+              ns.fadingOut = false;
+              std::uint8_t targetSlot = (ns.sample != 0xFFFF && ns.sample <= 255)
+                  ? static_cast<std::uint8_t>(ns.sample)
+                  : ns.instrument;
+              if (!pluginHost.triggerNoteOffResolved(ns.instrument, ns.sample, ns.midiNote)) {
+                audioEngine.noteOff(ns.midiNote, targetSlot);
+              }
+            }
+          }
+          // Also release anything still in activeNotes_ for this channel (e.g. same-row note).
+          for (auto& activeNote : activeNotes_) {
+            if (activeNote.channel == channel && !activeNote.releasedByGate) {
+              activeNote.releasedByGate = true;
+            }
+          }
+          continue;
+        }
         // Cxx (volume set) on an empty cell: carry the active note for this channel
         // forward with the new velocity so chord fades work without retriggering.
         if (effectCommand == 0x0C && effectValue > 0) {
@@ -320,7 +466,8 @@ void Sequencer::update(
               carried.fineSlideUp = 0;
               carried.fineSlideDown = 0;
               carried.fineTuneSemitone = 0;
-              carried.pan = panByChannel_[channel];
+              carried.pan   = panByChannel_[channel];
+              carried.depth = (channel < depthByChannel_.size()) ? depthByChannel_[channel] : 0x00;
               carried.glissandoEnabled = glissandoEnabledByChannel_[channel];
               carried.vibratoWaveform = vibratoWaveformByChannel_[channel];
               carried.tremoloWaveform = tremoloWaveformByChannel_[channel];
@@ -389,7 +536,8 @@ void Sequencer::update(
       int fineVolumeUp = 0;
       int fineVolumeDown = 0;
       int fineTuneSemitone = 0;
-      std::uint8_t pan = panByChannel_[channel];
+      std::uint8_t pan   = panByChannel_[channel];
+      std::uint8_t depth = (channel < depthByChannel_.size()) ? depthByChannel_[channel] : 0x00;
       bool legacyFilterEnabled = legacyFilterEnabledByChannel_[channel];
       bool glissandoEnabled = glissandoEnabledByChannel_[channel];
       std::uint8_t vibratoWaveform = vibratoWaveformByChannel_[channel];
@@ -472,6 +620,13 @@ void Sequencer::update(
         velocity = static_cast<std::uint8_t>(adjustedVelocity);
       }
 
+      if (channel < volumeByChannel_.size() && volumeByChannel_[channel] != 1.0f) {
+        const int scaled = std::clamp<int>(
+            static_cast<int>(std::lround(static_cast<float>(velocity) * volumeByChannel_[channel])),
+            1, 127);
+        velocity = static_cast<std::uint8_t>(scaled);
+      }
+
       double baseFrequency = midiNoteToFrequencyHz(note);
       if (fineTuneSemitone != 0) {
         baseFrequency *= std::pow(2.0, static_cast<double>(fineTuneSemitone) / 12.0);
@@ -543,7 +698,8 @@ void Sequencer::update(
         rowNote.fineSlideUp = fineSlideUp;
         rowNote.fineSlideDown = fineSlideDown;
         rowNote.fineTuneSemitone = fineTuneSemitone;
-        rowNote.pan = pan;
+        rowNote.pan   = pan;
+        rowNote.depth = depth;
         rowNote.glissandoEnabled = glissandoEnabled;
         rowNote.vibratoWaveform = vibratoWaveform;
         rowNote.tremoloWaveform = tremoloWaveform;
@@ -597,13 +753,33 @@ void Sequencer::update(
             activeNote.sample == rowNote.sample &&
             activeNote.midiNote != rowNote.midiNote &&
             activeNote.hasStarted && !activeNote.releasedByGate) {
-          std::uint8_t targetSlot = (activeNote.sample != 0xFFFF && activeNote.sample <= 255) 
-              ? static_cast<std::uint8_t>(activeNote.sample) 
+          std::uint8_t targetSlot = (activeNote.sample != 0xFFFF && activeNote.sample <= 255)
+              ? static_cast<std::uint8_t>(activeNote.sample)
               : activeNote.instrument;
           if (!pluginHost.triggerNoteOffResolved(activeNote.instrument, activeNote.sample, activeNote.midiNote)) {
             audioEngine.noteOff(activeNote.midiNote, targetSlot);
           }
           activeNote.releasedByGate = true;
+          if (activeNote.channel < channelNoteState_.size() &&
+              channelNoteState_[activeNote.channel].midiNote == activeNote.midiNote) {
+            channelNoteState_[activeNote.channel].active = false;
+          }
+        }
+      }
+      // Cut any note sustained across multiple rows (in channelNoteState_ but gone from activeNotes_),
+      // but only when the incoming note is genuinely different — not a same-note continuation.
+      if (rowNote.channel < channelNoteState_.size()) {
+        auto& ns = channelNoteState_[rowNote.channel];
+        const bool differentNote = ns.midiNote != rowNote.midiNote
+            || ns.instrument != rowNote.instrument
+            || ns.sample != rowNote.sample;
+        if (ns.active && differentNote) {
+          std::uint8_t prevSlot = (ns.sample != 0xFFFF && ns.sample <= 255)
+              ? static_cast<std::uint8_t>(ns.sample) : ns.instrument;
+          if (!pluginHost.triggerNoteOffResolved(ns.instrument, ns.sample, ns.midiNote)) {
+            audioEngine.noteOff(ns.midiNote, prevSlot);
+          }
+          ns.active = false;
         }
       }
     }
@@ -627,12 +803,40 @@ void Sequencer::update(
           ? static_cast<std::uint8_t>(rowNote.sample) 
           : rowNote.instrument;
       if (!containsNote(activeNotes_, rowNote)) {
+        // Not in activeNotes_ means this is an explicitly placed note this row — always retrigger.
+        // (The old stillActive guard suppressed retrigger for same-note repeats to "avoid doubling",
+        // but that breaks percussion: samples left at end-of-playback silently re-use the finished
+        // voice position rather than restarting, so every hit after the first produces no sound.)
         if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, startVelocity, true)) {
           audioEngine.noteOn(rowNote.midiNote, startFrequency, velocity, true, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
+        }
+        if (rowNote.channel < channelNoteState_.size()) {
+          channelNoteState_[rowNote.channel] = ChannelNoteState{true, rowNote.midiNote, rowNote.instrument, rowNote.sample, false, 0, startVelocity, startFrequency, static_cast<double>(rowNote.pan) / 255.0};
+          if (rowNote.channel < channelFilterParams_.size() && channelFilterParams_[rowNote.channel].isActive()) {
+            const auto& cfp = channelFilterParams_[rowNote.channel];
+            audioEngine.setInstrumentFilter(rowNote.instrument, cfp.type, cfp.cutoffNorm, cfp.resonanceNorm);
+            pluginHost.setInstrumentFilter(rowNote.instrument, cfp.type, cfp.cutoffNorm, cfp.resonanceNorm);
+          }
+          if (rowNote.channel < channelEffectParams_.size() && channelEffectParams_[rowNote.channel].isActive()) {
+            audioEngine.setInstrumentEffects(rowNote.instrument, channelEffectParams_[rowNote.channel]);
+            pluginHost.setInstrumentEffects(rowNote.instrument, channelEffectParams_[rowNote.channel]);
+          }
         }
       } else if (rowNote.retrigger) {
         if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, startVelocity, true)) {
           audioEngine.noteOn(rowNote.midiNote, startFrequency, velocity, true, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
+        }
+        if (rowNote.channel < channelNoteState_.size()) {
+          channelNoteState_[rowNote.channel] = ChannelNoteState{true, rowNote.midiNote, rowNote.instrument, rowNote.sample, false, 0, startVelocity, startFrequency, static_cast<double>(rowNote.pan) / 255.0};
+          if (rowNote.channel < channelFilterParams_.size() && channelFilterParams_[rowNote.channel].isActive()) {
+            const auto& cfp = channelFilterParams_[rowNote.channel];
+            audioEngine.setInstrumentFilter(rowNote.instrument, cfp.type, cfp.cutoffNorm, cfp.resonanceNorm);
+            pluginHost.setInstrumentFilter(rowNote.instrument, cfp.type, cfp.cutoffNorm, cfp.resonanceNorm);
+          }
+          if (rowNote.channel < channelEffectParams_.size() && channelEffectParams_[rowNote.channel].isActive()) {
+            audioEngine.setInstrumentEffects(rowNote.instrument, channelEffectParams_[rowNote.channel]);
+            pluginHost.setInstrumentEffects(rowNote.instrument, channelEffectParams_[rowNote.channel]);
+          }
         }
       } else {
         if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, startVelocity, false)) {
@@ -667,6 +871,10 @@ void Sequencer::update(
           if (!pluginHost.triggerNoteOffResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote)) {
             audioEngine.noteOff(rowNote.midiNote, targetSlot);
           }
+          if (rowNote.channel < channelNoteState_.size() &&
+              channelNoteState_[rowNote.channel].midiNote == rowNote.midiNote) {
+            channelNoteState_[rowNote.channel].active = false;
+          }
           rowNote.releasedByGate = true;
         }
         continue;
@@ -698,6 +906,18 @@ void Sequencer::update(
         if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, startVelocity, true)) {
           audioEngine.noteOn(rowNote.midiNote, startFrequency, velocity, true, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
         }
+        if (rowNote.channel < channelNoteState_.size()) {
+          channelNoteState_[rowNote.channel] = ChannelNoteState{true, rowNote.midiNote, rowNote.instrument, rowNote.sample, false, 0, startVelocity, startFrequency, static_cast<double>(rowNote.pan) / 255.0};
+          if (rowNote.channel < channelFilterParams_.size() && channelFilterParams_[rowNote.channel].isActive()) {
+            const auto& cfp = channelFilterParams_[rowNote.channel];
+            audioEngine.setInstrumentFilter(rowNote.instrument, cfp.type, cfp.cutoffNorm, cfp.resonanceNorm);
+            pluginHost.setInstrumentFilter(rowNote.instrument, cfp.type, cfp.cutoffNorm, cfp.resonanceNorm);
+          }
+          if (rowNote.channel < channelEffectParams_.size() && channelEffectParams_[rowNote.channel].isActive()) {
+            audioEngine.setInstrumentEffects(rowNote.instrument, channelEffectParams_[rowNote.channel]);
+            pluginHost.setInstrumentEffects(rowNote.instrument, channelEffectParams_[rowNote.channel]);
+          }
+        }
         rowNote.hasStarted = true;
         rowNote.delayedStart = false;
       }
@@ -713,16 +933,24 @@ void Sequencer::update(
         if (!pluginHost.triggerNoteOffResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote)) {
           audioEngine.noteOff(rowNote.midiNote, targetSlot);
         }
+        if (rowNote.channel < channelNoteState_.size() &&
+            channelNoteState_[rowNote.channel].midiNote == rowNote.midiNote) {
+          channelNoteState_[rowNote.channel].active = false;
+        }
         rowNote.releasedByGate = true;
         continue;
       }
 
       if (rowNote.noteCutTicks > 0 && ticksIntoRow >= rowNote.noteCutTicks) {
-        std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255) 
-            ? static_cast<std::uint8_t>(rowNote.sample) 
+        std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255)
+            ? static_cast<std::uint8_t>(rowNote.sample)
             : rowNote.instrument;
         if (!pluginHost.triggerNoteOffResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote)) {
           audioEngine.noteOff(rowNote.midiNote, targetSlot);
+        }
+        if (rowNote.channel < channelNoteState_.size() &&
+            channelNoteState_[rowNote.channel].midiNote == rowNote.midiNote) {
+          channelNoteState_[rowNote.channel].active = false;
         }
         rowNote.releasedByGate = true;
         continue;
@@ -842,6 +1070,27 @@ void Sequencer::update(
         activeNotes_.push_back(rowNote);
       }
     }
+
+    // Fade-out processor: decrement velocity each tick for channels fading via effect 0x14.
+    for (auto& ns : channelNoteState_) {
+      if (!ns.fadingOut || !ns.active) continue;
+      std::uint8_t targetSlot = (ns.sample != 0xFFFF && ns.sample <= 255)
+          ? static_cast<std::uint8_t>(ns.sample) : ns.instrument;
+      if (ns.currentVelocity <= ns.fadeDecrement) {
+        ns.currentVelocity = 0;
+        ns.active = false;
+        ns.fadingOut = false;
+        if (!pluginHost.triggerNoteOffResolved(ns.instrument, ns.sample, ns.midiNote)) {
+          audioEngine.noteOff(ns.midiNote, targetSlot);
+        }
+      } else {
+        ns.currentVelocity -= ns.fadeDecrement;
+        double fadeVelocity = static_cast<double>(ns.currentVelocity) / 127.0;
+        if (!pluginHost.triggerNoteOnResolved(ns.instrument, ns.sample, ns.midiNote, ns.currentVelocity, false)) {
+          audioEngine.noteOn(ns.midiNote, ns.baseFrequencyHz, fadeVelocity, false, targetSlot, ns.pan);
+        }
+      }
+    }
   }
 
   lastObservedTickCount_ = tickCount;
@@ -880,6 +1129,45 @@ std::uint8_t Sequencer::panByChannel(std::size_t channel) const {
     return 0x80;
   }
   return panByChannel_[channel];
+}
+
+float Sequencer::channelVolume(std::size_t channel) const {
+  if (channel >= volumeByChannel_.size()) return 1.0f;
+  return volumeByChannel_[channel];
+}
+
+void Sequencer::setChannelVolume(std::size_t channel, float volume) {
+  if (channel >= volumeByChannel_.size())
+    volumeByChannel_.resize(channel + 1, 1.0f);
+  volumeByChannel_[channel] = std::clamp(volume, 0.0f, 2.0f);
+}
+
+void Sequencer::setChannelFilter(std::size_t channel, BiquadType type, float cutoffNorm,
+                                 float resonanceNorm, AudioEngine& audio, PluginHost& plugins) {
+  if (channel >= channelFilterParams_.size())
+    channelFilterParams_.resize(channel + 1);
+  auto& fp = channelFilterParams_[channel];
+  fp.type        = type;
+  fp.cutoffNorm  = cutoffNorm;
+  fp.resonanceNorm = resonanceNorm;
+  // Immediately apply to the instrument currently sustained on this channel.
+  if (channel < channelNoteState_.size() && channelNoteState_[channel].active) {
+    const std::uint8_t instr = channelNoteState_[channel].instrument;
+    audio.setInstrumentFilter(instr, type, cutoffNorm, resonanceNorm);
+    plugins.setInstrumentFilter(instr, type, cutoffNorm, resonanceNorm);
+  }
+}
+
+void Sequencer::setChannelEffects(std::size_t channel, const InstrumentEffectParams& p,
+                                   AudioEngine& audio, PluginHost& plugins) {
+  if (channel >= channelEffectParams_.size())
+    channelEffectParams_.resize(channel + 1);
+  channelEffectParams_[channel] = p;
+  if (channel < channelNoteState_.size() && channelNoteState_[channel].active) {
+    const std::uint8_t instr = channelNoteState_[channel].instrument;
+    audio.setInstrumentEffects(instr, p);
+    plugins.setInstrumentEffects(instr, p);
+  }
 }
 
 bool Sequencer::sameKey(const RowNote& a, const RowNote& b) {

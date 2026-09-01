@@ -43,6 +43,8 @@ public:
   int preferredCellWidth() const;
   int preferredHeaderHeight() const;
   int preferredLabelWidth() const;
+  int currentCellWidth() const;
+  int currentLabelWidth() const;
   bool copySelection();
   bool cutSelection();
   bool pasteSelection();

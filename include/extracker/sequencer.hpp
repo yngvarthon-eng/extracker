@@ -5,6 +5,9 @@
 #include <array>
 #include <vector>
 
+#include "extracker/biquad_filter.hpp"
+#include "extracker/instrument_effects.hpp"
+
 namespace extracker {
 
 class AudioEngine;
@@ -43,7 +46,8 @@ public:
     int fineSlideUp = 0;
     int fineSlideDown = 0;
     int fineTuneSemitone = 0;
-    std::uint8_t pan = 0x80;
+    std::uint8_t pan   = 0x80;
+    std::uint8_t depth = 0x00;  // 0=front, 255=rear
     bool delayedStart = false;
     bool hasStarted = false;
     std::uint32_t lastRetriggerTick = 0;
@@ -70,8 +74,31 @@ public:
   std::size_t activeVoiceCount() const;
   int activeMidiNoteAt(std::size_t index) const;
   std::uint8_t panByChannel(std::size_t channel) const;
+  float channelVolume(std::size_t channel) const;
+  void setChannelVolume(std::size_t channel, float volume);
+
+  // Set a persistent channel filter (GUI-driven). Applies immediately to any
+  // instrument currently sustained on that channel, and is re-applied on every
+  // subsequent note trigger. Pass BiquadType::Off to clear.
+  void setChannelFilter(std::size_t channel, BiquadType type, float cutoffNorm,
+                        float resonanceNorm, AudioEngine& audio, PluginHost& plugins);
+
+  void setChannelEffects(std::size_t channel, const InstrumentEffectParams& p,
+                         AudioEngine& audio, PluginHost& plugins);
 
 private:
+  struct ChannelNoteState {
+    bool active = false;
+    int midiNote = -1;
+    std::uint8_t instrument = 0;
+    std::uint16_t sample = 0xFFFF;
+    bool fadingOut = false;
+    std::uint8_t fadeDecrement = 0;
+    std::uint8_t currentVelocity = 100;
+    double baseFrequencyHz = 0.0;
+    double pan = 0.5;
+  };
+
   static double midiNoteToFrequencyHz(int midiNote);
 
   std::uint32_t lastObservedRow_;
@@ -83,6 +110,8 @@ private:
   std::vector<std::array<std::uint8_t, 16>> effectMemoryByChannel_;
   std::vector<std::uint8_t> lastContinuousEffectCommandByChannel_;
   std::vector<std::uint8_t> panByChannel_;
+  std::vector<std::uint8_t> depthByChannel_;
+  std::vector<float> volumeByChannel_;
   std::vector<bool> legacyFilterEnabledByChannel_;
   std::vector<std::uint8_t> funkRepeatTicksByChannel_;
   std::uint32_t rowDelayTargetRow_;
@@ -93,6 +122,9 @@ private:
   std::vector<bool> glissandoEnabledByChannel_;
   std::vector<std::uint8_t> vibratoWaveformByChannel_;
   std::vector<std::uint8_t> tremoloWaveformByChannel_;
+  std::vector<ChannelNoteState> channelNoteState_;
+  std::vector<BiquadParams>            channelFilterParams_;
+  std::vector<InstrumentEffectParams>  channelEffectParams_;
   bool patternWrappedSinceLastQuery_;
   bool suppressNextPatternWrapDetection_;
 

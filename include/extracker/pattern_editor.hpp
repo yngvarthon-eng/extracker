@@ -27,6 +27,8 @@ public:
   PatternEditor(std::size_t rows = 64, std::size_t channels = 8);
 
   std::string status() const;
+  static constexpr int kNoteOff = -1;  // sentinel: hasNote=true, note=-1 means note-cut (^^^)
+
   void insertNote(
       int row,
       int channel,
@@ -37,6 +39,7 @@ public:
       bool retrigger = false,
       std::uint8_t effectCommand = 0,
       std::uint8_t effectValue = 0);
+  void insertNoteOff(int row, int channel);
   void setInstrument(int row, int channel, std::uint8_t instrument);
   void setSample(int row, int channel, std::uint16_t sample);
   void setGateTicks(int row, int channel, std::uint32_t gateTicks);
@@ -44,6 +47,10 @@ public:
   void setRetrigger(int row, int channel, bool retrigger);
   void setEffect(int row, int channel, std::uint8_t effectCommand, std::uint8_t effectValue);
   void clearStep(int row, int channel);
+  void insertRowAt(int row, int channel);   // push steps down from row, insert empty at row
+  void deleteRowAt(int row, int channel);   // pull steps up from row, last row becomes empty
+  void insertRowAllChannels(int row);
+  void deleteRowAllChannels(int row);
 
   bool hasNoteAt(int row, int channel) const;
   int noteAt(int row, int channel) const;

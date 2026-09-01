@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include <cstdio>
 #include <cctype>
@@ -20,7 +21,11 @@
 #include "extracker/audio_engine.hpp"
 #include "extracker/command_registry.hpp"
 #include "extracker/core_cli.hpp"
+#include "extracker/filter_cli.hpp"
+#include "extracker/effects_cli.hpp"
+#include "extracker/reverb_cli.hpp"
 #include "extracker/default_command_bindings.hpp"
+#include "extracker/instrument_cli.hpp"
 #include "extracker/midi_cli.hpp"
 #include "extracker/midi_input.hpp"
 #include "extracker/module.hpp"
@@ -33,7 +38,13 @@
 #include "extracker/sample_cli.hpp"
 #include "extracker/record_workflow.hpp"
 #include "extracker/sequencer.hpp"
+#include "extracker/song_bundle.hpp"
 #include "extracker/transport.hpp"
+
+namespace extracker {
+void handleChannelCommand(std::istringstream& input, Sequencer& sequencer,
+                          std::size_t numChannels);
+}  // namespace extracker
 
 namespace {
 
@@ -258,6 +269,10 @@ int main() {
 
   auto readCommandOutput = [](const std::string& command, std::string& output) {
     output.clear();
+#ifdef _WIN32
+    (void)command;
+    return false;  // aconnect is an ALSA/Linux tool; not available on Windows
+#else
     FILE* pipe = popen(command.c_str(), "r");
     if (pipe == nullptr) {
       return false;
@@ -270,6 +285,7 @@ int main() {
 
     int status = pclose(pipe);
     return status == 0;
+#endif
   };
 
   auto parseAconnectPorts = [](const std::string& text) {
@@ -362,6 +378,7 @@ int main() {
                          midiThruEnabled,
                          recordEnabled,
                          recordChannel,
+                         recordState,
                          chooseRecordRowFn,
                          applyRecordWriteFn,
                          midiNoteToFrequencyHzFn});
@@ -400,6 +417,19 @@ int main() {
     if (!out) {
       return false;
     }
+
+    const std::filesystem::path modulePath(path);
+    const std::filesystem::path moduleDirectory =
+        modulePath.has_parent_path() ? modulePath.parent_path() : std::filesystem::current_path();
+    const std::filesystem::path songStem = modulePath.stem();
+    std::unordered_map<std::string, std::string> bundledSamples;
+    std::unordered_map<std::string, std::string> bundledInstrumentFiles;
+
+    auto padSlot = [](std::size_t slot) {
+      std::ostringstream oss;
+      oss << std::setw(3) << std::setfill('0') << slot;
+      return oss.str();
+    };
 
     out << "EXTRACKER_SONG_V1 "
         << module.currentEditor().rows() << " "
@@ -454,14 +484,131 @@ int main() {
     out << "\n";
 
     out << "MIDI_TRANSPORT " << midiClockTimeout.count() << " " << (midiFallbackLockTempo ? 1 : 0) << "\n";
+
+    std::ostringstream instrumentNamesOut;
+    std::ostringstream instrumentAssignsOut;
+    std::ostringstream instrumentParamsOut;
+
+    for (std::size_t instrSlot = 0; instrSlot < extracker::PluginHost::kMaxInstrumentSlots; ++instrSlot) {
+      const std::uint8_t slot = static_cast<std::uint8_t>(instrSlot);
+      const std::string pluginId = plugins.pluginForInstrument(slot);
+      if (pluginId.empty()) {
+        continue;
+      }
+
+      const std::string slotLabel = "instr_" + padSlot(instrSlot);
+      const auto parts = extracker::parseInstrumentId(pluginId);
+
+      std::string displayName;
+      if (parts.kind == extracker::InstrumentIdKind::NotBundlable) {
+        displayName = plugins.pluginDisplayName(pluginId);
+      } else {
+        displayName = std::filesystem::path(parts.path).stem().string();
+      }
+
+      std::string storedId = pluginId;
+      if (parts.kind == extracker::InstrumentIdKind::SingleFile) {
+        const std::string bundledPath = extracker::bundleFile(
+            parts.path, moduleDirectory, songStem, "instruments", slotLabel, displayName,
+            bundledInstrumentFiles);
+        storedId = extracker::rebuildInstrumentId(parts, bundledPath);
+      } else if (parts.kind == extracker::InstrumentIdKind::DirectoryOfSiblingFiles) {
+        const std::string bundledPath = extracker::bundleDirectory(
+            parts.path, moduleDirectory, songStem, "instruments", slotLabel, displayName,
+            bundledInstrumentFiles);
+        storedId = extracker::rebuildInstrumentId(parts, bundledPath);
+      }
+
+      instrumentNamesOut << "INSTRUMENT_NAME " << instrSlot << " " << std::quoted(displayName) << "\n";
+      instrumentAssignsOut << "INSTRUMENT_ASSIGN " << instrSlot << " " << std::quoted(storedId) << "\n";
+
+      const bool isPresetBasedPlugin =
+          pluginId.compare(0, 5, "vst3.") == 0 || pluginId.compare(0, 4, "lv2:") == 0;
+      if (isPresetBasedPlugin) {
+        // VST3/LV2 report their parameters as display-formatted strings (not
+        // clean, round-trippable names), and each already exposes a
+        // dedicated binary state serializer -- use that instead of the
+        // generic name=value mechanism below.
+        const std::filesystem::path presetDir = moduleDirectory / (songStem.string() + "_instruments");
+        std::error_code presetDirError;
+        std::filesystem::create_directories(presetDir, presetDirError);
+        if (!presetDirError) {
+          const std::filesystem::path presetPath = presetDir / (slotLabel + ".preset");
+          if (plugins.saveInstrumentPreset(slot, presetPath.string())) {
+            std::error_code relError;
+            const auto relativePreset = std::filesystem::relative(presetPath, moduleDirectory, relError);
+            const std::string storedPresetPath =
+                (!relError && !relativePreset.empty()) ? relativePreset.generic_string() : presetPath.string();
+            instrumentParamsOut << "INSTRUMENT_PRESET " << instrSlot << " " << std::quoted(storedPresetPath) << "\n";
+          }
+        }
+      } else {
+        for (const auto& paramName : plugins.listInstrumentParameters(slot)) {
+          const double value = plugins.getInstrumentParameter(slot, paramName);
+          instrumentParamsOut << "INSTRUMENT_PARAM " << instrSlot << " " << paramName << " " << value << "\n";
+        }
+      }
+
+      const auto filterParams = plugins.getInstrumentFilterParams(slot);
+      if (filterParams.isActive()) {
+        instrumentParamsOut << "INSTRUMENT_FILTER " << instrSlot << " "
+                             << static_cast<int>(filterParams.type) << " "
+                             << filterParams.cutoffNorm << " " << filterParams.resonanceNorm << "\n";
+      }
+
+      const auto effectParams = plugins.getInstrumentEffectParams(slot);
+      if (effectParams.isActive()) {
+        instrumentParamsOut << "INSTRUMENT_EFFECTS " << instrSlot << " "
+                             << static_cast<int>(effectParams.distortion.type) << " "
+                             << effectParams.distortion.drive << " " << effectParams.distortion.mix << " "
+                             << effectParams.delay.timeMs << " " << effectParams.delay.feedback << " "
+                             << effectParams.delay.wet << " "
+                             << effectParams.chorus.rate << " " << effectParams.chorus.depth << " "
+                             << effectParams.chorus.wet << "\n";
+      }
+
+      const float pitch = plugins.getInstrumentPitch(slot);
+      if (pitch != 0.0f) {
+        instrumentParamsOut << "INSTRUMENT_PITCH " << instrSlot << " " << pitch << "\n";
+      }
+      const float reverb = plugins.getInstrumentReverbSend(slot);
+      if (reverb != 0.0f) {
+        instrumentParamsOut << "INSTRUMENT_REVERB " << instrSlot << " " << reverb << "\n";
+      }
+      const float depth = plugins.getInstrumentDepth(slot);
+      if (depth != 0.5f) {
+        instrumentParamsOut << "INSTRUMENT_DEPTH " << instrSlot << " " << depth << "\n";
+      }
+    }
+
+    out << instrumentNamesOut.str();
+    out << instrumentAssignsOut.str();
+    out << instrumentParamsOut.str();
+
     for (std::size_t sampleSlot = 0; sampleSlot < extracker::PluginHost::kMaxSampleSlots; ++sampleSlot) {
-      const std::string samplePath = plugins.samplePathForSlot(static_cast<std::uint16_t>(sampleSlot));
-      if (!samplePath.empty()) {
+      const std::string samplePathRaw = plugins.samplePathForSlot(static_cast<std::uint16_t>(sampleSlot));
+      if (!samplePathRaw.empty()) {
         const std::string sampleName = plugins.sampleNameForSlot(static_cast<std::uint16_t>(sampleSlot));
-        out << "SAMPLE_ENTRY " << sampleSlot << " " << std::quoted(sampleName) << " " << std::quoted(samplePath) << "\n";
+        const std::string storedPath = extracker::bundleFile(
+            samplePathRaw, moduleDirectory, songStem, "samples", "slot_" + padSlot(sampleSlot),
+            sampleName, bundledSamples);
+        out << "SAMPLE_ENTRY " << sampleSlot << " " << std::quoted(sampleName) << " " << std::quoted(storedPath) << "\n";
+      }
+    }
+    for (std::size_t instrSlot = 0; instrSlot < extracker::PluginHost::kMaxInstrumentSlots; ++instrSlot) {
+      const int sampleSlot = plugins.sampleSlotForInstrument(static_cast<std::uint8_t>(instrSlot));
+      if (sampleSlot >= 0) {
+        out << "INSTR_SAMPLE_SLOT " << instrSlot << " " << sampleSlot << "\n";
       }
     }
     out << "MODULE_MESSAGE " << std::quoted(escapeModuleMessage(module.message())) << "\n";
+
+    out << "CHANNEL_VOLUME";
+    for (std::size_t ch = 0; ch < module.currentEditor().channels(); ++ch) {
+      out << " " << static_cast<int>(std::lround(sequencer.channelVolume(ch) * 100.0f));
+    }
+    out << "\n";
+
     extracker::writeRecordState(out, recordState);
 
     return true;
@@ -513,13 +660,24 @@ int main() {
         return token == "SONG_ORDER" || token == "PATTERN_SWING" ||
                token == "INSERT_SWING_INHERIT" || token == "ROW_EDIT_SCOPE" ||
                token == "TRANSPORT" || token == "MIDI_MAP" ||
-               token == "MIDI_TRANSPORT" || token == "SAMPLE_BANK" ||
-               token == "SAMPLE_ENTRY" || token == "MODULE_MESSAGE" ||
+               token == "MIDI_TRANSPORT" || token == "MIDI_EDITOR_CC_MAP" ||
+               token == "SAMPLE_BANK" || token == "SAMPLE_ENTRY" ||
+               token == "INSTRUMENT_ASSIGN" || token == "INSTR_SAMPLE_SLOT" ||
+               token == "INSTRUMENT_NAME" || token == "INSTRUMENT_PARAM" ||
+               token == "INSTRUMENT_PRESET" ||
+               token == "INSTRUMENT_FILTER" || token == "INSTRUMENT_EFFECTS" ||
+               token == "INSTRUMENT_PITCH" || token == "INSTRUMENT_REVERB" ||
+               token == "INSTRUMENT_DEPTH" ||
+               token == "MODULE_MESSAGE" ||
+               token == "CHANNEL_INSTRUMENTS" || token == "CHANNEL_MUTED" ||
+               token == "CHANNEL_VOLUME" ||
                token.rfind("RECORD_", 0) == 0;
       };
 
       std::string pendingToken;
       bool hasPendingToken = false;
+      std::unordered_map<int, std::string> pendingInstrumentNames;
+      bool rescannedExternalPlugins = false;
 
       for (std::size_t patternIndex = 0; patternIndex < filePatternCount; ++patternIndex) {
         std::string patternToken;
@@ -583,18 +741,22 @@ int main() {
           }
 
           if (hasNote != 0) {
-            editor.insertNote(
-                parsedRow,
-                parsedChannel,
-                note,
-                static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
-                static_cast<std::uint32_t>(std::max(gateTicks, 0)),
-                static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
-                retrigger != 0,
-                static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
-                static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
-            if (sample != 0xFFFF) {
-              editor.setSample(parsedRow, parsedChannel, static_cast<std::uint16_t>(std::clamp(sample, 0, 65535)));
+            if (note < 0) {
+              editor.insertNoteOff(parsedRow, parsedChannel);
+            } else {
+              editor.insertNote(
+                  parsedRow,
+                  parsedChannel,
+                  note,
+                  static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
+                  static_cast<std::uint32_t>(std::max(gateTicks, 0)),
+                  static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
+                  retrigger != 0,
+                  static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+                  static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+              if (sample != 0xFFFF) {
+                editor.setSample(parsedRow, parsedChannel, static_cast<std::uint16_t>(std::clamp(sample, 0, 65535)));
+              }
             }
           } else if (effectCommand != 0 || effectValue != 0) {
             editor.setEffect(
@@ -720,12 +882,161 @@ int main() {
           if (plugins.loadSampleToSlot(static_cast<std::uint16_t>(sampleSlot), resolvedSamplePath.string())) {
             plugins.setSampleNameForSlot(static_cast<std::uint16_t>(sampleSlot), sampleName);
           }
+        } else if (tailToken == "INSTRUMENT_NAME") {
+          int instrSlot = -1;
+          std::string name;
+          if (!(in >> instrSlot >> std::quoted(name))) {
+            return false;
+          }
+          pendingInstrumentNames[instrSlot] = name;
+        } else if (tailToken == "INSTRUMENT_ASSIGN") {
+          int instrSlot = -1;
+          std::string storedId;
+          if (!(in >> instrSlot >> std::quoted(storedId))) {
+            return false;
+          }
+          if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots)) {
+            const auto parts = extracker::parseInstrumentId(storedId);
+            std::string resolvedId = storedId;
+            if (parts.kind != extracker::InstrumentIdKind::NotBundlable) {
+              resolvedId = extracker::rebuildInstrumentId(
+                  parts, extracker::resolveStoredPath(moduleDirectory, parts.path));
+            }
+            bool loaded = plugins.loadInstrumentAuto(resolvedId, static_cast<std::uint8_t>(instrSlot));
+            if (!loaded && !rescannedExternalPlugins &&
+                (storedId.compare(0, 5, "vst3.") == 0 || storedId.compare(0, 4, "lv2:") == 0)) {
+              // The CLI (unlike the GUI) never scans for external plugins at
+              // startup, so a vst3./lv2: id can fail to resolve even when
+              // the underlying plugin is installed, simply because nothing
+              // has scanned for it yet this session.
+              plugins.rescanExternalPlugins();
+              rescannedExternalPlugins = true;
+              loaded = plugins.loadInstrumentAuto(resolvedId, static_cast<std::uint8_t>(instrSlot));
+            }
+            if (!loaded) {
+              const auto nameIt = pendingInstrumentNames.find(instrSlot);
+              const std::string displayName =
+                  (nameIt != pendingInstrumentNames.end()) ? nameIt->second : storedId;
+              std::cerr << "Warning: could not restore instrument " << instrSlot
+                        << " (\"" << displayName << "\", originally " << storedId << ")\n";
+            }
+          }
+        } else if (tailToken == "INSTR_SAMPLE_SLOT") {
+          int instrSlot = -1;
+          int sampleSlot = -1;
+          if (!(in >> instrSlot >> sampleSlot)) {
+            return false;
+          }
+          if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots) &&
+              sampleSlot >= 0 && sampleSlot < static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
+            plugins.assignSampleSlotToInstrument(static_cast<std::uint16_t>(sampleSlot),
+                                                 static_cast<std::uint8_t>(instrSlot));
+          }
+        } else if (tailToken == "INSTRUMENT_PARAM") {
+          int instrSlot = -1;
+          std::string paramName;
+          double value = 0.0;
+          if (!(in >> instrSlot >> paramName >> value)) {
+            return false;
+          }
+          if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots)) {
+            plugins.setInstrumentParameter(static_cast<std::uint8_t>(instrSlot), paramName, value);
+          }
+        } else if (tailToken == "INSTRUMENT_PRESET") {
+          int instrSlot = -1;
+          std::string presetPath;
+          if (!(in >> instrSlot >> std::quoted(presetPath))) {
+            return false;
+          }
+          if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots)) {
+            const std::string resolvedPresetPath = extracker::resolveStoredPath(moduleDirectory, presetPath);
+            plugins.loadInstrumentPreset(static_cast<std::uint8_t>(instrSlot), resolvedPresetPath);
+          }
+        } else if (tailToken == "INSTRUMENT_FILTER") {
+          int instrSlot = -1;
+          int filterType = 0;
+          float cutoffNorm = 1.0f;
+          float resonanceNorm = 0.0f;
+          if (!(in >> instrSlot >> filterType >> cutoffNorm >> resonanceNorm)) {
+            return false;
+          }
+          if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots)) {
+            plugins.setInstrumentFilter(static_cast<std::uint8_t>(instrSlot),
+                                        static_cast<extracker::BiquadType>(filterType),
+                                        cutoffNorm, resonanceNorm);
+          }
+        } else if (tailToken == "INSTRUMENT_EFFECTS") {
+          int instrSlot = -1;
+          extracker::InstrumentEffectParams effectParams;
+          int distortionType = 0;
+          if (!(in >> instrSlot >> distortionType >> effectParams.distortion.drive >> effectParams.distortion.mix >>
+                effectParams.delay.timeMs >> effectParams.delay.feedback >> effectParams.delay.wet >>
+                effectParams.chorus.rate >> effectParams.chorus.depth >> effectParams.chorus.wet)) {
+            return false;
+          }
+          if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots)) {
+            effectParams.distortion.type = static_cast<extracker::DistortionType>(distortionType);
+            plugins.setInstrumentEffects(static_cast<std::uint8_t>(instrSlot), effectParams);
+          }
+        } else if (tailToken == "INSTRUMENT_PITCH") {
+          int instrSlot = -1;
+          float semitones = 0.0f;
+          if (!(in >> instrSlot >> semitones)) {
+            return false;
+          }
+          if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots)) {
+            plugins.setInstrumentPitch(static_cast<std::uint8_t>(instrSlot), semitones);
+          }
+        } else if (tailToken == "INSTRUMENT_REVERB") {
+          int instrSlot = -1;
+          float send = 0.0f;
+          if (!(in >> instrSlot >> send)) {
+            return false;
+          }
+          if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots)) {
+            plugins.setInstrumentReverbSend(static_cast<std::uint8_t>(instrSlot), send);
+          }
+        } else if (tailToken == "INSTRUMENT_DEPTH") {
+          int instrSlot = -1;
+          float depth = 0.5f;
+          if (!(in >> instrSlot >> depth)) {
+            return false;
+          }
+          if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots)) {
+            plugins.setInstrumentDepth(static_cast<std::uint8_t>(instrSlot), depth);
+          }
         } else if (tailToken == "MODULE_MESSAGE") {
           std::string escapedMessage;
           if (!(in >> std::quoted(escapedMessage))) {
             return false;
           }
           module.setMessage(unescapeModuleMessage(escapedMessage));
+        } else if (tailToken == "MIDI_EDITOR_CC_MAP") {
+          // GUI-only: 4 CC mapping codes — read and discard
+          for (int i = 0; i < 4; ++i) {
+            int code = -1;
+            in >> code;
+          }
+        } else if (tailToken == "CHANNEL_INSTRUMENTS") {
+          // GUI-only: per-channel instrument assignment — read and discard
+          for (std::size_t ch = 0; ch < module.currentEditor().channels(); ++ch) {
+            int slot = 0;
+            in >> slot;
+          }
+        } else if (tailToken == "CHANNEL_MUTED") {
+          // GUI-only: per-channel mute state — read and discard
+          for (std::size_t ch = 0; ch < module.currentEditor().channels(); ++ch) {
+            int muted = 0;
+            in >> muted;
+          }
+        } else if (tailToken == "CHANNEL_VOLUME") {
+          for (std::size_t ch = 0; ch < module.currentEditor().channels(); ++ch) {
+            int pct = 100;
+            in >> pct;
+            if (in) {
+              sequencer.setChannelVolume(ch, static_cast<float>(std::clamp(pct, 0, 200)) / 100.0f);
+            }
+          }
         } else {
           bool handledRecordToken = false;
           if (!extracker::applyRecordFileToken(
@@ -775,18 +1086,22 @@ int main() {
       }
 
       if (hasNote != 0) {
-        editor.insertNote(
-            row,
-            channel,
-            note,
-            static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
-            static_cast<std::uint32_t>(std::max(gateTicks, 0)),
-            static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
-            retrigger != 0,
-            static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
-            static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
-        if (isV2Format && sample != 0xFFFF) {
-          editor.setSample(row, channel, static_cast<std::uint16_t>(std::clamp(sample, 0, 65535)));
+        if (note < 0) {
+          editor.insertNoteOff(row, channel);
+        } else {
+          editor.insertNote(
+              row,
+              channel,
+              note,
+              static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
+              static_cast<std::uint32_t>(std::max(gateTicks, 0)),
+              static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
+              retrigger != 0,
+              static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+              static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+          if (isV2Format && sample != 0xFFFF) {
+            editor.setSample(row, channel, static_cast<std::uint16_t>(std::clamp(sample, 0, 65535)));
+          }
         }
       } else if (effectCommand != 0 || effectValue != 0) {
         editor.setEffect(
@@ -972,6 +1287,8 @@ int main() {
         }
       }
 
+      plugins.setTransportContext({transport.isPlaying(), transport.tempoBpm(), 4, 4});
+
       if (transport.isPlaying() || midiTransportRunning) {
         std::lock_guard<std::mutex> lock(stateMutex);
 
@@ -1024,8 +1341,10 @@ int main() {
             }
             songPlaybackPosition.store(nextPos);
             module.switchToPattern(module.songEntryAt(nextPos));
+            transport.setPatternRows(static_cast<std::uint32_t>(module.currentEditor().rows()));
             transport.setSwingPercent(module.currentPatternSwing());
             sequencer.reset();
+            plugins.allNotesOff();
             audio.allNotesOff();
             transport.resetTickCount();
           }
@@ -1165,6 +1484,9 @@ int main() {
             extracker::handlePluginCommand(plugins, input);
           },
           [&](std::istringstream& input) {
+            extracker::handleInstrumentCommand(plugins, input);
+          },
+          [&](std::istringstream& input) {
             extracker::handleSampleCommand(plugins, input);
           },
           [&](std::istringstream& input) {
@@ -1181,6 +1503,10 @@ int main() {
           },
           [&](std::istringstream& input) {
             extracker::handleMidiCommand(input, midiContext);
+          },
+          [&](std::istringstream& input) {
+            extracker::handleChannelCommand(input, sequencer,
+                                            module.currentEditor().channels());
           },
           [&](const std::string& command, std::istringstream& input) {
             extracker::handleCoreCommand(command, input, makeCoreContext());
@@ -1218,6 +1544,9 @@ int main() {
       { "0E", "Extended",          "subcommand (E0/E1/E2/E3/E4/E5/E6/E7/E8/E9/EA/EB/EC/ED/EE/EF)", true  },
       { "0F", "Speed/Tempo",       "<32 = set TPR, >=32 = set BPM",           true  },
       { "17", "Set TPB",           "ticks-per-beat (1..255)",                 true  },
+      { "18", "Filter Type",       "0=off 1=lp 2=hp 3=bp 4=notch",           true  },
+      { "19", "Filter Cutoff",     "0..FF (0=20Hz, FF=20kHz, exponential)",   true  },
+      { "1A", "Filter Resonance",  "0..FF (0=flat, FF=max resonance)",        true  },
     };
     std::cout << "FX  Name                Value                              OK\n";
     std::cout << "--- ------------------- ---------------------------------- ---\n";
@@ -1228,6 +1557,16 @@ int main() {
         e.code, e.name, e.value, e.implemented ? "yes" : "no");
       std::cout << line;
     }
+  };
+
+  commandRegistry["filter"] = [&](std::istringstream& input) {
+    extracker::handleFilterCommand(audio, plugins, input);
+  };
+  commandRegistry["effects"] = [&](std::istringstream& input) {
+    extracker::handleEffectsCommand(audio, plugins, sequencer, input);
+  };
+  commandRegistry["reverb"] = [&](std::istringstream& input) {
+    extracker::handleReverbCommand(audio, plugins, input);
   };
 
   auto trim = [](const std::string& text) -> std::string {

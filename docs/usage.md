@@ -61,7 +61,67 @@ The **upper row** plays in the higher octave (oct+1); the **lower row** plays in
 | `A S D F G H J K L` | Lower row semitones (oct, semitones 0–8) |
 
 ### Whole-tone rows
+# exTracker — Usage Guide
 
+## Overview
+
+exTracker is a Linux step-sequencer with a pattern-grid interface inspired by classic trackers.
+Notes, volumes, and effects are entered directly in the grid using keyboard shortcuts.
+Audio is rendered in real time through the built-in sample engine and/or JUCE audio plugins.
+
+Run the GUI build:
+
+```sh
+./build-make-gui/extracker
+```
+
+Or the headless CLI build (for scripting and tests):
+
+```sh
+./build-make/extracker
+```
+
+---
+
+## Pattern Grid — Cell Layout
+
+Each cell in the pattern grid represents one step on one channel.  
+Columns from left to right:
+
+| Column | Width | Content |
+|--------|-------|---------|
+| Note | 3 chars | `C-4`, `D#3`, `---` (empty), `OFF` (note-off) |
+| Sample | 3 hex | Sample slot number `000`–`0FF`, `---` if none |
+| Velocity | 3 chars | `a7F` (velocity = 0x7F), `...` when at default (100) |
+| Effect | 3 chars | Tracker effect: command nibble + 2-digit value, e.g. `F80` |
+
+---
+
+## Navigation
+
+| Key | Action |
+|-----|--------|
+| Arrow keys | Move selection |
+| Tab / Shift+Tab | Next / previous channel |
+| Enter | Advance cursor by step |
+| Home / End | First / last row |
+| Page Up / Page Down | Jump 16 rows |
+| Click | Select cell |
+| Alt+Drag | Audition-scrub rows without writing notes |
+
+---
+
+## Note Entry
+
+The keyboard is mapped as a two-octave piano layout.  
+The **upper row** plays in the higher octave (oct+1); the **lower row** plays in the current octave.
+
+### Semitone rows
+
+| Keys | Notes |
+|------|-------|
+| `1 2 3 4 5 6 7 8 9` | Upper row semitones (oct+1, semitones 0–8) |
+| `A S D F G H J K L` | Lower
 | Keys | Notes |
 |------|-------|
 | `Q W E R T Y U I O P` | Upper row whole tones (oct+1, white-key offsets) |

@@ -50,6 +50,16 @@ void PatternEditor::insertNote(
   step.effectValue = effectValue;
 }
 
+void PatternEditor::insertNoteOff(int row, int channel) {
+  if (!isValidCell(row, channel)) {
+    return;
+  }
+  Step& step = cell(row, channel);
+  step.hasNote = true;
+  step.note = kNoteOff;
+  step.gateTicks = 0;
+}
+
 void PatternEditor::setInstrument(int row, int channel, std::uint8_t instrument) {
   if (!isValidCell(row, channel)) {
     return;
@@ -103,6 +113,38 @@ void PatternEditor::setEffect(int row, int channel, std::uint8_t effectCommand, 
   Step& step = cell(row, channel);
   step.effectCommand = effectCommand;
   step.effectValue = effectValue;
+}
+
+void PatternEditor::insertRowAt(int row, int channel) {
+  if (!isValidCell(row, channel)) return;
+  for (int r = static_cast<int>(rows_) - 1; r > row; --r) {
+    cell(r, channel) = cell(r - 1, channel);
+  }
+  Step empty;
+  cell(row, channel) = empty;
+}
+
+void PatternEditor::deleteRowAt(int row, int channel) {
+  if (!isValidCell(row, channel)) return;
+  for (int r = row; r < static_cast<int>(rows_) - 1; ++r) {
+    cell(r, channel) = cell(r + 1, channel);
+  }
+  Step empty;
+  cell(static_cast<int>(rows_) - 1, channel) = empty;
+}
+
+void PatternEditor::insertRowAllChannels(int row) {
+  if (row < 0 || static_cast<std::size_t>(row) >= rows_) return;
+  for (std::size_t ch = 0; ch < channels_; ++ch) {
+    insertRowAt(row, static_cast<int>(ch));
+  }
+}
+
+void PatternEditor::deleteRowAllChannels(int row) {
+  if (row < 0 || static_cast<std::size_t>(row) >= rows_) return;
+  for (std::size_t ch = 0; ch < channels_; ++ch) {
+    deleteRowAt(row, static_cast<int>(ch));
+  }
 }
 
 void PatternEditor::clearStep(int row, int channel) {

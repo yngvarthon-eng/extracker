@@ -111,26 +111,45 @@ void handleNoteCommand(PatternEditor& editor,
       }
 
       if (dryRun) {
-        std::cout << "Note set dry-run: row " << row
-                  << ", channel " << channel
-                  << ", note " << midi
-                  << ", instr " << std::clamp(instrument, 0, 255)
-                  << ", vel " << std::clamp(velocity, 1, 127)
-                  << ", fx " << std::clamp(effectCommand, 0, 255)
-                  << ":" << std::clamp(effectValue, 0, 255)
-                  << '\n';
+        if (midi < 0) {
+          std::cout << "Note set dry-run: row " << row
+                    << ", channel " << channel
+                    << ", NOTE-OFF"
+                    << ", fx " << std::clamp(effectCommand, 0, 255)
+                    << ":" << std::clamp(effectValue, 0, 255)
+                    << '\n';
+        } else {
+          std::cout << "Note set dry-run: row " << row
+                    << ", channel " << channel
+                    << ", note " << midi
+                    << ", instr " << std::clamp(instrument, 0, 255)
+                    << ", vel " << std::clamp(velocity, 1, 127)
+                    << ", fx " << std::clamp(effectCommand, 0, 255)
+                    << ":" << std::clamp(effectValue, 0, 255)
+                    << '\n';
+        }
       } else {
         std::lock_guard<std::mutex> lock(stateMutex);
-        editor.insertNote(
-            row,
-            channel,
-            midi,
-            static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
-            0,
-            static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
-            false,
-            static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
-            static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+        if (midi < 0) {
+          // midi < 0 means note-off marker (^^^)
+          editor.insertNoteOff(row, channel);
+          if (effectCommand != 0 || effectValue != 0) {
+            editor.setEffect(row, channel,
+                static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+                static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+          }
+        } else {
+          editor.insertNote(
+              row,
+              channel,
+              midi,
+              static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
+              0,
+              static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
+              false,
+              static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+              static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+        }
         std::cout << "Note set at row " << row << ", channel " << channel << '\n';
       }
     }

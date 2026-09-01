@@ -28,6 +28,16 @@ if(EXTRACKER_ENABLE_PIPEWIRE AND PKG_CONFIG_FOUND)
   pkg_check_modules(PIPEWIRE QUIET libpipewire-0.3)
 endif()
 
+option(EXTRACKER_ENABLE_FLUIDSYNTH "Enable FluidSynth SF2 instrument support" ON)
+if(EXTRACKER_ENABLE_FLUIDSYNTH AND PKG_CONFIG_FOUND)
+  pkg_check_modules(FLUIDSYNTH QUIET fluidsynth)
+endif()
+
+option(EXTRACKER_ENABLE_SFIZZ "Enable sfizz SFZ instrument support" ON)
+if(EXTRACKER_ENABLE_SFIZZ AND PKG_CONFIG_FOUND)
+  pkg_check_modules(SFIZZ QUIET sfizz)
+endif()
+
 add_library(extracker_core
   src/audio_engine.cpp
   src/midi_input.cpp
@@ -38,15 +48,21 @@ add_library(extracker_core
   src/sequencer.cpp
   src/transport.cpp
   src/plugin_host.cpp
+  src/song_bundle.cpp
 )
 
 target_include_directories(extracker_core PRIVATE include)
 
 target_compile_options(extracker_core PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+  $<$<CXX_COMPILER_ID:MSVC>:/W4 /wd4100 /wd4127 /wd4201 /utf-8>
 )
 
 target_link_libraries(extracker_core PRIVATE Threads::Threads)
+
+if(WIN32)
+  target_link_libraries(extracker_core PRIVATE winmm ole32)
+endif()
 
 if(ALSA_FOUND)
   target_compile_definitions(extracker_core PRIVATE EXTRACKER_HAVE_ALSA=1)
@@ -69,6 +85,20 @@ if(PIPEWIRE_FOUND)
   target_compile_options(extracker_core PRIVATE ${PIPEWIRE_CFLAGS_OTHER})
 endif()
 
+if(FLUIDSYNTH_FOUND)
+  target_compile_definitions(extracker_core PRIVATE EXTRACKER_HAVE_FLUIDSYNTH=1)
+  target_include_directories(extracker_core PRIVATE ${FLUIDSYNTH_INCLUDE_DIRS})
+  target_link_libraries(extracker_core PRIVATE ${FLUIDSYNTH_LIBRARIES})
+  target_compile_options(extracker_core PRIVATE ${FLUIDSYNTH_CFLAGS_OTHER})
+endif()
+
+if(SFIZZ_FOUND)
+  target_compile_definitions(extracker_core PRIVATE EXTRACKER_HAVE_SFIZZ=1)
+  target_include_directories(extracker_core PRIVATE ${SFIZZ_INCLUDE_DIRS})
+  target_link_libraries(extracker_core PRIVATE ${SFIZZ_LIBRARIES})
+  target_compile_options(extracker_core PRIVATE ${SFIZZ_CFLAGS_OTHER})
+endif()
+
 add_executable(extracker
   src/main.cpp
   src/command_registry.cpp
@@ -81,11 +111,16 @@ add_executable(extracker
   src/pattern_cli_basic.cpp
   src/pattern_cli_bulk.cpp
   src/pattern_cli_shared.cpp
+  src/instrument_cli.cpp
   src/plugin_cli.cpp
   src/record_cli.cpp
   src/sample_cli.cpp
         src/sample_editor_utils.cpp
         src/sample_editor_cli.cpp
+  src/filter_cli.cpp
+  src/effects_cli.cpp
+  src/reverb_cli.cpp
+  src/channel_cli.cpp
 )
 target_link_libraries(extracker PRIVATE extracker_core)
 target_include_directories(extracker PRIVATE include)
@@ -126,8 +161,16 @@ target_link_libraries(extracker_gui PRIVATE
   juce::juce_audio_devices
   juce::juce_events
   extracker_core
-  curl
 )
+
+if(NOT WIN32)
+  target_link_libraries(extracker_gui PRIVATE curl)
+endif()
+
+if(WIN32)
+  target_compile_options(extracker_gui PRIVATE /W4 /wd4100 /wd4127 /wd4201 /utf-8)
+  set_target_properties(extracker_gui PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 
 target_include_directories(extracker_gui PRIVATE 
   include
@@ -183,6 +226,9 @@ if(BUILD_TESTING)
 
   add_library(extracker_lv2_test_plugin MODULE tests/lv2_test_plugin.cpp)
   set_target_properties(extracker_lv2_test_plugin PROPERTIES PREFIX "")
+
+  add_library(extracker_vst3_test_plugin MODULE tests/vst3_test_plugin.cpp)
+  set_target_properties(extracker_vst3_test_plugin PROPERTIES PREFIX "" SUFFIX ".so")
 
   add_executable(extracker_lv2_runtime_activation_test tests/lv2_runtime_activation_test.cpp)
   target_include_directories(extracker_lv2_runtime_activation_test PRIVATE include)
@@ -738,6 +784,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_note_off_fadeout_test extracker)
   add_test(NAME extracker_cli_note_off_fadeout_test COMMAND extracker_cli_note_off_fadeout_test)
 
+  add_executable(extracker_cli_note_noteoff_fade_effect_test tests/cli_note_noteoff_fade_effect_test.cpp)
+  add_dependencies(extracker_cli_note_noteoff_fade_effect_test extracker)
+  add_test(NAME extracker_cli_note_noteoff_fade_effect_test COMMAND extracker_cli_note_noteoff_fade_effect_test)
+
   add_executable(extracker_cli_note_usage_guard_test tests/cli_note_usage_guard_test.cpp)
   add_dependencies(extracker_cli_note_usage_guard_test extracker)
   add_test(NAME extracker_cli_note_usage_guard_test COMMAND extracker_cli_note_usage_guard_test)
@@ -773,6 +823,10 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_sample_workflow_test tests/cli_sample_workflow_test.cpp)
   add_dependencies(extracker_cli_sample_workflow_test extracker)
   add_test(NAME extracker_cli_sample_workflow_test COMMAND extracker_cli_sample_workflow_test)
+
+  add_executable(extracker_cli_instrument_edit_workflow_test tests/cli_instrument_edit_workflow_test.cpp)
+  add_dependencies(extracker_cli_instrument_edit_workflow_test extracker)
+  add_test(NAME extracker_cli_instrument_edit_workflow_test COMMAND extracker_cli_instrument_edit_workflow_test)
 
   add_executable(extracker_sample_slot_priority_collision_test tests/sample_slot_priority_collision_test.cpp)
   target_include_directories(extracker_sample_slot_priority_collision_test PRIVATE include)
@@ -814,6 +868,37 @@ if(BUILD_TESTING)
     extracker_cli_plugin_scan_found_summary_test
     PRIVATE EXTRACKER_LV2_TEST_PLUGIN_PATH="$<TARGET_FILE:extracker_lv2_test_plugin>")
   add_test(NAME extracker_cli_plugin_scan_found_summary_test COMMAND extracker_cli_plugin_scan_found_summary_test)
+
+  add_executable(extracker_cli_vst3_scan_test tests/cli_vst3_scan_test.cpp)
+  add_dependencies(extracker_cli_vst3_scan_test extracker extracker_vst3_test_plugin)
+  target_compile_definitions(
+    extracker_cli_vst3_scan_test
+    PRIVATE EXTRACKER_VST3_TEST_PLUGIN_PATH="$<TARGET_FILE:extracker_vst3_test_plugin>")
+  add_test(NAME extracker_cli_vst3_scan_test COMMAND extracker_cli_vst3_scan_test)
+
+  add_executable(extracker_cli_sf2_melodic_test tests/cli_sf2_melodic_test.cpp)
+  add_dependencies(extracker_cli_sf2_melodic_test extracker)
+  add_test(NAME extracker_cli_sf2_melodic_test COMMAND extracker_cli_sf2_melodic_test)
+
+  add_executable(extracker_cli_sfz_test tests/cli_sfz_test.cpp)
+  add_dependencies(extracker_cli_sfz_test extracker)
+  add_test(NAME extracker_cli_sfz_test COMMAND extracker_cli_sfz_test)
+
+  add_executable(extracker_cli_channel_vol_test tests/cli_channel_vol_test.cpp)
+  add_dependencies(extracker_cli_channel_vol_test extracker)
+  add_test(NAME extracker_cli_channel_vol_test COMMAND extracker_cli_channel_vol_test)
+
+  add_executable(extracker_cli_instr_sample_persist_test tests/cli_instr_sample_persist_test.cpp)
+  add_dependencies(extracker_cli_instr_sample_persist_test extracker)
+  add_test(NAME extracker_cli_instr_sample_persist_test COMMAND extracker_cli_instr_sample_persist_test)
+
+  add_executable(extracker_cli_instrument_share_bundle_test tests/cli_instrument_share_bundle_test.cpp)
+  add_dependencies(extracker_cli_instrument_share_bundle_test extracker)
+  add_test(NAME extracker_cli_instrument_share_bundle_test COMMAND extracker_cli_instrument_share_bundle_test)
+
+  add_executable(extracker_cli_instrument_param_persist_test tests/cli_instrument_param_persist_test.cpp)
+  add_dependencies(extracker_cli_instrument_param_persist_test extracker)
+  add_test(NAME extracker_cli_instrument_param_persist_test COMMAND extracker_cli_instrument_param_persist_test)
 
   add_executable(extracker_cli_plugin_control_index_token_test tests/cli_plugin_control_index_token_test.cpp)
   add_dependencies(extracker_cli_plugin_control_index_token_test extracker extracker_lv2_test_plugin)

@@ -9,12 +9,15 @@ void registerCommandHandlers(CommandRegistry& commandRegistry,
   commandRegistry["help"] = commandBindings.help;
   commandRegistry["h"] = commandBindings.help;
   commandRegistry["plugin"] = commandBindings.plugin;
+  commandRegistry["instrument"] = commandBindings.instrument;
   commandRegistry["sample"] = commandBindings.sample;
   commandRegistry["sine"] = commandBindings.sine;
   commandRegistry["note"] = commandBindings.note;
   commandRegistry["pattern"] = commandBindings.pattern;
   commandRegistry["record"] = commandBindings.record;
   commandRegistry["midi"] = commandBindings.midi;
+  commandRegistry["channel"] = commandBindings.channel;
+  commandRegistry["ch"] = commandBindings.channel;
 
   const std::array<std::string, 9> coreCommands = {
       "play", "stop", "tempo", "loop", "status", "reset", "save", "load", "message"};
