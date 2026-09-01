@@ -1,6 +1,7 @@
 #include "extracker/song_bundle.hpp"
 
 #include <cctype>
+#include <cstdint>
 #include <system_error>
 
 namespace extracker {
@@ -58,6 +59,35 @@ std::string toStoredRelativeOrAbsolute(const std::filesystem::path& file,
     return relativePath.generic_string();
   }
   return file.string();
+}
+
+// Instrument formats like SFZ/XPM often live in a directory shared with many
+// *other* instruments' samples (a whole sample pack, not "one folder per
+// instrument"). Bundling such a directory whole would silently balloon a
+// song's folder by potentially gigabytes for a single assigned instrument.
+// If a source directory is larger than this, skip the directory copy
+// entirely rather than bundle a huge, mostly-unrelated pile of files.
+constexpr std::uintmax_t kMaxBundleDirectoryBytes = 200ull * 1024 * 1024;  // 200 MB
+constexpr std::size_t kMaxBundleDirectoryFiles = 500;
+
+bool directoryExceedsBundleLimits(const std::filesystem::path& dir) {
+  std::uintmax_t totalBytes = 0;
+  std::size_t fileCount = 0;
+  std::error_code iterError;
+  for (auto it = std::filesystem::recursive_directory_iterator(dir, iterError);
+       !iterError && it != std::filesystem::recursive_directory_iterator();
+       it.increment(iterError)) {
+    std::error_code fileError;
+    if (!it->is_regular_file(fileError) || fileError) {
+      continue;
+    }
+    totalBytes += it->file_size(fileError);
+    ++fileCount;
+    if (totalBytes > kMaxBundleDirectoryBytes || fileCount > kMaxBundleDirectoryFiles) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // True if `a` and `b` name the same location, or one is nested inside the
@@ -183,6 +213,14 @@ std::string bundleDirectory(const std::string& sourceFilePath,
       return toStoredRelativeOrAbsolute(resolvedSource, moduleDirectory);
     }
 
+    if (directoryExceedsBundleLimits(sourceDir)) {
+      // Likely a shared sample pack rather than a per-instrument folder --
+      // leave the reference pointing at its original location instead of
+      // copying potentially gigabytes of unrelated files.
+      dedupe.emplace(sourceDirKey, sourceDir.string());
+      return toStoredRelativeOrAbsolute(resolvedSource, moduleDirectory);
+    }
+
     std::error_code createDirError;
     std::filesystem::create_directories(bundleDirectoryPath, createDirError);
     if (createDirError) {
@@ -238,9 +276,20 @@ InstrumentIdParts parseInstrumentId(const std::string& pluginId) {
     return parts;
   }
 
+  // "sfz:<path>" and "s3i:<path>" are how the scan adapters register these
+  // formats (so they show up in `plugin list`), but unlike sf2 there's no
+  // on-demand loader keyed on that prefix -- loadInstrumentAuto only knows
+  // how to load these by bare path (via loadSfzInstrument/loadS3iInstrument
+  // through its extension dispatch). Drop the prefix entirely so the
+  // rebuilt id is a bare path, which is the one form that's guaranteed to
+  // still load after the file has been moved into the bundle.
   if (pluginId.size() > 4 && pluginId.compare(0, 4, "sfz:") == 0) {
     parts.kind = InstrumentIdKind::DirectoryOfSiblingFiles;
-    parts.prefix = "sfz:";
+    parts.path = pluginId.substr(4);
+    return parts;
+  }
+  if (pluginId.size() > 4 && pluginId.compare(0, 4, "s3i:") == 0) {
+    parts.kind = InstrumentIdKind::SingleFile;
     parts.path = pluginId.substr(4);
     return parts;
   }

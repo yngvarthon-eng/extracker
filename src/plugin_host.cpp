@@ -5473,6 +5473,68 @@ public:
   }
 };
 
+// Discovers .xpm (Akai-style multi-zone keygroup) programs. Registered
+// under the bare file path (not a synthetic "xpm:" prefix) so a
+// discovered id is exactly what `loadInstrumentAuto`'s extension dispatch
+// already loads directly via loadXpmInstrument -- no separate resolution
+// path to keep in sync, and `plugin assign <instr> <path>` works whether
+// or not the path was ever scanned.
+class XpmScanAdapter final : public extracker::IExternalPluginAdapter {
+  std::unordered_set<std::string> registered_;
+public:
+  std::string adapterName() const override { return "xpm"; }
+
+  std::size_t registerDiscoveredPlugins(extracker::PluginHost& host) override {
+    std::vector<std::string> searchPaths;
+
+    const char* xpmEnv = std::getenv("XPM_PATH");
+    if (xpmEnv) {
+      std::istringstream ss(xpmEnv);
+      std::string seg;
+      while (std::getline(ss, seg, ':'))
+        if (!seg.empty()) searchPaths.push_back(seg);
+    } else {
+      const char* home = std::getenv("HOME");
+      if (home) {
+        const std::string h(home);
+        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
+        searchPaths.push_back(h + "/Musikk/instruments");
+        searchPaths.push_back(h + "/Music/musicworks/instruments");
+        searchPaths.push_back(h + "/Music/instruments");
+        searchPaths.push_back(h + "/instruments");
+        searchPaths.push_back(h + "/.local/share/instruments");
+      }
+    }
+
+    std::size_t count = 0;
+    for (const auto& dir : searchPaths) {
+      std::error_code ec;
+      if (!std::filesystem::is_directory(dir, ec)) continue;
+      for (const auto& entry :
+           std::filesystem::recursive_directory_iterator(dir, ec)) {
+        if (ec) { ec.clear(); continue; }
+        if (!entry.is_regular_file(ec) || ec) { ec.clear(); continue; }
+        const auto ext = entry.path().extension().string();
+        std::string extLow = ext;
+        for (auto& c : extLow)
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (extLow != ".xpm") continue;
+
+        const std::string pathStr = entry.path().string();
+        if (registered_.insert(pathStr).second) {
+          host.registerPluginFactory(pathStr, [pathStr]() -> std::unique_ptr<extracker::IInstrumentPlugin> {
+            auto plugin = std::make_unique<XpmKeygroupPlugin>();
+            if (!plugin->loadFromFile(pathStr)) return nullptr;
+            return plugin;
+          });
+          ++count;
+        }
+      }
+    }
+    return count;
+  }
+};
+
 }  // namespace
 
 namespace extracker {
@@ -5520,6 +5582,7 @@ PluginHost::PluginHost()
   registerExternalAdapter(std::make_unique<BuiltinSfzScanAdapter>());
 #endif
   registerExternalAdapter(std::make_unique<S3IScanAdapter>());
+  registerExternalAdapter(std::make_unique<XpmScanAdapter>());
   registerExternalAdapter(std::make_unique<DisabledExternalPluginAdapter>());
   instrumentSampleSlots_.fill(-1);
 }

@@ -9,6 +9,7 @@ if [ -d "$INSTRUMENTS_DIR" ]; then
     export SF2_PATH="${SF2_PATH:-$INSTRUMENTS_DIR}"
     export SFZ_PATH="${SFZ_PATH:-$INSTRUMENTS_DIR}"
     export S3I_PATH="${S3I_PATH:-$INSTRUMENTS_DIR}"
+    export XPM_PATH="${XPM_PATH:-$INSTRUMENTS_DIR}"
 fi
 
 ./extracker_gui &
