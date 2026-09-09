@@ -3628,11 +3628,24 @@ private:
         app.plugins.assignInstrument(0, "builtin.sine");
         app.plugins.assignInstrument(1, "builtin.square");
 
+        // Clear the sample bank -- otherwise previously loaded samples'
+        // names/paths linger in the sample slot dropdown after New Song.
+        for (std::size_t sampleSlot = 0; sampleSlot < extracker::PluginHost::kMaxSampleSlots; ++sampleSlot) {
+          app.plugins.clearSampleSlot(static_cast<std::uint16_t>(sampleSlot));
+        }
+
         // Apply startup template if set
         if (tmpl != "blank") {
           extracker::applyPatternTemplate(app.module.currentEditor(), tmpl);
         }
       }
+
+      // updatePatternSelector() reads these caches rather than app.module
+      // directly (kept in sync elsewhere on every pattern/song mutation) --
+      // without this, the pattern dropdown keeps showing the old song's
+      // pattern count/selection until the next sequencer tick updates it.
+      app.currentPatternCache.store(app.module.currentPattern());
+      app.patternCountCache.store(app.module.patternCount());
 
       lastSongFile = juce::File();
       isSongDirty = false;
@@ -3646,6 +3659,7 @@ private:
       updateStepEditorFromSelection();
       refreshSlotSelector();
       refreshChannelRows();
+      refreshSampleSlotSelector();
       refreshSampleSlotDetails();
       tempoSlider.setValue(app.transport.tempoBpm(), juce::dontSendNotification);
       ticksPerBeatSlider.setValue(static_cast<double>(app.transport.ticksPerBeat()), juce::dontSendNotification);
