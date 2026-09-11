@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -36,6 +38,24 @@ bool tryParseInstrumentToken(const std::string& token, int& outInstrument) {
   }
   outInstrument = static_cast<int>(value);
   return true;
+}
+
+// SF2 has an on-demand loader that understands its "sf2:" id prefix
+// directly (see PluginHost::loadInstrumentAuto), but SFZ and S3I don't --
+// their scan adapters register plugin ids as "sfz:<path>"/"s3i:<path>" (so
+// they show up in `plugin list`), yet loadSfzInstrument/loadS3iInstrument
+// only accept a bare file path. Strip the scan prefix before handing the
+// id to those loaders, so assigning an id exactly as `plugin list` shows
+// it actually works instead of failing to open a path that includes the
+// literal "sfz:"/"s3i:" text.
+std::string stripScanIdPrefix(const std::string& pluginId) {
+  if (pluginId.compare(0, 4, "sfz:") == 0) {
+    return pluginId.substr(4);
+  }
+  if (pluginId.compare(0, 4, "s3i:") == 0) {
+    return pluginId.substr(4);
+  }
+  return pluginId;
 }
 
 const PluginControlPortMeta* findControlMetaByToken(
@@ -105,13 +125,84 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
   } else if (subcommand == "assign") {
     std::string instrumentToken;
     std::string pluginId;
-    pluginInput >> instrumentToken >> pluginId;
+    pluginInput >> instrumentToken;
+    // Read rest of line as plugin ID (allows spaces in file paths)
+    if (std::getline(pluginInput >> std::ws, pluginId); !pluginId.empty()) {
+      // Strip trailing whitespace
+      while (!pluginId.empty() && std::isspace(static_cast<unsigned char>(pluginId.back())))
+        pluginId.pop_back();
+    }
 
     int instrument = -1;
-    if (!tryParseInstrumentToken(instrumentToken, instrument) ||
-      pluginId.empty() ||
-        cli::hasExtraTokens(pluginInput)) {
+    if (!tryParseInstrumentToken(instrumentToken, instrument) || pluginId.empty()) {
       std::cout << "Usage: plugin assign <instrument> <id>" << '\n';
+    } else if (pluginId.size() >= 4 &&
+               (pluginId.substr(pluginId.size() - 4) == ".xpm" ||
+                pluginId.substr(pluginId.size() - 4) == ".XPM")) {
+      if (plugins.loadXpmInstrument(pluginId, static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Assigned XPM keygroup " << pluginId << " to instrument " << instrument << '\n';
+      } else {
+        std::cout << "Failed to load XPM file: " << pluginId << '\n';
+      }
+    } else if (pluginId.size() >= 4 &&
+               (pluginId.substr(pluginId.size() - 4) == ".s3i" ||
+                pluginId.substr(pluginId.size() - 4) == ".S3I")) {
+      const std::string s3iPath = stripScanIdPrefix(pluginId);
+      if (plugins.loadS3iInstrument(s3iPath, static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Assigned S3I instrument " << pluginId << " to instrument " << instrument << '\n';
+      } else {
+        std::uint8_t s3iType = 0;
+        if (std::ifstream f(s3iPath, std::ios::binary); f)
+          f.read(reinterpret_cast<char*>(&s3iType), 1);
+        if (s3iType >= 3 && s3iType <= 7)
+          std::cout << "Failed to load S3I file (Adlib rhythm instrument, not supported): " << pluginId << '\n';
+        else
+          std::cout << "Failed to load S3I file: " << pluginId << '\n';
+      }
+    } else if (pluginId.size() >= 3 &&
+               (pluginId.substr(pluginId.size() - 3) == ".xi" ||
+                pluginId.substr(pluginId.size() - 3) == ".XI")) {
+      if (plugins.loadXiInstrument(pluginId, static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Assigned XI instrument " << pluginId << " to instrument " << instrument << '\n';
+      } else {
+        std::cout << "Failed to load XI file: " << pluginId << '\n';
+      }
+    } else if ((pluginId.size() >= 4 &&
+                (pluginId.substr(pluginId.size() - 4) == ".iff" ||
+                 pluginId.substr(pluginId.size() - 4) == ".IFF")) ||
+               (pluginId.size() >= 5 &&
+                (pluginId.substr(pluginId.size() - 5) == ".8svx" ||
+                 pluginId.substr(pluginId.size() - 5) == ".8SVX"))) {
+      if (plugins.loadIffSvxInstrument(pluginId, static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Assigned IFF 8SVX instrument " << pluginId << " to instrument " << instrument << '\n';
+      } else {
+        std::cout << "Failed to load IFF/8SVX file: " << pluginId << '\n';
+      }
+    } else if (pluginId.size() >= 4 &&
+               (pluginId.substr(pluginId.size() - 4) == ".sfz" ||
+                pluginId.substr(pluginId.size() - 4) == ".SFZ")) {
+      if (plugins.loadSfzInstrument(stripScanIdPrefix(pluginId), static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Assigned SFZ instrument " << pluginId << " to instrument " << instrument << '\n';
+      } else {
+        std::cout << "Failed to load SFZ file: " << pluginId << '\n';
+      }
+    } else if (pluginId.size() > 4 && pluginId.compare(0, 4, "sf2:") == 0 &&
+               pluginId.rfind(":melodic:") != std::string::npos) {
+      if (plugins.loadInstrumentAuto(pluginId, static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Assigned melodic SF2 " << pluginId << " to instrument " << instrument << '\n';
+      } else {
+        std::cout << "Failed to load SF2 melodic plugin: " << pluginId << '\n';
+      }
+    } else if (pluginId.size() > 4 && pluginId.compare(0, 4, "sf2:") == 0) {
+      // Plain "sf2:<path>" -- the id `plugin list`/song files show for an
+      // SF2 instrument -- has its own on-demand loader (unlike sfz/s3i
+      // above) but fell through to assignInstrument below, which only
+      // resolves ids already registered by a prior `plugin scan`.
+      if (plugins.loadInstrumentAuto(pluginId, static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Assigned SF2 instrument " << pluginId << " to instrument " << instrument << '\n';
+      } else {
+        std::cout << "Failed to load SF2 file: " << pluginId << '\n';
+      }
     } else if (plugins.assignInstrument(static_cast<std::uint8_t>(instrument), pluginId)) {
       std::cout << "Assigned " << pluginId << " to instrument " << instrument << '\n';
     } else {
@@ -135,7 +226,12 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       const std::string pluginId = plugins.pluginForInstrument(static_cast<std::uint8_t>(instrument));
       PluginPortInfo info;
       if (!plugins.getPluginPortInfo(pluginId, info)) {
-        std::cout << "Failed to set plugin control; assigned plugin has no LV2 control metadata" << '\n';
+        // Non-LV2 plugin (SF2, SFZ, builtin) — try generic named parameter
+        if (plugins.setInstrumentParameter(static_cast<std::uint8_t>(instrument), controlPortToken, value)) {
+          std::cout << "Set instrument " << instrument << " parameter " << controlPortToken << " to " << value << '\n';
+        } else {
+          std::cout << "Unknown parameter '" << controlPortToken << "' on instrument " << instrument << '\n';
+        }
       } else {
         std::size_t controlOrdinal = info.controlInMeta.size();
         const PluginControlPortMeta* meta = findControlMetaByToken(info.controlInMeta, controlPortToken, controlOrdinal);
@@ -170,7 +266,9 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       const std::string pluginId = plugins.pluginForInstrument(static_cast<std::uint8_t>(instrument));
       PluginPortInfo info;
       if (!plugins.getPluginPortInfo(pluginId, info)) {
-        std::cout << "Failed to get plugin control; assigned plugin has no LV2 control metadata" << '\n';
+        // Non-LV2 plugin (SF2, SFZ, builtin) — read generic named parameter
+        const double value = plugins.getInstrumentParameter(static_cast<std::uint8_t>(instrument), controlPortToken);
+        std::cout << "Instrument " << instrument << " parameter " << controlPortToken << " = " << value << '\n';
       } else {
         std::size_t controlOrdinal = info.controlInMeta.size();
         if (const PluginControlPortMeta* meta = findControlMetaByToken(info.controlInMeta, controlPortToken, controlOrdinal)) {
@@ -200,6 +298,35 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       std::cout << "Scan complete, no new plugins discovered" << '\n';
     }
     std::cout << plugins.discoverAvailablePlugins().size() << " plugin(s) available" << '\n';
+  } else if (subcommand == "zones") {
+    std::string sf2Path;
+    if (std::getline(pluginInput >> std::ws, sf2Path); !sf2Path.empty()) {
+      while (!sf2Path.empty() && std::isspace(static_cast<unsigned char>(sf2Path.back())))
+        sf2Path.pop_back();
+    }
+    if (sf2Path.empty()) {
+      std::cout << "Usage: plugin zones <sf2-path>" << '\n';
+      std::cout << "  Lists which MIDI keys carry samples in the drum bank of an SF2 file." << '\n';
+      std::cout << "  Use with: plugin assign <i> sf2:<path>:melodic:<key>" << '\n';
+      return;
+    }
+    const auto keys = plugins.enumSF2DrumKeys(sf2Path);
+    if (keys.empty()) {
+      std::cout << "No drum keys found (check path or FluidSynth support)" << '\n';
+    } else {
+      std::cout << keys.size() << " key(s) with samples in " << sf2Path << ":" << '\n';
+      static const char* noteNames[] = {
+        "C","C#","D","D#","E","F","F#","G","G#","A","A#","B"
+      };
+      for (const int k : keys) {
+        const int oct  = k / 12 - 1;
+        const int name = k % 12;
+        std::cout << "  key " << k
+                  << "  (" << noteNames[name] << oct << ")"
+                  << "  →  plugin assign <i> sf2:" << sf2Path
+                  << ":melodic:" << k << '\n';
+      }
+    }
   } else if (subcommand == "info") {
     std::string pluginId;
     pluginInput >> pluginId;
@@ -254,14 +381,261 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     if (!hasAny) {
       std::cout << "  (none)" << '\n';
     }
+  } else if (subcommand == "effect") {
+    std::string effectSub;
+    pluginInput >> effectSub;
+
+    if (effectSub == "list" || effectSub.empty()) {
+      bool hasAny = false;
+      for (std::size_t i = 0; i < PluginHost::kMaxEffectSlots; ++i) {
+        if (plugins.hasEffectAssignment(static_cast<std::uint8_t>(i))) {
+          std::cout << "  slot " << i << ": "
+                    << plugins.pluginForEffect(static_cast<std::uint8_t>(i)) << '\n';
+          hasAny = true;
+        }
+      }
+      if (!hasAny) {
+        std::cout << "Effect chain: (empty)" << '\n';
+      }
+    } else if (effectSub == "assign") {
+      std::string slotToken;
+      std::string pluginId;
+      pluginInput >> slotToken >> pluginId;
+      int slot = -1;
+      if (!tryParseControlIndex(slotToken, slot) || slot < 0 ||
+          slot >= static_cast<int>(PluginHost::kMaxEffectSlots) ||
+          pluginId.empty() || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin effect assign <slot 0-7> <plugin-id>" << '\n';
+      } else if (plugins.assignEffect(static_cast<std::uint8_t>(slot), pluginId)) {
+        std::cout << "Assigned " << pluginId << " to effect slot " << slot << '\n';
+      } else {
+        std::cout << "Failed to assign effect; check plugin has audio I/O and slot is valid" << '\n';
+      }
+    } else if (effectSub == "remove") {
+      std::string slotToken;
+      pluginInput >> slotToken;
+      int slot = -1;
+      if (!tryParseControlIndex(slotToken, slot) || slot < 0 ||
+          slot >= static_cast<int>(PluginHost::kMaxEffectSlots) ||
+          cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin effect remove <slot 0-7>" << '\n';
+      } else if (plugins.removeEffect(static_cast<std::uint8_t>(slot))) {
+        std::cout << "Removed effect from slot " << slot << '\n';
+      } else {
+        std::cout << "Failed to remove effect from slot " << slot << '\n';
+      }
+    } else if (effectSub == "set") {
+      std::string slotToken;
+      std::string controlPortToken;
+      double value = 0.0;
+      pluginInput >> slotToken >> controlPortToken >> value;
+      int slot = -1;
+      if (!tryParseControlIndex(slotToken, slot) || slot < 0 ||
+          slot >= static_cast<int>(PluginHost::kMaxEffectSlots) ||
+          controlPortToken.empty() || !pluginInput || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin effect set <slot> <control-port-index|symbol> <value>" << '\n';
+      } else if (!plugins.hasEffectAssignment(static_cast<std::uint8_t>(slot))) {
+        std::cout << "No effect assigned to slot " << slot << '\n';
+      } else {
+        const std::string pluginId = plugins.pluginForEffect(static_cast<std::uint8_t>(slot));
+        PluginPortInfo info;
+        if (!plugins.getPluginPortInfo(pluginId, info) || info.controlInMeta.empty()) {
+          // Builtin effect — try direct parameter by name
+          if (plugins.setEffectParameter(static_cast<std::uint8_t>(slot), controlPortToken, value)) {
+            std::cout << "Set effect slot " << slot << " " << controlPortToken << " = " << value << '\n';
+          } else {
+            std::cout << "Unknown parameter: " << controlPortToken << '\n';
+          }
+        } else {
+          std::size_t controlOrdinal = info.controlInMeta.size();
+          const PluginControlPortMeta* meta = findControlMetaByToken(info.controlInMeta, controlPortToken, controlOrdinal);
+          if (meta == nullptr) {
+            std::cout << "Unknown control input port: " << controlPortToken << '\n';
+          } else {
+            const std::string paramName = "lv2_control_in_" + std::to_string(controlOrdinal);
+            if (plugins.setEffectParameter(static_cast<std::uint8_t>(slot), paramName, value)) {
+              std::cout << "Set effect slot " << slot << " control port "
+                        << describeControlPort(*meta) << " to " << value << '\n';
+            } else {
+              std::cout << "Failed to set control port" << '\n';
+            }
+          }
+        }
+      }
+    } else if (effectSub == "get") {
+      std::string slotToken;
+      std::string controlPortToken;
+      pluginInput >> slotToken >> controlPortToken;
+      int slot = -1;
+      if (!tryParseControlIndex(slotToken, slot) || slot < 0 ||
+          slot >= static_cast<int>(PluginHost::kMaxEffectSlots) ||
+          controlPortToken.empty() || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin effect get <slot> <control-port-index|symbol>" << '\n';
+      } else if (!plugins.hasEffectAssignment(static_cast<std::uint8_t>(slot))) {
+        std::cout << "No effect assigned to slot " << slot << '\n';
+      } else {
+        const std::string pluginId = plugins.pluginForEffect(static_cast<std::uint8_t>(slot));
+        PluginPortInfo info;
+        if (!plugins.getPluginPortInfo(pluginId, info) || info.controlInMeta.empty()) {
+          // Builtin effect — direct parameter by name
+          const double value = plugins.getEffectParameter(static_cast<std::uint8_t>(slot), controlPortToken);
+          std::cout << "Effect slot " << slot << " " << controlPortToken << " = " << value << '\n';
+        } else {
+          std::size_t controlOrdinal = info.controlInMeta.size();
+          if (const PluginControlPortMeta* meta = findControlMetaByToken(info.controlInMeta, controlPortToken, controlOrdinal)) {
+            const std::string paramName = "lv2_control_in_" + std::to_string(controlOrdinal);
+            const double value = plugins.getEffectParameter(static_cast<std::uint8_t>(slot), paramName);
+            std::cout << "Effect slot " << slot << " control port "
+                      << describeControlPort(*meta) << " = " << value << '\n';
+          } else {
+            std::cout << "Unknown control port: " << controlPortToken << '\n';
+          }
+        }
+      }
+    } else {
+      std::cout << "Usage: plugin effect <list|assign|remove|set|get>" << '\n';
+    }
+  } else if (subcommand == "params") {
+    std::string instrumentToken;
+    pluginInput >> instrumentToken;
+    int instrument = -1;
+    if (!tryParseInstrumentToken(instrumentToken, instrument) || cli::hasExtraTokens(pluginInput)) {
+      std::cout << "Usage: plugin params <instrument>" << '\n';
+    } else if (!plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument))) {
+      std::cout << "Instrument " << instrument << " has no assigned plugin" << '\n';
+    } else {
+      const std::string pluginId = plugins.pluginForInstrument(static_cast<std::uint8_t>(instrument));
+      PluginPortInfo info;
+      if (plugins.getPluginPortInfo(pluginId, info) && !info.controlInMeta.empty()) {
+        std::cout << "Instrument " << instrument << " (" << pluginId << ") "
+                  << info.controlInMeta.size() << " control input(s):\n";
+        for (std::size_t i = 0; i < info.controlInMeta.size(); ++i) {
+          const auto& meta = info.controlInMeta[i];
+          const double val = plugins.getInstrumentParameter(
+              static_cast<std::uint8_t>(instrument), "lv2_control_in_" + std::to_string(i));
+          std::cout << "  " << meta.symbol;
+          if (!meta.label.empty()) std::cout << " \"" << meta.label << '"';
+          std::cout << " = " << val;
+          if (meta.hasMin || meta.hasMax) {
+            std::cout << "  [";
+            if (meta.hasMin) std::cout << meta.minVal; else std::cout << '-';
+            std::cout << "..";
+            if (meta.hasMax) std::cout << meta.maxVal; else std::cout << '-';
+            std::cout << ']';
+          }
+          if (meta.hasDefault) std::cout << "  (default " << meta.defaultVal << ')';
+          std::cout << '\n';
+        }
+      } else {
+        const auto params = plugins.listInstrumentParameters(static_cast<std::uint8_t>(instrument));
+        if (params.empty()) {
+          std::cout << "Instrument " << instrument << ": no enumerable parameters" << '\n';
+        } else {
+          std::cout << "Instrument " << instrument << " parameters:" << '\n';
+          for (const auto& p : params) std::cout << "  " << p << '\n';
+        }
+      }
+    }
+  } else if (subcommand == "preset") {
+    std::string presetSub;
+    pluginInput >> presetSub;
+    if (presetSub == "save") {
+      std::string instrumentToken;
+      std::string filePath;
+      pluginInput >> instrumentToken >> filePath;
+      int instrument = -1;
+      if (!tryParseInstrumentToken(instrumentToken, instrument) ||
+          filePath.empty() || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin preset save <instrument> <file>" << '\n';
+      } else if (!plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Instrument " << instrument << " has no assigned plugin" << '\n';
+      } else if (plugins.saveInstrumentPreset(static_cast<std::uint8_t>(instrument), filePath)) {
+        std::cout << "Preset saved: " << filePath << '\n';
+      } else {
+        std::cout << "Failed to save preset for instrument " << instrument << '\n';
+      }
+    } else if (presetSub == "load") {
+      std::string instrumentToken;
+      std::string filePath;
+      pluginInput >> instrumentToken >> filePath;
+      int instrument = -1;
+      if (!tryParseInstrumentToken(instrumentToken, instrument) ||
+          filePath.empty() || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin preset load <instrument> <file>" << '\n';
+      } else if (!plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Instrument " << instrument << " has no assigned plugin" << '\n';
+      } else if (plugins.loadInstrumentPreset(static_cast<std::uint8_t>(instrument), filePath)) {
+        std::cout << "Preset loaded: " << filePath << '\n';
+      } else {
+        std::cout << "Failed to load preset for instrument " << instrument
+                  << " (wrong format or plugin not active)" << '\n';
+      }
+    } else {
+      std::cout << "Usage: plugin preset <save|load> <instrument> <file>" << '\n';
+    }
+  } else if (subcommand == "editor") {
+    std::string editorSub;
+    pluginInput >> editorSub;
+    if (editorSub == "open") {
+      std::string instrumentToken;
+      pluginInput >> instrumentToken;
+      int instrument = -1;
+      if (!tryParseInstrumentToken(instrumentToken, instrument) || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin editor open <instrument>" << '\n';
+      } else if (!plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Instrument " << instrument << " has no assigned plugin" << '\n';
+      } else if (plugins.openPluginEditor(static_cast<std::uint8_t>(instrument))) {
+        std::cout << "Plugin editor opened for instrument " << instrument << '\n';
+        std::cout << "(Note: attaching editor UI requires a running display window)" << '\n';
+      } else {
+        std::cout << "Plugin editor not available for instrument " << instrument
+                  << " (VST3 only; plugin must be active)" << '\n';
+      }
+    } else if (editorSub == "close") {
+      std::string instrumentToken;
+      pluginInput >> instrumentToken;
+      int instrument = -1;
+      if (!tryParseInstrumentToken(instrumentToken, instrument) || cli::hasExtraTokens(pluginInput)) {
+        std::cout << "Usage: plugin editor close <instrument>" << '\n';
+      } else {
+        plugins.closePluginEditor(static_cast<std::uint8_t>(instrument));
+        std::cout << "Plugin editor closed for instrument " << instrument << '\n';
+      }
+    } else {
+      std::cout << "Usage: plugin editor <open|close> <instrument>" << '\n';
+    }
   } else if (subcommand == "sample") {
     std::cout << "Sample management has moved to the 'sample' command.\n";
     std::cout << "  sample load <slot> <name> <wav-file>   load a WAV, give it a name\n";
     std::cout << "  sample unload <slot>                   unload a sample slot\n";
     std::cout << "  sample rename <slot> <name>            rename a loaded sample\n";
     std::cout << "  sample list                            list all loaded samples\n";
+  } else if (subcommand == "export") {
+    std::string instrumentToken;
+    std::string outputDir;
+    pluginInput >> instrumentToken;
+    if (std::getline(pluginInput >> std::ws, outputDir); !outputDir.empty()) {
+      while (!outputDir.empty() && std::isspace(static_cast<unsigned char>(outputDir.back())))
+        outputDir.pop_back();
+    }
+    int instrument = -1;
+    if (!tryParseInstrumentToken(instrumentToken, instrument) || outputDir.empty()) {
+      std::cout << "Usage: plugin export <instrument> <output-dir>" << '\n';
+    } else {
+      // Create output directory if it doesn't exist
+      std::error_code ec;
+      std::filesystem::create_directories(outputDir, ec);
+      if (ec) {
+        std::cout << "Failed to create directory: " << outputDir << " (" << ec.message() << ")\n";
+      } else if (plugins.exportInstrumentSamples(static_cast<std::uint8_t>(instrument), outputDir)) {
+        std::cout << "Exported instrument " << instrument << " samples to " << outputDir << '\n';
+      } else {
+        std::cout << "Nothing to export for instrument " << instrument
+                  << " (no file-based instrument assigned)\n";
+      }
+    }
   } else {
-    std::cout << "Usage: plugin <scan|list|load|assign|set|get|info|status> ..." << '\n';
+    std::cout << "Usage: plugin <scan|list|load|assign|set|get|info|status|effect|params|preset|editor|export> ..." << '\n';
   }
 }
 
@@ -284,24 +658,69 @@ void handleSineCommand(PluginHost& plugins, std::istringstream& sineInput) {
 }
 
 void handleHelpCommand() {
+  std::cout << "help                       show this help" << '\n';
+  std::cout << "h                          alias for help" << '\n';
   std::cout << "play                       start playback" << '\n';
+  std::cout << "p                          alias for play" << '\n';
   std::cout << "stop                       stop playback" << '\n';
+  std::cout << "s                          alias for stop" << '\n';
   std::cout << "tempo <bpm>                set tempo" << '\n';
-  std::cout << "loop <on|off>              enable/disable looping for active play range" << '\n';
+  std::cout << "bpm <value>                alias for tempo" << '\n';
+  std::cout << "loop <on|off|clear>        enable/disable looping or clear active play range" << '\n';
   std::cout << "loop range <from> <to>     define loop/play range without starting" << '\n';
-  std::cout << "status                     show engine/transport/plugin state" << '\n';
+  std::cout << "status [--json [--minimal] [--pretty]] show engine/transport/plugin state" << '\n';
+  std::cout << "st [--json [--minimal] [--pretty]]     alias for status" << '\n';
   std::cout << "reset                      stop playback and reset counters" << '\n';
   std::cout << "save <file>                save module to file (defaults to .ex)" << '\n';
+  std::cout << "w <file>                   alias for save" << '\n';
   std::cout << "load <file>                load module from file (defaults to .ex)" << '\n';
-  std::cout << "plugin scan                rescan LV2 paths for available plugins" << '\n';
+  std::cout << "r <file>                   alias for load" << '\n';
+  std::cout << "plugin scan                rescan LV2/VST3 paths for available plugins" << '\n';
+  std::cout << "plugin zones <sf2-path>    list which MIDI keys have samples in an SF2 drum bank" << '\n';
   std::cout << "plugin list                list discovered plugins" << '\n';
   std::cout << "plugin load <id>           load plugin by id (e.g. builtin.sine)" << '\n';
   std::cout << "plugin assign <i> <id>     assign loaded plugin to instrument slot" << '\n';
-  std::cout << "plugin set <i> <p> <v>     set LV2 control input by port index or symbol" << '\n';
-  std::cout << "plugin get <i> <p>         get LV2 control by port index or symbol" << '\n';
+  std::cout << "plugin assign <i> sf2:<path>:melodic:<key>  SF2 drum key played chromatically" << '\n';
+  std::cout << "plugin set <i> <p> <v>     set LV2 control or VST3 param (vst3_param_<id>)" << '\n';
+  std::cout << "plugin get <i> <p>         get LV2 control or VST3 param by name" << '\n';
   std::cout << "plugin info <id>           show port layout for a plugin" << '\n';
   std::cout << "plugin status              show instrument->plugin assignments" << '\n';
+  std::cout << "plugin effect list         show master effect chain slots" << '\n';
+  std::cout << "plugin effect assign <s> <id>  assign LV2 effect to slot s (0-7)" << '\n';
+  std::cout << "plugin effect remove <s>   remove effect from slot s" << '\n';
+  std::cout << "plugin effect set <s> <p> <v>  set effect control port by index or symbol" << '\n';
+  std::cout << "plugin effect get <s> <p>  get effect control port value" << '\n';
+  std::cout << "plugin params <i>          list all parameters with current values for instrument i" << '\n';
+  std::cout << "plugin preset save <i> <f> save plugin state preset to file f" << '\n';
+  std::cout << "plugin preset load <i> <f> load plugin state preset from file f" << '\n';
+  std::cout << "plugin editor open <i>     open plugin GUI editor for instrument i (VST3)" << '\n';
+  std::cout << "plugin editor close <i>    close plugin GUI editor for instrument i" << '\n';
+  std::cout << "instrument list             list assigned instruments" << '\n';
+  std::cout << "instrument status [i]       show one or all instrument assignments" << '\n';
+  std::cout << "instrument assign <i> <id>  assign loaded plugin to instrument slot" << '\n';
+  std::cout << "instrument sample <i> <s>   route loaded sample slot s to instrument i" << '\n';
+  std::cout << "instrument edit ...         edit instrument parameters" << '\n';
   std::cout << "sample load <s> <name> <f> load WAV into slot s with a name" << '\n';
+  std::cout << "song pos                 compact song position and mode status" << '\n';
+  std::cout << "song p                   alias for song pos" << '\n';
+  std::cout << "song gp                  alias for song pos" << '\n';
+  std::cout << "song st                  alias for song status" << '\n';
+  std::cout << "song ls                  alias for song list" << '\n';
+  std::cout << "song g <entry>           alias for song goto <entry>" << '\n';
+  std::cout << "song first               jump to first song entry" << '\n';
+  std::cout << "song f                   alias for song first" << '\n';
+  std::cout << "song last                jump to last song entry" << '\n';
+  std::cout << "song l                   alias for song last" << '\n';
+  std::cout << "song next [wrap]         move to next song entry (optionally wrap)" << '\n';
+  std::cout << "song n [wrap]            alias for song next" << '\n';
+  std::cout << "song prev [wrap]         move to previous song entry (optionally wrap)" << '\n';
+  std::cout << "song b [wrap]            alias for song prev" << '\n';
+  std::cout << "song se <e> <p>          alias for song set <entry> <pattern>" << '\n';
+  std::cout << "song si <e> <p>          alias for song insert <entry> <pattern>" << '\n';
+  std::cout << "song ap <p>              alias for song append <pattern>" << '\n';
+  std::cout << "song rm <e>              alias for song remove <entry>" << '\n';
+  std::cout << "song mv <e> <d>          alias for song move <entry> <up|down>" << '\n';
+  std::cout << "song pl <m>              alias for song play <pattern|song|status>" << '\n';
   std::cout << "sample unload <s>          unload sample slot s" << '\n';
   std::cout << "sample rename <s> <name>   rename sample slot s" << '\n';
   std::cout << "sample play <s> [note]     preview sample slot s" << '\n';
@@ -311,6 +730,8 @@ void handleHelpCommand() {
   std::cout << "sine <instrument>          convenience command for builtin.sine" << '\n';
   std::cout << "note set r c n i [v fx fv] set note in pattern (optional vel/effect)" << '\n';
   std::cout << "note set dry ...           parse and preview note set without writing" << '\n';
+  std::cout << "note off dry r c t         preview note fadeout time (gate ticks)" << '\n';
+  std::cout << "note off r c t             set note fadeout time (gate ticks)" << '\n';
   std::cout << "note clear dry r c         preview note clear without writing" << '\n';
   std::cout << "note clear r c             clear note at row/channel" << '\n';
   std::cout << "note vel dry r c v         preview velocity set without writing" << '\n';
@@ -320,6 +741,16 @@ void handleHelpCommand() {
   std::cout << "note fx dry r c f fv       preview effect set without writing" << '\n';
   std::cout << "note fx r c f fv           set effect command/value for step" << '\n';
   std::cout << "pattern print [from] [to]  print pattern rows (default 0..15)" << '\n';
+  std::cout << "pattern duplicate [index]  duplicate current or selected pattern and switch to copy" << '\n';
+  std::cout << "pattern dup [index]        alias for pattern duplicate" << '\n';
+  std::cout << "pattern switch <index>     switch to pattern (1-indexed)" << '\n';
+  std::cout << "pattern sw <index>         alias for pattern switch" << '\n';
+  std::cout << "pattern remove             remove the current pattern" << '\n';
+  std::cout << "pattern del                alias for pattern remove" << '\n';
+  std::cout << "pattern list               list patterns and show current (same as pattern status)" << '\n';
+  std::cout << "pattern ls                 alias for pattern list" << '\n';
+  std::cout << "pattern insert <before|after> insert a new pattern before or after current" << '\n';
+  std::cout << "pattern in <before|after>  alias for pattern insert" << '\n';
   std::cout << "pattern play [f] [t]       play selected row range, or full pattern" << '\n';
   std::cout << "pattern template <name>    load a starter groove template" << '\n';
   std::cout << "pattern transpose [dry [preview [verbose]]] s [f t c] [step n] transpose notes by semitones" << '\n';
@@ -333,6 +764,7 @@ void handleHelpCommand() {
   std::cout << "pattern undo                undo last committed bulk pattern edit" << '\n';
   std::cout << "pattern redo                redo last undone bulk pattern edit" << '\n';
   std::cout << "record on [channel]        arm step recording" << '\n';
+  std::cout << "rec [channel]              alias for record on" << '\n';
   std::cout << "record off                 disarm step recording" << '\n';
   std::cout << "record channel <...>       set/show record channel without re-arming" << '\n';
   std::cout << "record cursor <...>        set/show/move record cursor row (e.g. 12, +4, -1, start, end, next, prev)" << '\n';
@@ -362,7 +794,7 @@ void handleHelpCommand() {
   std::cout << "midi clock autoconnect [name] [index] auto-connect virtual MIDI clock source" << '\n';
   std::cout << "midi clock diagnose [name] quick routing diagnostics for clock source" << '\n';
   std::cout << "midi clock diagnose live [name] live clock health probe (1s)" << '\n';
-  std::cout << "quit                       exit" << '\n';
+  std::cout << "quit / exit / q            exit" << '\n';
 }
 
 }  // namespace extracker

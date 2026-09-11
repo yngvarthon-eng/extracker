@@ -47,7 +47,7 @@ int main() {
   const bool sawLoopRangeSet = output.find("Loop/play range set to 4..8") != std::string::npos;
   const bool sawLoopEnabled  = output.find("Loop enabled") != std::string::npos;
   const bool sawLoopDisabled = output.find("Loop disabled") != std::string::npos;
-  const bool sawLoopUsage    = output.find("Usage: loop <on|off|range>") != std::string::npos;
+  const bool sawLoopUsage    = output.find("Usage: loop <on|off|clear|range>") != std::string::npos;
 
   if (!sawTempoUsage || !sawTempoSet || !sawLoopRangeUsage || !sawLoopRangeSet ||
       !sawLoopEnabled || !sawLoopDisabled || !sawLoopUsage) {

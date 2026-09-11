@@ -13,12 +13,14 @@ using CommandRegistry = std::unordered_map<std::string, CommandHandler>;
 struct CommandBindings {
   CommandHandler help;
   CommandHandler plugin;
+  CommandHandler instrument;
   CommandHandler sample;
   CommandHandler sine;
   CommandHandler note;
   CommandHandler pattern;
   CommandHandler record;
   CommandHandler midi;
+  CommandHandler channel;
   std::function<void(const std::string&, std::istringstream&)> core;
 };
 

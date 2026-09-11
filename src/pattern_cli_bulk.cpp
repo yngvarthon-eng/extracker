@@ -672,6 +672,8 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
         int ch = chFrom + c;
         ClipboardStep step;
         step.hasNote = editor.hasNoteAt(row, ch);
+        step.effectCommand = editor.effectCommandAt(row, ch);
+        step.effectValue = editor.effectValueAt(row, ch);
         if (step.hasNote) {
           step.note = editor.noteAt(row, ch);
           step.instrument = editor.instrumentAt(row, ch);
@@ -679,8 +681,6 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
           step.gateTicks = editor.gateTicksAt(row, ch);
           step.velocity = editor.velocityAt(row, ch);
           step.retrigger = editor.retriggerAt(row, ch);
-          step.effectCommand = editor.effectCommandAt(row, ch);
-          step.effectValue = editor.effectValueAt(row, ch);
         }
         gPatternClipboard.steps[static_cast<std::size_t>(r * gPatternClipboard.channels + c)] = step;
       }
@@ -768,7 +768,8 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
         for (int c = 0; c < gPatternClipboard.channels; ++c) {
           const ClipboardStep& step =
               gPatternClipboard.steps[static_cast<std::size_t>(r * gPatternClipboard.channels + c)];
-          if (!step.hasNote) {
+          const bool hasEffect = step.effectCommand != 0 || step.effectValue != 0;
+          if (!step.hasNote && !hasEffect) {
             continue;
           }
 
@@ -797,18 +798,23 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
               captureBulkUndoSnapshot(editor);
               undoCaptured = true;
             }
-            editor.insertNote(
-                targetRow,
-                targetChannel,
-                step.note,
-                step.instrument,
-                step.gateTicks,
-                step.velocity,
-                step.retrigger,
-                step.effectCommand,
-                step.effectValue);
-            if (step.sample != 0xFFFF) {
-              editor.setSample(targetRow, targetChannel, step.sample);
+            if (step.hasNote) {
+              editor.insertNote(
+                  targetRow,
+                  targetChannel,
+                  step.note,
+                  step.instrument,
+                  step.gateTicks,
+                  step.velocity,
+                  step.retrigger,
+                  step.effectCommand,
+                  step.effectValue);
+              if (step.sample != 0xFFFF) {
+                editor.setSample(targetRow, targetChannel, step.sample);
+              }
+            } else {
+              editor.clearStep(targetRow, targetChannel);
+              editor.setEffect(targetRow, targetChannel, step.effectCommand, step.effectValue);
             }
           }
           ++changedSteps;

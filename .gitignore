@@ -1,10 +1,15 @@
 build/
 build-make/
+build-make-gui/
+build-dev/
 .vscode/
+.idea/
 *.o
 *.obj
 *.so
 *.a
 *.out
 .DS_Store
-extracker
+/extracker
+*.tar.gz
+.claude/

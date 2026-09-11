@@ -746,10 +746,6 @@ void handleMidiEventLocked(const MidiEvent& event,
       context.midiChannelMap[event.channel] = targetInstrument;
     }
 
-    if (!context.plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(targetInstrument))) {
-      context.plugins.loadPlugin("builtin.sine");
-      context.plugins.assignInstrument(static_cast<std::uint8_t>(targetInstrument), "builtin.sine");
-    }
     std::cout << "[midi learn] channel " << static_cast<int>(event.channel)
               << " mapped to instrument " << targetInstrument << '\n';
   }
@@ -768,7 +764,12 @@ void handleMidiEventLocked(const MidiEvent& event,
     }
 
     if (context.recordEnabled) {
-      int targetRow = context.chooseRecordRow(context.recordChannel);
+      const auto& rs = context.recordState;
+      const bool punchOk = !rs.punchEnabled ||
+          (context.transport.isPlaying() &&
+           context.transport.currentRow() >= rs.punchIn &&
+           context.transport.currentRow() <= rs.punchOut);
+      int targetRow = punchOk ? context.chooseRecordRow(context.recordChannel) : -1;
       if (targetRow >= 0) {
         context.applyRecordWrite(
             targetRow,

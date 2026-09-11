@@ -38,11 +38,12 @@ int main() {
     return 1;
   }
 
-  const bool sawSetNoMeta = output.find("Failed to set plugin control; assigned plugin has no LV2 control metadata") != std::string::npos;
-  const bool sawGetNoMeta = output.find("Failed to get plugin control; assigned plugin has no LV2 control metadata") != std::string::npos;
+  // Non-LV2 plugins (builtins, SF2, SFZ) now support plugin set/get via named parameters
+  const bool sawSetSuccess = output.find("Set instrument 9 parameter gain to") != std::string::npos;
+  const bool sawGetSuccess = output.find("Instrument 9 parameter gain =") != std::string::npos;
 
-  if (!sawSetNoMeta || !sawGetNoMeta) {
-    std::cerr << "Missing expected plugin no-LV2-metadata output markers" << '\n';
+  if (!sawSetSuccess || !sawGetSuccess) {
+    std::cerr << "Expected plugin set/get to succeed for builtin (non-LV2) plugin" << '\n';
     std::cerr << output << '\n';
     return 1;
   }

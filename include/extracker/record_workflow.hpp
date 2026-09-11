@@ -26,6 +26,9 @@ struct RecordWorkflowState {
   bool quantizeEnabled = true;
   bool overdubEnabled = false;
   int insertJump = 1;
+  bool punchEnabled = false;
+  int punchIn = 0;
+  int punchOut = 0;
 
   RecordEditState undoState{};
   RecordEditState redoState{};

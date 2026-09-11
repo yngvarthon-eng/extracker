@@ -9,6 +9,7 @@ void assignTransportAndSessionBindings(
   bindings.help = callbacks.onHelp;
   bindings.record = callbacks.onRecord;
   bindings.midi = callbacks.onMidi;
+  bindings.channel = callbacks.onChannel;
   bindings.core = callbacks.onCore;
 }
 
@@ -16,6 +17,7 @@ void assignInstrumentAndPatternBindings(
     CommandBindings& bindings,
     const DefaultCommandBindingCallbacks& callbacks) {
   bindings.plugin = callbacks.onPlugin;
+  bindings.instrument = callbacks.onInstrument;
   bindings.sample = callbacks.onSample;
   bindings.sine = callbacks.onSine;
   bindings.note = callbacks.onNote;

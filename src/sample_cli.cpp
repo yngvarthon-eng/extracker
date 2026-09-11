@@ -1,6 +1,7 @@
 #include "extracker/sample_cli.hpp"
 
 #include "extracker/cli_parse_utils.hpp"
+#include "extracker/sample_editor_utils.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -26,6 +27,8 @@ bool tryParseSampleSlot(const std::string& token, int& outSlot) {
 }
 
 }  // namespace
+
+void handleSampleEditCommand(PluginHost& plugins, std::istringstream& input);
 
 void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
   std::string subcommand;
@@ -195,7 +198,12 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
     return;
   }
 
-  std::cout << "Usage: sample <load|unload|rename|play|stop|list|status> ...\n";
+  if (subcommand == "edit") {
+    handleSampleEditCommand(plugins, input);
+    return;
+  }
+
+  std::cout << "Usage: sample <load|unload|rename|play|stop|list|status|edit> ...\n";
   std::cout << "  sample load <slot> <name> <wav-file>   load a WAV, give it a name\n";
   std::cout << "  sample unload <slot>                   unload a sample slot\n";
   std::cout << "  sample rename <slot> <name>            rename a loaded sample\n";

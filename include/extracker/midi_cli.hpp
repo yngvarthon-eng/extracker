@@ -12,6 +12,7 @@
 #include "extracker/audio_engine.hpp"
 #include "extracker/midi_input.hpp"
 #include "extracker/plugin_host.hpp"
+#include "extracker/record_workflow.hpp"
 #include "extracker/sequencer.hpp"
 #include "extracker/transport.hpp"
 
@@ -67,6 +68,7 @@ struct MidiEventContext {
   bool& midiThruEnabled;
   bool& recordEnabled;
   int& recordChannel;
+  RecordWorkflowState& recordState;
   const std::function<int(int)>& chooseRecordRow;
   const std::function<void(int,
                            int,

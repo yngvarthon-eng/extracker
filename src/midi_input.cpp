@@ -4,6 +4,12 @@
 #include <chrono>
 #include <thread>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <mmsystem.h>
+#endif
+
 #ifdef EXTRACKER_HAVE_ALSA
 #include <alsa/asoundlib.h>
 #endif
@@ -18,14 +24,69 @@ struct MidiInput::AlsaState {
 };
 #endif
 
+#ifdef _WIN32
+struct MidiInput::WinMidiState {
+  HMIDIIN handle = nullptr;
+  EventCallback callback;
+};
+
+static void CALLBACK winMidiProc(HMIDIIN, UINT msg, DWORD_PTR instance,
+                                  DWORD_PTR param1, DWORD_PTR) {
+  if (msg != MIM_DATA) return;
+  auto* state = reinterpret_cast<MidiInput::WinMidiState*>(instance);
+  if (!state || !state->callback) return;
+
+  const auto status   = static_cast<std::uint8_t>(param1 & 0xFF);
+  const auto data1    = static_cast<std::uint8_t>((param1 >> 8) & 0x7F);
+  const auto data2    = static_cast<std::uint8_t>((param1 >> 16) & 0x7F);
+  const std::uint8_t type    = status & 0xF0;
+  const std::uint8_t channel = status & 0x0F;
+
+  MidiEvent ev;
+  ev.channel = channel;
+
+  if (type == 0x90 && data2 > 0) {
+    ev.type = MidiEvent::Type::NoteOn;
+    ev.note = data1;
+    ev.velocity = data2;
+  } else if (type == 0x80 || (type == 0x90 && data2 == 0)) {
+    ev.type = MidiEvent::Type::NoteOff;
+    ev.note = data1;
+    ev.velocity = data2;
+  } else if (type == 0xB0) {
+    ev.type = MidiEvent::Type::ControlChange;
+    ev.controller = data1;
+    ev.value = data2;
+  } else if (type == 0xF0) {
+    switch (status) {
+      case 0xF8: ev.type = MidiEvent::Type::Clock;    break;
+      case 0xFA: ev.type = MidiEvent::Type::Start;    break;
+      case 0xFB: ev.type = MidiEvent::Type::Continue; break;
+      case 0xFC: ev.type = MidiEvent::Type::Stop;     break;
+      default: return;
+    }
+  } else {
+    return;
+  }
+
+  state->callback(ev);
+}
+#endif  // _WIN32
+
 MidiInput::MidiInput()
     : callback_(),
       running_(false),
       lastError_(),
       alsa_(nullptr),
+#ifdef _WIN32
+      winMidi_(nullptr),
+#endif
       thread_() {
 #ifdef EXTRACKER_HAVE_ALSA
   alsa_ = new AlsaState();
+#endif
+#ifdef _WIN32
+  winMidi_ = new WinMidiState();
 #endif
 }
 
@@ -34,6 +95,10 @@ MidiInput::~MidiInput() {
 #ifdef EXTRACKER_HAVE_ALSA
   delete alsa_;
   alsa_ = nullptr;
+#endif
+#ifdef _WIN32
+  delete winMidi_;
+  winMidi_ = nullptr;
 #endif
 }
 
@@ -45,7 +110,29 @@ bool MidiInput::start(EventCallback callback) {
   callback_ = std::move(callback);
   lastError_.clear();
 
-#ifdef EXTRACKER_HAVE_ALSA
+#if defined(_WIN32)
+  if (midiInGetNumDevs() == 0) {
+    lastError_ = "No MIDI input devices found";
+    return false;
+  }
+
+  winMidi_->callback = callback_;
+  MMRESULT result = midiInOpen(&winMidi_->handle, 0,
+                               reinterpret_cast<DWORD_PTR>(winMidiProc),
+                               reinterpret_cast<DWORD_PTR>(winMidi_),
+                               CALLBACK_FUNCTION);
+  if (result != MMSYSERR_NOERROR) {
+    winMidi_->handle = nullptr;
+    lastError_ = "Failed to open MIDI input device";
+    return false;
+  }
+
+  midiInStart(winMidi_->handle);
+  running_.store(true);
+  thread_ = std::thread([this]() { run(); });
+  return true;
+
+#elif defined(EXTRACKER_HAVE_ALSA)
   if (callback_ == nullptr) {
     lastError_ = "MIDI callback not configured";
     return false;
@@ -78,9 +165,9 @@ bool MidiInput::start(EventCallback callback) {
   running_.store(true);
   thread_ = std::thread([this]() { run(); });
   return true;
+
 #else
-  (void)callback;
-  lastError_ = "ALSA MIDI support not built";
+  lastError_ = "No MIDI backend available";
   return false;
 #endif
 }
@@ -90,6 +177,15 @@ void MidiInput::stop() {
   if (thread_.joinable()) {
     thread_.join();
   }
+
+#ifdef _WIN32
+  if (winMidi_ != nullptr && winMidi_->handle != nullptr) {
+    midiInStop(winMidi_->handle);
+    midiInClose(winMidi_->handle);
+    winMidi_->handle = nullptr;
+    winMidi_->callback = nullptr;
+  }
+#endif
 
 #ifdef EXTRACKER_HAVE_ALSA
   if (alsa_ != nullptr && alsa_->seq != nullptr) {
@@ -106,7 +202,9 @@ bool MidiInput::isRunning() const {
 }
 
 std::string MidiInput::backendName() const {
-#ifdef EXTRACKER_HAVE_ALSA
+#if defined(_WIN32)
+  return "Windows MIDI";
+#elif defined(EXTRACKER_HAVE_ALSA)
   return "ALSA Sequencer";
 #else
   return "Unavailable";
@@ -118,7 +216,18 @@ std::string MidiInput::lastError() const {
 }
 
 std::string MidiInput::endpointHint() const {
-#ifdef EXTRACKER_HAVE_ALSA
+#if defined(_WIN32)
+  if (winMidi_ == nullptr || winMidi_->handle == nullptr) {
+    return "MIDI input not active";
+  }
+  UINT numDevs = midiInGetNumDevs();
+  if (numDevs == 0) return "No MIDI input devices available";
+  MIDIINCAPSA caps{};
+  if (midiInGetDevCapsA(0, &caps, sizeof(caps)) == MMSYSERR_NOERROR) {
+    return std::string("Connected to: ") + caps.szPname;
+  }
+  return "MIDI input active (device 0)";
+#elif defined(EXTRACKER_HAVE_ALSA)
   if (alsa_ == nullptr || alsa_->clientId < 0 || alsa_->inPort < 0) {
     return "MIDI input not active";
   }
@@ -130,7 +239,13 @@ std::string MidiInput::endpointHint() const {
 }
 
 void MidiInput::run() {
-#ifdef EXTRACKER_HAVE_ALSA
+#if defined(_WIN32)
+  // winmm delivers MIDI via the winMidiProc callback on its own thread;
+  // this thread just keeps running_ alive for isRunning() callers.
+  while (running_.load()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+#elif defined(EXTRACKER_HAVE_ALSA)
   while (running_.load()) {
     if (alsa_ == nullptr || alsa_->seq == nullptr) {
       break;
@@ -153,6 +268,12 @@ void MidiInput::run() {
         midiEvent.note = static_cast<std::uint8_t>(std::clamp<int>(event->data.note.note, 0, 127));
         midiEvent.velocity = static_cast<std::uint8_t>(std::clamp<int>(event->data.note.velocity, 0, 127));
         midiEvent.type = MidiEvent::Type::NoteOff;
+        handled = true;
+      } else if (event->type == SND_SEQ_EVENT_CONTROLLER) {
+        midiEvent.channel = static_cast<std::uint8_t>(event->data.control.channel & 0x0F);
+        midiEvent.controller = static_cast<std::uint8_t>(std::clamp<int>(event->data.control.param, 0, 127));
+        midiEvent.value = static_cast<std::uint8_t>(std::clamp<int>(event->data.control.value, 0, 127));
+        midiEvent.type = MidiEvent::Type::ControlChange;
         handled = true;
       } else if (event->type == SND_SEQ_EVENT_CLOCK) {
         midiEvent.type = MidiEvent::Type::Clock;

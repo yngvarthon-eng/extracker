@@ -111,27 +111,79 @@ void handleNoteCommand(PatternEditor& editor,
       }
 
       if (dryRun) {
-        std::cout << "Note set dry-run: row " << row
+        if (midi < 0) {
+          std::cout << "Note set dry-run: row " << row
+                    << ", channel " << channel
+                    << ", NOTE-OFF"
+                    << ", fx " << std::clamp(effectCommand, 0, 255)
+                    << ":" << std::clamp(effectValue, 0, 255)
+                    << '\n';
+        } else {
+          std::cout << "Note set dry-run: row " << row
+                    << ", channel " << channel
+                    << ", note " << midi
+                    << ", instr " << std::clamp(instrument, 0, 255)
+                    << ", vel " << std::clamp(velocity, 1, 127)
+                    << ", fx " << std::clamp(effectCommand, 0, 255)
+                    << ":" << std::clamp(effectValue, 0, 255)
+                    << '\n';
+        }
+      } else {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        if (midi < 0) {
+          // midi < 0 means note-off marker (^^^)
+          editor.insertNoteOff(row, channel);
+          if (effectCommand != 0 || effectValue != 0) {
+            editor.setEffect(row, channel,
+                static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+                static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+          }
+        } else {
+          editor.insertNote(
+              row,
+              channel,
+              midi,
+              static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
+              0,
+              static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
+              false,
+              static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
+              static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+        }
+        std::cout << "Note set at row " << row << ", channel " << channel << '\n';
+      }
+    }
+  } else if (subcommand == "off") {
+    const std::string usage = "Usage: note off [dry] <row> <ch> <fadeout_ticks>";
+    bool dryRun = false;
+    int row = -1;
+    if (!parseDryLeadingInt(usage, dryRun, row)) {
+      return;
+    }
+
+    int channel = -1;
+    int fadeoutTicks = -1;
+
+    if (!(noteInput >> channel >> fadeoutTicks)) {
+      std::cout << usage << '\n';
+    } else {
+      if (!ensureNoTrailing(usage)) {
+        return;
+      }
+
+      const int clampedFadeoutTicks = std::max(fadeoutTicks, 0);
+      if (dryRun) {
+        std::cout << "Note off dry-run: row " << row
                   << ", channel " << channel
-                  << ", note " << midi
-                  << ", instr " << std::clamp(instrument, 0, 255)
-                  << ", vel " << std::clamp(velocity, 1, 127)
-                  << ", fx " << std::clamp(effectCommand, 0, 255)
-                  << ":" << std::clamp(effectValue, 0, 255)
+                  << ", fadeout ticks " << clampedFadeoutTicks
                   << '\n';
       } else {
         std::lock_guard<std::mutex> lock(stateMutex);
-        editor.insertNote(
-            row,
-            channel,
-            midi,
-            static_cast<std::uint8_t>(std::clamp(instrument, 0, 255)),
-            0,
-            static_cast<std::uint8_t>(std::clamp(velocity, 1, 127)),
-            false,
-            static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
-            static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
-        std::cout << "Note set at row " << row << ", channel " << channel << '\n';
+        editor.setGateTicks(row, channel, static_cast<std::uint32_t>(clampedFadeoutTicks));
+        std::cout << "Note off set at row " << row
+                  << ", channel " << channel
+                  << ", fadeout ticks " << clampedFadeoutTicks
+                  << '\n';
       }
     }
   } else if (subcommand == "clear") {
@@ -253,7 +305,7 @@ void handleNoteCommand(PatternEditor& editor,
       }
     }
   } else {
-    std::cout << "Usage: note <set|clear|vel|gate|fx> ..." << '\n';
+    std::cout << "Usage: note <set|off|clear|vel|gate|fx> ..." << '\n';
   }
 }
 

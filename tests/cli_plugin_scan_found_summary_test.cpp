@@ -41,8 +41,12 @@ int main() {
              << pluginPath << "> .\n";
   }
 
-  if (setenv("LV2_PATH", tmpRoot.string().c_str(), 1) != 0) {
-    std::cerr << "Failed to set LV2_PATH for CLI scan-summary test" << '\n';
+  if (setenv("LV2_PATH", tmpRoot.string().c_str(), 1) != 0 ||
+      setenv("VST3_PATH", "/dev/null", 1) != 0 ||
+      setenv("SF2_PATH", "/dev/null", 1) != 0 ||
+      setenv("SFZ_PATH", "/dev/null", 1) != 0 ||
+      setenv("S3I_PATH", "/dev/null", 1) != 0) {
+    std::cerr << "Failed to set plugin path env vars for CLI scan-summary test" << '\n';
     return 1;
   }
 
