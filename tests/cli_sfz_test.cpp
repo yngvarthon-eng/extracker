@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -15,11 +16,16 @@ static std::string run(const std::string& script) {
     return result;
 }
 
-// Load a known SFZ file that ships with the repo's test environment.
-// This path is user-specific; tests must tolerate absence gracefully.
-static const char* kTestSfz =
-    "/home/yngvar/Musikk/musicworks/instruments/DSK/"
-    "DSK_Xtra_Instruments_sfz/Misc/Trumphet.sfz";
+// Load a known SFZ file that ships with the repo author's own instrument
+// library. Built from $HOME rather than a literal path so this doesn't bake
+// a specific machine's username into a public repo; tests must (and do)
+// tolerate absence gracefully on any other machine.
+static std::string testSfzPath() {
+    const char* home = std::getenv("HOME");
+    if (!home) return {};
+    return std::string(home) +
+        "/Musikk/musicworks/instruments/DSK/DSK_Xtra_Instruments_sfz/Misc/Trumphet.sfz";
+}
 
 int main() {
     // 1. plugin scan should report sfz-builtin adapter (no sfizz installed)
@@ -33,7 +39,7 @@ int main() {
     // 2. assign a known SFZ via path — succeeds when WAV samples exist
     {
         const std::string cmd =
-            std::string("plugin assign 0 ") + kTestSfz + "; status; quit";
+            std::string("plugin assign 0 ") + testSfzPath() + "; status; quit";
         const auto out = run(cmd);
         // Either it loads (shows the path in status) or reports a failure —
         // either way the CLI must not crash.
