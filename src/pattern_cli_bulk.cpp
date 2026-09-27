@@ -656,50 +656,27 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     chTo = std::min(chTo, static_cast<int>(editor.channels()) - 1);
 
     std::lock_guard<std::mutex> lock(stateMutex);
-    gPatternClipboard.valid = false;
-    gPatternClipboard.rows = ((to - from) / rowStep) + 1;
-    gPatternClipboard.channels = (chTo - chFrom + 1);
-    gPatternClipboard.sourceFromRow = from;
-    gPatternClipboard.sourceFromChannel = chFrom;
-    gPatternClipboard.sourceRowStep = rowStep;
-    gPatternClipboard.steps.assign(
-        static_cast<std::size_t>(gPatternClipboard.rows * gPatternClipboard.channels),
-        ClipboardStep{});
-
-    for (int r = 0; r < gPatternClipboard.rows; ++r) {
-      for (int c = 0; c < gPatternClipboard.channels; ++c) {
-      int row = from + (r * rowStep);
-        int ch = chFrom + c;
-        ClipboardStep step;
-        step.hasNote = editor.hasNoteAt(row, ch);
-        if (step.hasNote) {
-          step.note = editor.noteAt(row, ch);
-          step.instrument = editor.instrumentAt(row, ch);
-          step.sample = editor.sampleAt(row, ch);
-          step.gateTicks = editor.gateTicksAt(row, ch);
-          step.velocity = editor.velocityAt(row, ch);
-          step.retrigger = editor.retriggerAt(row, ch);
-          step.effectCommand = editor.effectCommandAt(row, ch);
-          step.effectValue = editor.effectValueAt(row, ch);
-        }
-        gPatternClipboard.steps[static_cast<std::size_t>(r * gPatternClipboard.channels + c)] = step;
-      }
+    PatternClipboard copied;
+    if (!copied.copy(editor, from, to, chFrom, chTo, rowStep)) {
+      std::cout << "Nothing to copy: range is outside the pattern" << '\n';
+      return true;
     }
-    gPatternClipboard.valid = true;
 
     std::cout << "Copied rows " << from << ".." << to
               << " channels " << chFrom << ".." << chTo
-              << " (" << gPatternClipboard.rows << "x" << gPatternClipboard.channels << ")";
+              << " (" << copied.rows() << "x" << copied.channels() << ")";
     if (rowStep > 1) {
       std::cout << " [step " << rowStep << "]";
     }
     std::cout << '\n';
+    gClipboardHistory.push(std::move(copied));
     return true;
   }
 
   if (subcommand == "paste") {
     constexpr const char* usage =
-        "Usage: pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>]";
+        "Usage: pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>] "
+        "[mode overwrite|merge|mix|insert] [flood] [cols <nivf>]";
     BulkEditMode mode;
     if (!parseBulkEditMode(patternInput, usage, mode)) {
       return true;
@@ -711,32 +688,69 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
       return true;
     }
 
+    // The CLI has always merged (empty source steps leave the target alone).
+    PatternClipboard::PasteOptions options;
+    options.mode = PatternClipboard::PasteMode::Merge;
     int channelOffset = 0;
-    int rowStep = 1;
+    bool firstOption = true;
     std::string token;
-    if (patternInput >> token) {
+    while (patternInput >> token) {
+      const bool isFirst = firstOption;
+      firstOption = false;
       if (token == "step") {
-        if (!cli::parseStrictIntFromStream(patternInput, rowStep) || cli::hasExtraTokens(patternInput)) {
+        if (!cli::parseStrictIntFromStream(patternInput, options.rowStep)) {
           std::cout << usage << '\n';
           return true;
         }
-      } else {
-        if (!cli::parseStrictIntToken(token, channelOffset)) {
+      } else if (token == "mode") {
+        std::string modeName;
+        patternInput >> modeName;
+        if (modeName == "overwrite") {
+          options.mode = PatternClipboard::PasteMode::Overwrite;
+        } else if (modeName == "merge") {
+          options.mode = PatternClipboard::PasteMode::Merge;
+        } else if (modeName == "mix") {
+          options.mode = PatternClipboard::PasteMode::Mix;
+        } else if (modeName == "insert") {
+          options.mode = PatternClipboard::PasteMode::Insert;
+        } else {
           std::cout << usage << '\n';
           return true;
         }
-        if (patternInput >> token) {
-          if (token != "step" || !cli::parseStrictIntFromStream(patternInput, rowStep) ||
-              cli::hasExtraTokens(patternInput)) {
-            std::cout << usage << '\n';
-            return true;
+      } else if (token == "flood") {
+        options.flood = true;
+      } else if (token == "cols") {
+        std::string letters;
+        patternInput >> letters;
+        options.columns = 0;
+        bool validColumns = !letters.empty();
+        for (char letter : letters) {
+          switch (letter) {
+            case 'n': options.columns |= PatternClipboard::kNoteColumn; break;
+            case 'i': options.columns |= PatternClipboard::kInstrumentColumn; break;
+            case 'v': options.columns |= PatternClipboard::kVolumeColumn; break;
+            case 'f': options.columns |= PatternClipboard::kEffectColumn; break;
+            default: validColumns = false; break;
           }
         }
+        if (!validColumns) {
+          std::cout << usage << '\n';
+          return true;
+        }
+      } else if (isFirst && cli::parseStrictIntToken(token, channelOffset)) {
+        // channel offset
+      } else {
+        std::cout << usage << '\n';
+        return true;
       }
     }
 
-    if (rowStep < 1) {
+    if (options.rowStep < 1) {
       std::cout << "Step must be >= 1" << '\n';
+      return true;
+    }
+    if (options.flood && options.mode == PatternClipboard::PasteMode::Insert) {
+      std::cout << "flood cannot be combined with mode insert" << '\n';
       return true;
     }
 
@@ -745,87 +759,33 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
       return true;
     }
 
-    int changedSteps = 0;
-    int skippedSteps = 0;
-    int baseChannel = gPatternClipboard.sourceFromChannel + channelOffset;
-    struct PreviewLine {
-      int sourceRow = 0;
-      int sourceChannel = 0;
-      int destRow = 0;
-      int destChannel = 0;
-      int note = -1;
-      int instrument = 0;
-      int velocity = 0;
-      int fx = 0;
-      int fxValue = 0;
-    };
-    std::vector<PreviewLine> previewLines;
-    bool undoCaptured = false;
-
+    const PatternClipboard& clipboard = gClipboardHistory.active();
+    const int baseChannel = clipboard.sourceFromChannel() + channelOffset;
+    PatternClipboard::PastePlan plan;
     {
       std::lock_guard<std::mutex> lock(stateMutex);
-      for (int r = 0; r < gPatternClipboard.rows; ++r) {
-        for (int c = 0; c < gPatternClipboard.channels; ++c) {
-          const ClipboardStep& step =
-              gPatternClipboard.steps[static_cast<std::size_t>(r * gPatternClipboard.channels + c)];
-          if (!step.hasNote) {
-            continue;
-          }
-
-          int targetRow = destRow + (r * rowStep);
-          int targetChannel = baseChannel + c;
-          if (targetRow < 0 || targetRow >= static_cast<int>(editor.rows()) ||
-              targetChannel < 0 || targetChannel >= static_cast<int>(editor.channels())) {
-            ++skippedSteps;
-            continue;
-          }
-
-          if (mode.dryRun && mode.previewMode && previewLines.size() < kMaxPreviewLines) {
-            previewLines.push_back(PreviewLine{gPatternClipboard.sourceFromRow + (r * gPatternClipboard.sourceRowStep),
-                                               gPatternClipboard.sourceFromChannel + c,
-                                               targetRow,
-                                               targetChannel,
-                                               step.note,
-                                               static_cast<int>(step.instrument),
-                                               static_cast<int>(step.velocity),
-                                               static_cast<int>(step.effectCommand),
-                                               static_cast<int>(step.effectValue)});
-          }
-
-          if (!mode.dryRun) {
-            if (!undoCaptured) {
-              captureBulkUndoSnapshot(editor);
-              undoCaptured = true;
-            }
-            editor.insertNote(
-                targetRow,
-                targetChannel,
-                step.note,
-                step.instrument,
-                step.gateTicks,
-                step.velocity,
-                step.retrigger,
-                step.effectCommand,
-                step.effectValue);
-            if (step.sample != 0xFFFF) {
-              editor.setSample(targetRow, targetChannel, step.sample);
-            }
-          }
-          ++changedSteps;
-        }
-      }
-
-      if (!mode.dryRun && undoCaptured) {
+      plan = clipboard.plan(editor, destRow, baseChannel, options);
+      if (!mode.dryRun && !plan.changes.empty()) {
+        captureBulkUndoSnapshot(editor);
+        PatternClipboard::apply(editor, plan);
         resetStateAfterPatternEdit(sequencer, audio, recordCanUndo, recordCanRedo);
       }
     }
 
+    const int changedSteps = static_cast<int>(plan.changes.size());
     std::cout << "Pasted " << changedSteps
               << " step(s) at row " << destRow
               << " (channel offset " << channelOffset
-              << ", " << skippedSteps << " skipped)";
-    if (rowStep > 1) {
-      std::cout << " [step " << rowStep << "]";
+              << ", " << plan.skippedOutOfBounds << " skipped)";
+    if (options.rowStep > 1) {
+      std::cout << " [step " << options.rowStep << "]";
+    }
+    if (options.mode != PatternClipboard::PasteMode::Merge) {
+      static constexpr const char* kModeNames[] = {"overwrite", "merge", "mix", "insert"};
+      std::cout << " [" << kModeNames[static_cast<int>(options.mode)] << "]";
+    }
+    if (options.flood) {
+      std::cout << " [flood]";
     }
     if (mode.dryRun) {
       std::cout << " [dry-run]";
@@ -833,14 +793,24 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
     std::cout << '\n';
 
     if (mode.dryRun && mode.previewMode) {
-      printPreviewBlock("Paste preview:", changedSteps, previewLines, [&](const PreviewLine& line) {
-        std::cout << "src " << line.sourceRow << ":" << line.sourceChannel
-                  << " -> dst " << line.destRow << ":" << line.destChannel
-                  << " note " << line.note;
+      std::vector<PatternClipboard::CellChange> previewLines(
+          plan.changes.begin(),
+          plan.changes.begin() + static_cast<std::ptrdiff_t>(std::min(plan.changes.size(), kMaxPreviewLines)));
+      printPreviewBlock("Paste preview:", changedSteps, previewLines, [&](const PatternClipboard::CellChange& line) {
+        if (line.blockRow < 0) {
+          std::cout << "moved -> dst " << line.row << ":" << line.channel << " note " << line.after.note;
+        } else {
+          std::cout << "src "
+                    << clipboard.sourceFromRow() + (line.blockRow * clipboard.sourceRowStep())
+                    << ":" << clipboard.sourceFromChannel() + line.blockChannel
+                    << " -> dst " << line.row << ":" << line.channel
+                    << " note " << line.after.note;
+        }
         if (mode.verboseMode) {
-          std::cout << " i" << line.instrument
-                    << " v" << line.velocity
-                    << " fx" << line.fx << ":" << line.fxValue;
+          std::cout << " i" << static_cast<int>(line.after.instrument)
+                    << " v" << static_cast<int>(line.after.velocity)
+                    << " fx" << static_cast<int>(line.after.effectCommand)
+                    << ":" << static_cast<int>(line.after.effectValue);
         }
       });
     }
@@ -1118,6 +1088,40 @@ bool handlePatternBulkSubcommand(PatternCommandContext context,
           std::cout << " n" << line.note << " i" << line.instrument;
         }
       });
+    }
+    return true;
+  }
+
+  if (subcommand == "clip" || subcommand == "clipboard") {
+    constexpr const char* usage = "Usage: pattern clip [list] | use <slot> | clear";
+    std::string action;
+    patternInput >> action;
+    std::lock_guard<std::mutex> lock(stateMutex);
+    if (action.empty() || action == "list") {
+      if (gClipboardHistory.empty()) {
+        std::cout << "Clipboard history is empty. Use pattern copy first." << '\n';
+        return true;
+      }
+      std::cout << "Clipboard history (* = used by paste):" << '\n';
+      for (std::size_t i = 0; i < gClipboardHistory.size(); ++i) {
+        std::cout << (i == gClipboardHistory.activeIndex() ? "* " : "  ") << (i + 1) << ": "
+                  << gClipboardHistory.entry(i).describe() << '\n';
+      }
+    } else if (action == "use") {
+      int slot = 0;
+      if (!cli::parseStrictIntFromStream(patternInput, slot) || cli::hasExtraTokens(patternInput)) {
+        std::cout << usage << '\n';
+      } else if (slot < 1 || !gClipboardHistory.select(static_cast<std::size_t>(slot - 1))) {
+        std::cout << "No clipboard slot " << slot << " (history has " << gClipboardHistory.size() << ")" << '\n';
+      } else {
+        std::cout << "Clipboard slot " << slot << " selected: "
+                  << gClipboardHistory.active().describe() << '\n';
+      }
+    } else if (action == "clear") {
+      gClipboardHistory.clear();
+      std::cout << "Clipboard history cleared" << '\n';
+    } else {
+      std::cout << usage << '\n';
     }
     return true;
   }
