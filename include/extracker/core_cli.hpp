@@ -7,9 +7,11 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <atomic>
 
 #include "extracker/audio_engine.hpp"
 #include "extracker/midi_input.hpp"
+#include "extracker/module.hpp"
 #include "extracker/pattern_editor.hpp"
 #include "extracker/plugin_host.hpp"
 #include "extracker/sequencer.hpp"
@@ -47,8 +49,13 @@ struct CoreCommandContext {
   Sequencer& sequencer;
   PluginHost& plugins;
   AudioEngine& audio;
+  Module& module;
   const std::function<bool()>& midiClockAlive;
   const std::function<const char*()>& transportSource;
+  const std::function<std::size_t()>& songLength;
+  const std::function<std::size_t(std::size_t)>& songEntryAt;
+  const std::atomic<bool>* songModeEnabled = nullptr;
+  const std::atomic<std::size_t>* songPlaybackPosition = nullptr;
   const std::function<std::string(const std::string&)>& normalizeModulePath;
   const std::function<bool(const std::string&)>& savePatternToFile;
   const std::function<bool(const std::string&)>& loadPatternFromFile;

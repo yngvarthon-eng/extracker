@@ -33,7 +33,7 @@ int main() {
     return 1;
   }
 
-  const bool sawUsage = output.find("Usage: plugin <scan|list|load|assign|set|get|info|status> ...") != std::string::npos;
+  const bool sawUsage = output.find("Usage: plugin <scan|list|load|assign|set|get|info|status|effect|params|preset|editor|export> ...") != std::string::npos;
 
   if (!sawUsage) {
     std::cerr << "Missing expected top-level plugin usage output marker" << '\n';

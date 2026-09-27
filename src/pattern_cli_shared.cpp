@@ -10,7 +10,7 @@ namespace extracker::pattern_cli_internal {
 
 std::optional<PatternEditor> gBulkUndoSnapshot;
 std::optional<PatternEditor> gBulkRedoSnapshot;
-PatternClipboard gPatternClipboard;
+ClipboardHistory gClipboardHistory;
 
 bool readOptionalStrictInt(std::istringstream& input, bool& provided, int& value) {
   std::string token;
@@ -194,8 +194,16 @@ void captureBulkUndoSnapshot(PatternEditor& editor) {
 }
 
 bool hasUsableClipboard() {
-  return gPatternClipboard.valid && gPatternClipboard.rows > 0 && gPatternClipboard.channels > 0 &&
-         !gPatternClipboard.steps.empty();
+  return !gClipboardHistory.empty();
 }
 
 }  // namespace extracker::pattern_cli_internal
+
+namespace extracker {
+
+void discardPatternUndoHistory() {
+  pattern_cli_internal::gBulkUndoSnapshot.reset();
+  pattern_cli_internal::gBulkRedoSnapshot.reset();
+}
+
+}  // namespace extracker

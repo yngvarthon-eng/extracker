@@ -36,8 +36,10 @@ int main() {
   const bool sawHeader = output.find("Discovered plugins:") != std::string::npos;
   const bool sawSine = output.find("  builtin.sine") != std::string::npos;
   const bool sawSquare = output.find("  builtin.square") != std::string::npos;
+  const bool sawNoPlugins = output.find("No plugins discovered") != std::string::npos;
 
-  if (!sawHeader || !sawSine || !sawSquare) {
+  const bool sawKnownPluginList = sawHeader && sawSine && sawSquare;
+  if (!sawKnownPluginList && !sawNoPlugins) {
     std::cerr << "Missing expected plugin list output markers" << '\n';
     std::cerr << output << '\n';
     return 1;

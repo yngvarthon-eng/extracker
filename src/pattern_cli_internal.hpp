@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "extracker/pattern_cli.hpp"
+#include "extracker/pattern_clipboard.hpp"
 
 namespace extracker::pattern_cli_internal {
 
@@ -16,28 +17,6 @@ struct BulkEditMode {
   bool previewMode = false;
   bool verboseMode = false;
   std::string valueToken;
-};
-
-struct ClipboardStep {
-  bool hasNote = false;
-  int note = -1;
-  std::uint8_t instrument = 0;
-  std::uint16_t sample = 0xFFFF;  // kInvalidSampleSlot; 0xFFFF means no sample
-  std::uint32_t gateTicks = 0;
-  std::uint8_t velocity = 100;
-  bool retrigger = false;
-  std::uint8_t effectCommand = 0;
-  std::uint8_t effectValue = 0;
-};
-
-struct PatternClipboard {
-  bool valid = false;
-  int rows = 0;
-  int channels = 0;
-  int sourceFromRow = 0;
-  int sourceFromChannel = 0;
-  int sourceRowStep = 1;
-  std::vector<ClipboardStep> steps;
 };
 
 struct RangeChannelSelection {
@@ -52,7 +31,7 @@ struct RangeChannelSelection {
 
 extern std::optional<PatternEditor> gBulkUndoSnapshot;
 extern std::optional<PatternEditor> gBulkRedoSnapshot;
-extern PatternClipboard gPatternClipboard;
+extern ClipboardHistory gClipboardHistory;
 
 bool readOptionalStrictInt(std::istringstream& input, bool& provided, int& value);
 

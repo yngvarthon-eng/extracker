@@ -50,7 +50,7 @@ int main() {
   fs::remove(tempFile, ec);
 
   const std::string setupCommands =
-      "printf \"pattern insert after\\npattern insert after\\nsave " + tempFile.string() + "\\nquit\\n\" | ./extracker";
+      "printf \"pattern insert after\\npattern insert after\\nmessage set Test Message\\nsave " + tempFile.string() + "\\nquit\\n\" | ./extracker";
 
   std::string output;
   if (!runCommandCapture(setupCommands, output)) {
@@ -85,9 +85,13 @@ int main() {
     std::cerr << "Saved file missing expected song order" << '\n';
     return 1;
   }
+  if (!contains(fileText, "MODULE_MESSAGE")) {
+    std::cerr << "Saved file missing MODULE_MESSAGE" << '\n';
+    return 1;
+  }
 
     const std::string loadCommands =
-        "printf \"load " + savedFile.string() + "\\nstatus detail\\nquit\\n\" | ./extracker";
+        "printf \"load " + savedFile.string() + "\\nstatus detail\\nmessage get\\nquit\\n\" | ./extracker";
 
   if (!runCommandCapture(loadCommands, output)) {
     std::cerr << "Failed to run CLI load/status command" << '\n';
@@ -96,6 +100,14 @@ int main() {
 
   if (!contains(output, "Module loaded from ")) {
     std::cerr << "Loaded module did not report successful load" << '\n';
+    return 1;
+  }
+  if (!contains(output, "message: 'Test Message'")) {
+    std::cerr << "Loaded module missing expected message" << '\n';
+    return 1;
+  }
+  if (!contains(output, "Module message: 'Test Message'")) {
+    std::cerr << "Loaded module message get failed" << '\n';
     return 1;
   }
 

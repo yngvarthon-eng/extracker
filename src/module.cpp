@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <utility>
 
 namespace extracker {
 
@@ -14,13 +15,18 @@ void Module::reset(std::size_t rows, std::size_t channels, std::size_t patternCo
   rows_ = rows;
   channels_ = channels;
   currentPatternIndex_ = 0;
+  inheritSwingOnInsert_ = false;
+  rowEditAllChannels_ = false;
+  message_.clear();
   patterns_.clear();
+  patternSwingPercent_.clear();
   songOrder_.clear();
 
   const std::size_t safePatternCount = std::max<std::size_t>(patternCount, 1);
   patterns_.reserve(safePatternCount);
   for (std::size_t i = 0; i < safePatternCount; ++i) {
     patterns_.push_back(std::make_unique<PatternEditor>(rows_, channels_));
+    patternSwingPercent_.push_back(50);
     songOrder_.push_back(i);
   }
 }
@@ -47,9 +53,11 @@ bool Module::insertPatternAfter() {
   if (insertPos > patterns_.size()) {
     insertPos = patterns_.size();
   }
+  const std::uint8_t swingForInsertedPattern = inheritSwingOnInsert_ ? currentPatternSwing() : 50;
 
   auto newPattern = std::make_unique<PatternEditor>(rows_, channels_);
   patterns_.insert(patterns_.begin() + static_cast<long>(insertPos), std::move(newPattern));
+  patternSwingPercent_.insert(patternSwingPercent_.begin() + static_cast<long>(insertPos), swingForInsertedPattern);
 
   for (std::size_t& entry : songOrder_) {
     if (entry >= insertPos) {
@@ -67,9 +75,11 @@ bool Module::insertPatternAfter() {
 bool Module::insertPatternBefore() {
   const std::size_t previousPatternIndex = currentPatternIndex_;
   std::size_t insertPos = currentPatternIndex_;
+  const std::uint8_t swingForInsertedPattern = inheritSwingOnInsert_ ? currentPatternSwing() : 50;
 
   auto newPattern = std::make_unique<PatternEditor>(rows_, channels_);
   patterns_.insert(patterns_.begin() + static_cast<long>(insertPos), std::move(newPattern));
+  patternSwingPercent_.insert(patternSwingPercent_.begin() + static_cast<long>(insertPos), swingForInsertedPattern);
 
   for (std::size_t& entry : songOrder_) {
     if (entry >= insertPos) {
@@ -92,6 +102,9 @@ bool Module::removeCurrentPattern() {
   
   const std::size_t removedPattern = currentPatternIndex_;
   patterns_.erase(patterns_.begin() + static_cast<long>(currentPatternIndex_));
+  if (removedPattern < patternSwingPercent_.size()) {
+    patternSwingPercent_.erase(patternSwingPercent_.begin() + static_cast<long>(removedPattern));
+  }
 
   std::vector<std::size_t> nextSongOrder;
   nextSongOrder.reserve(songOrder_.size());
@@ -114,6 +127,37 @@ bool Module::removeCurrentPattern() {
     nextSongOrder.push_back(currentPatternIndex_);
   }
   songOrder_ = std::move(nextSongOrder);
+
+  return true;
+}
+
+bool Module::duplicateCurrentPattern() {
+  return duplicatePattern(currentPatternIndex_);
+}
+
+bool Module::duplicatePattern(std::size_t sourcePattern) {
+  if (patterns_.empty() || sourcePattern >= patterns_.size()) {
+    return false;
+  }
+
+  const std::size_t insertPos = sourcePattern + 1;
+
+  auto duplicated = std::make_unique<PatternEditor>(*patterns_[sourcePattern]);
+  patterns_.insert(patterns_.begin() + static_cast<long>(insertPos), std::move(duplicated));
+
+  std::uint8_t swing = patternSwing(sourcePattern);
+  patternSwingPercent_.insert(patternSwingPercent_.begin() + static_cast<long>(insertPos), swing);
+
+  for (std::size_t& entry : songOrder_) {
+    if (entry >= insertPos) {
+      ++entry;
+    }
+  }
+
+  currentPatternIndex_ = insertPos;
+  const std::size_t anchorSongEntry = firstSongEntryForPattern(sourcePattern);
+  const std::size_t songInsertPos = std::min(anchorSongEntry + 1, songOrder_.size());
+  songOrder_.insert(songOrder_.begin() + static_cast<long>(songInsertPos), currentPatternIndex_);
 
   return true;
 }
@@ -234,12 +278,65 @@ const std::vector<std::size_t>& Module::songOrder() const {
   return songOrder_;
 }
 
+std::uint8_t Module::patternSwing(std::size_t patternIndex) const {
+  if (patternSwingPercent_.empty()) {
+    return 50;
+  }
+  if (patternIndex >= patternSwingPercent_.size()) {
+    return patternSwingPercent_.front();
+  }
+  return static_cast<std::uint8_t>(std::clamp<int>(patternSwingPercent_[patternIndex], 50, 75));
+}
+
+std::uint8_t Module::currentPatternSwing() const {
+  return patternSwing(currentPatternIndex_);
+}
+
+bool Module::setPatternSwing(std::size_t patternIndex, std::uint8_t swingPercent) {
+  if (patternIndex >= patternSwingPercent_.size()) {
+    return false;
+  }
+  patternSwingPercent_[patternIndex] = static_cast<std::uint8_t>(std::clamp<int>(swingPercent, 50, 75));
+  return true;
+}
+
+bool Module::setCurrentPatternSwing(std::uint8_t swingPercent) {
+  return setPatternSwing(currentPatternIndex_, swingPercent);
+}
+
+void Module::setInheritSwingOnInsert(bool enabled) {
+  inheritSwingOnInsert_ = enabled;
+}
+
+bool Module::inheritSwingOnInsert() const {
+  return inheritSwingOnInsert_;
+}
+
+void Module::setRowEditAllChannels(bool enabled) {
+  rowEditAllChannels_ = enabled;
+}
+
+bool Module::rowEditAllChannels() const {
+  return rowEditAllChannels_;
+}
+
 std::string Module::status() const {
   std::ostringstream oss;
   oss << "Module: " << patterns_.size() << " pattern" << (patterns_.size() != 1 ? "s" : "");
   oss << ", current pattern: " << (currentPatternIndex_ + 1);
   oss << ", song length: " << songOrder_.size();
+  if (!message_.empty()) {
+    oss << ", message: '" << message_ << "'";
+  }
   return oss.str();
+}
+
+void Module::setMessage(std::string message) {
+  message_ = std::move(message);
+}
+
+const std::string& Module::message() const {
+  return message_;
 }
 
 }  // namespace extracker

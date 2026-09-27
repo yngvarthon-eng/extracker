@@ -81,7 +81,9 @@ void restoreStep(PatternEditor& editor, int row, int channel, const PatternEdito
 }
 
 int chooseRecordRow(const PatternEditor& editor, const Transport& transport, const RecordWorkflowState& state) {
-  int baseRow = state.quantizeEnabled ? static_cast<int>(transport.currentRow()) : state.cursorRow;
+  int baseRow = (state.quantizeEnabled && transport.isPlaying())
+                ? static_cast<int>(transport.currentRow())
+                : state.cursorRow;
   baseRow = std::clamp(baseRow, 0, static_cast<int>(editor.rows()) - 1);
 
   if (state.overdubEnabled) {

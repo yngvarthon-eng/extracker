@@ -15,11 +15,13 @@ public:
   void setTicksPerBeat(std::uint32_t ticksPerBeat);
   void setTicksPerRow(std::uint32_t ticksPerRow);
   void setPatternRows(std::uint32_t patternRows);
+  void setSwingPercent(std::uint32_t swingPercent);
 
   double tempoBpm() const;
   std::uint32_t ticksPerBeat() const;
   std::uint32_t ticksPerRow() const;
   std::uint32_t patternRows() const;
+  std::uint32_t swingPercent() const;
 
   bool play();
   void stop();
@@ -43,6 +45,7 @@ private:
   std::atomic<std::uint32_t> ticksPerBeat_;
   std::atomic<std::uint32_t> ticksPerRow_;
   std::atomic<std::uint32_t> patternRows_;
+  std::atomic<std::uint32_t> swingPercent_;
   std::thread clockThread_;
 };
 

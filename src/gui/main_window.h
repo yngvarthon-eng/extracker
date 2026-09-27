@@ -12,6 +12,7 @@ public:
   ~MainWindow() override;
 
   void notifyPatternChanged();
+  void autoLoadLastSong();
   void closeButtonPressed() override;
 
 private:
