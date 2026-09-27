@@ -12,5 +12,7 @@
 # Local launcher script in the repo root only; a bare "extracker" would also
 # match include/extracker/ and hide every new header.
 /extracker
-# Source snapshots
-/extracker-*.tar.gz
+# Release tarballs from package.sh
+*.tar.gz
+# Local Claude Code settings
+.claude/
