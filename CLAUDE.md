@@ -32,17 +32,23 @@ ctest --test-dir build -R extracker_cli_core_status_json_test --output-on-failur
 ```
 
 Notes:
-- The repo has several pre-existing build dirs: `build/` (Ninja), `build-make/`, and
-  `build-make-gui/`. The `./extracker` wrapper script builds/runs the binary in `build-make/`.
+- Build dirs (all ignored via `/build*/`):
+  - `build-gui/`: Debug build of CLI and GUI; `./launch-gui.sh` runs (and first builds) the GUI here.
+  - `build-make/`: the local, untracked `./extracker` wrapper script builds/runs the CLI here.
+  - `build-release/`: Release build that `./package.sh` configures and packages into a tarball.
+  - `build/` and `build-make-gui/` are older dirs; `build-make-gui/` was configured under a
+    previous checkout path and no longer works (`package.sh` refuses such dirs).
 - The GUI target pulls JUCE 7.0.10 from GitHub on first configure and links `curl`. A clean
   configure that touches the GUI is slow; prefer `--target extracker` when working on core/CLI.
 - Audio backends are auto-detected via pkg-config and gated by CMake options
-  `EXTRACKER_ENABLE_ALSA/JACK/PIPEWIRE` (all ON by default). Missing dev packages just disable
+  `EXTRACKER_ENABLE_ALSA/JACK/PIPEWIRE` (all ON by default). JACK is opened with
+  `JackNoStartServer`, so without a running jackd it falls through to ALSA immediately
+  (letting libjack spawn jackd stalled every start and every CLI test by ~6 s). Missing dev packages just disable
   that backend; the Null backend is always available, so builds/tests work headless.
 
 ## How the tests work (important)
 
-There are ~160 tests. Two distinct styles:
+There are ~180 tests. Two distinct styles:
 - **Core tests** link `extracker_core` directly and call the C++ API (e.g. `module_*_test`,
   `sample_*_test`, `effect_regression_test`).
 - **CLI tests** (`cli_*` / `extracker_cli_*`) `popen("./extracker", ...)`, pipe a script of
@@ -77,6 +83,21 @@ Real-time-ish playback pipeline, all driven by a background thread:
   scaffold with an LV2 manifest backend (`dlopen` + `lv2_descriptor` probing; audio still falls
   back to built-in synthesis until the full LV2 port bridge lands).
 - **MidiInput** — ALSA-seq based MIDI in, with clock/transport sync and channel→instrument mapping.
+- **ChannelManager** (`channel_manager.hpp`) — the single owner of per-channel user state: name,
+  default instrument, mute, solo, volume and base filter. Solo wins over mute (`isAudible`). The
+  sequencer takes it as `update(..., const ChannelManager*)` and reads mute/solo/volume/filter from
+  it; the GUI hands the playback thread a copy per tick. Pattern effects 18/19/1A override the base
+  filter only in the sequencer's running state, which `Sequencer::reset()` clears.
+- **Channel layout** (`channel_layout.hpp`) — insert/delete/move/duplicate a channel across *all*
+  patterns plus `ChannelManager`, keeping each pattern's channel count. `ChannelEditResult::sources`
+  maps new→old channel so callers can carry other per-channel state (record channel, cursor, ...).
+  `ChannelLayoutHistory` is the undo/redo for these edits; it refuses to undo once any pattern
+  changed since, so it never discards later note edits.
+- **PatternClipboard / ClipboardHistory** (`pattern_clipboard.hpp`) — the one clipboard used by
+  both CLI and GUI: copy a block (with row stride), `plan()` a paste (modes Overwrite/Merge/Mix/
+  Insert, flood, column mask) as a list of cell changes, then `apply()` it. CLI dry-run previews
+  print the plan, so previews and real pastes cannot drift. `writeStep` writes a cell exactly.
+  `ClipboardHistory` keeps the last 9 copies, newest first, deduped by content.
 
 ### CLI command system (`src/*_cli.cpp`, `src/main.cpp`)
 
@@ -87,9 +108,10 @@ Real-time-ish playback pipeline, all driven by a background thread:
   wires top-level verbs to per-domain handlers; `registerCommandHandlers` installs them.
 - Handlers are split by domain: `core_cli` (transport/status/reset/save/load), `note_cli`,
   `pattern_cli` (+ `_basic`/`_bulk`/`_shared`), `record_cli`, `midi_cli`, `plugin_cli`,
-  `sample_cli`, `sample_editor_cli`, `module_cli` (pattern/song management).
+  `sample_cli`, `sample_editor_cli`, `module_cli` (pattern/song management), `channel_cli`
+  (`channel list|vol|mute|solo|name|insert|delete|move|dup|undo|redo`).
 - Handlers receive a **context struct** (`CoreCommandContext`, `PatternCommandContext`,
-  `RecordCommandContext`, `MidiCommandContext`, `ModuleCommandContext`) that threads references to
+  `RecordCommandContext`, `MidiCommandContext`, `ModuleCommandContext`, `ChannelCommandContext`) that threads references to
   the shared state and engine objects. To add a command: add the handler in the right `*_cli.cpp`,
   and if it needs new shared state, extend the relevant context struct and its construction in
   `main.cpp`.
@@ -110,11 +132,24 @@ extension is `.xtp`. **The serializer/deserializer is implemented twice** — in
 (`savePatternToFile`/`loadPatternFromFile`) and again in `src/gui/app.cpp`. CLI↔GUI round-trip
 parity is a maintained invariant (there are dedicated compat tests, e.g.
 `cli_core_gui_song_tail_token_compat_test`). When you change the format, update **both** writers
-and keep the tail-token parsing in sync.
+and keep the tail-token parsing in sync. The GUI has two loaders in `app.cpp` (song and legacy
+pattern), so there are three tail-token parsers in total, plus an `isSongTailToken` list in each file.
+
+Per-channel and global lines go through shared helpers instead of hand-written loops; prefer adding
+new song state the same way:
+- `writeChannelState` / `applyChannelFileToken` / `isChannelFileToken` (`channel_manager.hpp`):
+  `CHANNEL_INSTRUMENTS`, `CHANNEL_MUTED`, `CHANNEL_VOLUME`, `CHANNEL_NAMES` (quoted),
+  `CHANNEL_FILTERS` (`type cutoff resonance` per channel, 0–255). Solo is not saved.
+- `writeReverbLine` / `readReverbLine` (`song_bundle.hpp`): `REVERB room damping wet width`, 0–255.
+- Loaders reset `ChannelManager`, channel undo history and reverb before reading a file, so songs
+  without these lines do not inherit the previous song's state.
 
 ## Conventions
 
 - Everything lives in `namespace extracker` (GUI classes are global, e.g. `ExTrackerApp`).
+- The GUI playback thread runs `sequencer.update` *outside* `stateMutex` on snapshots. Do not call
+  mutating `Sequencer` methods from the message thread; put state in `ChannelManager` (under the
+  lock) or set a flag such as `ExTrackerApp::sequencerResetRequested` that the playback thread acts on.
 - Core sources compile with `-Wall -Wextra -Wpedantic`; keep them warning-clean.
 - CLI commands have terse aliases (e.g. `p`/`s`/`st`/`w`/`r`, `pattern dup`/`sw`/`ls`/`del`),
   each with its own `cli_*_alias_test`. Adding/renaming an alias means adding/adjusting that test.

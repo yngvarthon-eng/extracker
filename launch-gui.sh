@@ -1,6 +1,17 @@
 #!/bin/bash
 # Launch extracker GUI and connect any attached Keystation 88 MK3
-cd "$(dirname "$0")/build-make-gui"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+BUILD_DIR="$REPO_DIR/build-gui"
+
+# Configure and build on first use (takes a few minutes: JUCE is fetched and compiled).
+if [ ! -x "$BUILD_DIR/extracker_gui" ]; then
+    echo "No GUI build in $BUILD_DIR yet, building it..."
+    if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
+        cmake -S "$REPO_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug || exit 1
+    fi
+    cmake --build "$BUILD_DIR" -j"$(nproc)" --target extracker_gui || exit 1
+fi
+cd "$BUILD_DIR" || exit 1
 
 # Personal instrument library — not covered by the built-in default search
 # paths, so point the SF2/SFZ/S3I scanners at it directly.

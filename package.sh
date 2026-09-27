@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Build and package exTracker binaries into a distributable tarball.
 # Usage:  ./package.sh [build-dir]
-# Default build dir: build-make (must already be configured).
+# Default build dir: build-release, configured as a Release build on first use.
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR="${1:-${REPO_DIR}/build-make}"
+BUILD_DIR="${1:-${REPO_DIR}/build-release}"
 DATE="$(date +%Y%m%d)"
 COMMIT="$(git -C "${REPO_DIR}" rev-parse --short HEAD 2>/dev/null || echo "local")"
 PKG_NAME="extracker-${DATE}-${COMMIT}"
@@ -19,6 +19,22 @@ echo "Package   : ${TARBALL}"
 echo ""
 
 # 1. Build latest binaries
+if [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+  echo "Configuring Release build in ${BUILD_DIR}…"
+  cmake -S "${REPO_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release
+else
+  CONFIGURED_SRC="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "${BUILD_DIR}/CMakeCache.txt")"
+  if [[ "${CONFIGURED_SRC}" != "${REPO_DIR}" ]]; then
+    echo "Error: ${BUILD_DIR} was configured for ${CONFIGURED_SRC}, not ${REPO_DIR}." >&2
+    echo "Remove it (rm -rf ${BUILD_DIR}) and run this script again." >&2
+    exit 1
+  fi
+  BUILD_TYPE="$(sed -n 's/^CMAKE_BUILD_TYPE:STRING=//p' "${BUILD_DIR}/CMakeCache.txt")"
+  if [[ "${BUILD_TYPE}" != "Release" ]]; then
+    echo "Warning: ${BUILD_DIR} is a '${BUILD_TYPE:-default}' build, not Release." >&2
+  fi
+fi
+
 echo "Building CLI…"
 cmake --build "${BUILD_DIR}" --target extracker
 echo "Building GUI…"
@@ -67,9 +83,9 @@ extracker_gui &
 GUI_PID=$!
 
 for i in $(seq 1 50); do
-    ET_CLIENT=$(aconnect -o 2>/dev/null | awk '/exTracker MIDI Input/{match($0,/client ([0-9]+)/,a);print a[1];exit}')
+    ET_CLIENT=$(aconnect -o 2>/dev/null | grep "exTracker MIDI Input" | sed -n 's/^client \([0-9]*\).*/\1/p' | head -n1)
     if [[ -n "${ET_CLIENT}" ]]; then
-        KB=$(aconnect -i 2>/dev/null | awk '/Keystation 88/{match($0,/client ([0-9]+)/,a);print a[1];exit}')
+        KB=$(aconnect -i 2>/dev/null | grep "Keystation 88" | sed -n 's/^client \([0-9]*\).*/\1/p' | head -n1)
         if [[ -n "${KB}" ]]; then
             aconnect "${KB}:0" "${ET_CLIENT}:0" && echo "Connected Keystation 88 MK3 → exTracker"
         else
