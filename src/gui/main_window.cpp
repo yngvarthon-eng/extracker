@@ -4496,8 +4496,7 @@ private:
             std::max(0, filterTypeBox.getSelectedId() - 1));
         const auto c = static_cast<float>(filterCutoffSlider.getValue() / 255.0);
         const auto r = static_cast<float>(filterResonanceSlider.getValue() / 255.0);
-        for (const std::size_t ch : getFilterChannels())
-            app.sequencer.setChannelFilter(ch, t, c, r, app.audio, app.plugins);
+        setFilterOnSelectedChannels(t, c, r);
     };
     filterCutoffLabel.setText("Cutoff", juce::dontSendNotification);
     filterCutoffLabel.setJustificationType(juce::Justification::centredLeft);
@@ -4513,8 +4512,7 @@ private:
         if (t == extracker::BiquadType::Off) return;
         const auto c = static_cast<float>(filterCutoffSlider.getValue() / 255.0);
         const auto r = static_cast<float>(filterResonanceSlider.getValue() / 255.0);
-        for (const std::size_t ch : getFilterChannels())
-            app.sequencer.setChannelFilter(ch, t, c, r, app.audio, app.plugins);
+        setFilterOnSelectedChannels(t, c, r);
     };
     configureParameterSlider(filterResonanceSlider, 0.0, 255.0, 1.0);
     filterResonanceSlider.setNumDecimalPlacesToDisplay(0);
@@ -4526,8 +4524,7 @@ private:
         if (t == extracker::BiquadType::Off) return;
         const auto c = static_cast<float>(filterCutoffSlider.getValue() / 255.0);
         const auto r = static_cast<float>(filterResonanceSlider.getValue() / 255.0);
-        for (const std::size_t ch : getFilterChannels())
-            app.sequencer.setChannelFilter(ch, t, c, r, app.audio, app.plugins);
+        setFilterOnSelectedChannels(t, c, r);
     };
 
     controlPortSectionTitle.setText("Parameters", juce::dontSendNotification);
@@ -4778,6 +4775,7 @@ private:
       }
       app.plugins.allNotesOff();
       app.audio.allNotesOff();
+      app.sequencerResetRequested.store(true);
 
       // Per-pattern undo snapshots predate the new layout; start a fresh baseline.
       undoHistoryEntries.clear();
@@ -5577,17 +5575,17 @@ private:
     return selected;
   }
 
-  // Returns instrument for the first active filter-channel toggle (for display).
-  int getFilterInstrument() const {
-    for (std::size_t i = 0; i < filterChannelToggles.size(); ++i) {
-      if (filterChannelToggles[i]->getToggleState()) {
-        const int instr =
-            channelInstrumentSelectors[i]->getSelectedId() - 1;
-        if (instr >= 0 && instr < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots))
-          return instr;
-      }
+  // Stores the filter panel values as the base filter of every ticked channel.
+  // Playback picks it up on the next row.
+  void setFilterOnSelectedChannels(extracker::BiquadType type, float cutoffNorm, float resonanceNorm) {
+    extracker::BiquadParams filter;
+    filter.type = type;
+    filter.cutoffNorm = cutoffNorm;
+    filter.resonanceNorm = resonanceNorm;
+    std::lock_guard<std::mutex> lock(app.stateMutex);
+    for (const std::size_t ch : getFilterChannels()) {
+      app.channels.setFilter(ch, filter);
     }
-    return getSelectedSlot();
   }
 
   // Returns all active (toggled) channel indices for filter writes.
@@ -5613,11 +5611,14 @@ private:
     for (int ch = 0; ch < n; ++ch) {
       auto btn = std::make_unique<juce::ToggleButton>(juce::String(ch + 1));
       btn->onClick = [this]() {
-        // Refresh display from first active channel
-        const int fi = getFilterInstrument();
-        if (fi < 0) return;
-        const extracker::BiquadParams fp =
-            app.plugins.getInstrumentFilterParams(static_cast<std::uint8_t>(fi));
+        // Show the base filter of the first ticked channel.
+        const auto selected = getFilterChannels();
+        if (selected.empty()) return;
+        extracker::BiquadParams fp;
+        {
+          std::lock_guard<std::mutex> lock(app.stateMutex);
+          fp = app.channels.filter(selected.front());
+        }
         filterTypeBox.setSelectedId(static_cast<int>(fp.type) + 1, juce::dontSendNotification);
         filterCutoffSlider.setValue(fp.cutoffNorm * 255.0, juce::dontSendNotification);
         filterResonanceSlider.setValue(fp.resonanceNorm * 255.0, juce::dontSendNotification);
@@ -5754,12 +5755,13 @@ private:
         reverbWidthSlider.setValue(static_cast<double>(rp.width    * 255.0f), juce::dontSendNotification);
     }
 
-    // Filter
+    // Filter: show the base filter of the first ticked channel.
     {
-        const int fi = getFilterInstrument();
-        if (fi >= 0) {
-            const extracker::BiquadParams fp =
-                app.plugins.getInstrumentFilterParams(static_cast<std::uint8_t>(fi));
+        const auto selected = getFilterChannels();
+        std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+        if (!selected.empty() && lock.owns_lock()) {
+            const extracker::BiquadParams fp = app.channels.filter(selected.front());
+            lock.unlock();
             filterTypeBox.setSelectedId(static_cast<int>(fp.type) + 1, juce::dontSendNotification);
             filterCutoffSlider.setValue(fp.cutoffNorm * 255.0, juce::dontSendNotification);
             filterResonanceSlider.setValue(fp.resonanceNorm * 255.0, juce::dontSendNotification);

@@ -73,6 +73,11 @@ int main() {
     source.setVolume(1, 0.5f);
     source.setName(2, "Lead \"Hot\" Synth");
     source.setSoloed(1, true);
+    extracker::BiquadParams bandPass;
+    bandPass.type = extracker::BiquadType::BandPass;
+    bandPass.cutoffNorm = 128.0f / 255.0f;
+    bandPass.resonanceNorm = 40.0f / 255.0f;
+    source.setFilter(1, bandPass);
 
     std::ostringstream out;
     extracker::writeChannelState(out, source, 3);
@@ -88,6 +93,12 @@ int main() {
     check(loaded.volume(1) == 0.5f, "volume round trip");
     check(loaded.name(2) == "Lead \"Hot\" Synth" && loaded.name(0).empty(), "name round trip");
     check(!loaded.anySoloed(), "solo is not persisted");
+    check(out.str().find("CHANNEL_FILTERS 0 255 0 3 128 40 0 255 0\n") != std::string::npos,
+          "filters written as type/cutoff/resonance triples");
+    check(loaded.filter(1).type == extracker::BiquadType::BandPass &&
+              loaded.filter(1).cutoffNorm == 128.0f / 255.0f && loaded.filter(1).resonanceNorm == 40.0f / 255.0f &&
+              !loaded.filter(0).isActive(),
+          "filter round trip");
 
     std::istringstream other("1 2 3\n");
     check(!extracker::applyChannelFileToken(other, "SONG_ORDER", loaded), "foreign token rejected");

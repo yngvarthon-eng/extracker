@@ -86,6 +86,8 @@ void Sequencer::reset() {
   tremoloWaveformByChannel_.clear();
   channelNoteState_.clear();
   channelFilterParams_.clear();
+  filterSetByEffect_.clear();
+  baseFilterSeen_.clear();
   channelEffectParams_.clear();
   patternWrappedSinceLastQuery_ = false;
   suppressNextPatternWrapDetection_ = false;
@@ -176,6 +178,27 @@ void Sequencer::update(
     }
     if (channelFilterParams_.size() != pattern.channels()) {
       channelFilterParams_.resize(pattern.channels());
+      filterSetByEffect_.resize(pattern.channels(), false);
+      baseFilterSeen_.resize(pattern.channels());
+    }
+    // The base filter (GUI filter panel) applies unless a pattern filter effect
+    // has taken over; changing the base takes it back (last change wins) and
+    // updates a sustained note right away.
+    for (std::size_t channel = 0; channel < pattern.channels(); ++channel) {
+      const BiquadParams base = channels != nullptr ? channels->filter(channel) : BiquadParams{};
+      const BiquadParams& seen = baseFilterSeen_[channel];
+      if (base.type != seen.type || base.cutoffNorm != seen.cutoffNorm || base.resonanceNorm != seen.resonanceNorm) {
+        baseFilterSeen_[channel] = base;
+        filterSetByEffect_[channel] = false;
+        if (channelNoteState_[channel].active) {
+          const std::uint8_t instr = channelNoteState_[channel].instrument;
+          audioEngine.setInstrumentFilter(instr, base.type, base.cutoffNorm, base.resonanceNorm);
+          pluginHost.setInstrumentFilter(instr, base.type, base.cutoffNorm, base.resonanceNorm);
+        }
+      }
+      if (!filterSetByEffect_[channel]) {
+        channelFilterParams_[channel] = base;
+      }
     }
     if (channelEffectParams_.size() != pattern.channels()) {
       channelEffectParams_.resize(pattern.channels());
@@ -267,6 +290,7 @@ void Sequencer::update(
         {
           if (channel < channelFilterParams_.size()) {
             auto& fp = channelFilterParams_[channel];
+            filterSetByEffect_[channel] = true;
             if (effectCommand == 0x18) {
               const auto t = static_cast<BiquadType>(std::min<std::uint8_t>(effectValue, 4));
               fp.type = t;
@@ -1128,22 +1152,6 @@ std::uint8_t Sequencer::panByChannel(std::size_t channel) const {
     return 0x80;
   }
   return panByChannel_[channel];
-}
-
-void Sequencer::setChannelFilter(std::size_t channel, BiquadType type, float cutoffNorm,
-                                 float resonanceNorm, AudioEngine& audio, PluginHost& plugins) {
-  if (channel >= channelFilterParams_.size())
-    channelFilterParams_.resize(channel + 1);
-  auto& fp = channelFilterParams_[channel];
-  fp.type        = type;
-  fp.cutoffNorm  = cutoffNorm;
-  fp.resonanceNorm = resonanceNorm;
-  // Immediately apply to the instrument currently sustained on this channel.
-  if (channel < channelNoteState_.size() && channelNoteState_[channel].active) {
-    const std::uint8_t instr = channelNoteState_[channel].instrument;
-    audio.setInstrumentFilter(instr, type, cutoffNorm, resonanceNorm);
-    plugins.setInstrumentFilter(instr, type, cutoffNorm, resonanceNorm);
-  }
 }
 
 void Sequencer::setChannelEffects(std::size_t channel, const InstrumentEffectParams& p,

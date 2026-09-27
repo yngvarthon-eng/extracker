@@ -84,6 +84,18 @@ void ChannelManager::setVolume(std::size_t channel, float volume) {
   }
 }
 
+const BiquadParams& ChannelManager::filter(std::size_t channel) const {
+  static const BiquadParams kNoFilter;
+  const Channel* ch = find(channel);
+  return ch != nullptr ? ch->filter : kNoFilter;
+}
+
+void ChannelManager::setFilter(std::size_t channel, const BiquadParams& filter) {
+  if (Channel* ch = ensure(channel)) {
+    ch->filter = filter;
+  }
+}
+
 std::uint8_t ChannelManager::instrument(std::size_t channel) const {
   const Channel* ch = find(channel);
   return ch != nullptr ? ch->instrument : 0;
@@ -145,11 +157,20 @@ void writeChannelState(std::ostream& out, const ChannelManager& channels, std::s
     out << " " << std::quoted(channels.name(ch));
   }
   out << "\n";
+
+  out << "CHANNEL_FILTERS";
+  for (std::size_t ch = 0; ch < channelCount; ++ch) {
+    const BiquadParams& filter = channels.filter(ch);
+    out << " " << static_cast<int>(filter.type)
+        << " " << static_cast<int>(std::lround(filter.cutoffNorm * 255.0f))
+        << " " << static_cast<int>(std::lround(filter.resonanceNorm * 255.0f));
+  }
+  out << "\n";
 }
 
 bool isChannelFileToken(const std::string& token) {
   return token == "CHANNEL_INSTRUMENTS" || token == "CHANNEL_MUTED" || token == "CHANNEL_VOLUME" ||
-         token == "CHANNEL_NAMES";
+         token == "CHANNEL_NAMES" || token == "CHANNEL_FILTERS";
 }
 
 bool applyChannelFileToken(std::istream& in, const std::string& token, ChannelManager& channels) {
@@ -175,6 +196,17 @@ bool applyChannelFileToken(std::istream& in, const std::string& token, ChannelMa
     int pct = 100;
     for (std::size_t ch = 0; values >> pct; ++ch) {
       channels.setVolume(ch, static_cast<float>(std::clamp(pct, 0, 200)) / 100.0f);
+    }
+  } else if (token == "CHANNEL_FILTERS") {
+    int type = 0;
+    int cutoff = 255;
+    int resonance = 0;
+    for (std::size_t ch = 0; values >> type >> cutoff >> resonance; ++ch) {
+      BiquadParams filter;
+      filter.type = static_cast<BiquadType>(std::clamp(type, 0, 4));
+      filter.cutoffNorm = static_cast<float>(std::clamp(cutoff, 0, 255)) / 255.0f;
+      filter.resonanceNorm = static_cast<float>(std::clamp(resonance, 0, 255)) / 255.0f;
+      channels.setFilter(ch, filter);
     }
   } else {
     std::string name;

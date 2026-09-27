@@ -76,11 +76,6 @@ public:
   int activeMidiNoteAt(std::size_t index) const;
   std::uint8_t panByChannel(std::size_t channel) const;
 
-  // Set a persistent channel filter (GUI-driven). Applies immediately to any
-  // instrument currently sustained on that channel, and is re-applied on every
-  // subsequent note trigger. Pass BiquadType::Off to clear.
-  void setChannelFilter(std::size_t channel, BiquadType type, float cutoffNorm,
-                        float resonanceNorm, AudioEngine& audio, PluginHost& plugins);
 
   void setChannelEffects(std::size_t channel, const InstrumentEffectParams& p,
                          AudioEngine& audio, PluginHost& plugins);
@@ -121,7 +116,9 @@ private:
   std::vector<std::uint8_t> vibratoWaveformByChannel_;
   std::vector<std::uint8_t> tremoloWaveformByChannel_;
   std::vector<ChannelNoteState> channelNoteState_;
-  std::vector<BiquadParams>            channelFilterParams_;
+  std::vector<BiquadParams>            channelFilterParams_;  // running filter per channel
+  std::vector<bool>                    filterSetByEffect_;    // 18/19/1A overrode the base filter
+  std::vector<BiquadParams>            baseFilterSeen_;       // ChannelManager filter at the last row
   std::vector<InstrumentEffectParams>  channelEffectParams_;
   bool patternWrappedSinceLastQuery_;
   bool suppressNextPatternWrapDetection_;

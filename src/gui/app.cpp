@@ -396,6 +396,9 @@ void ExTrackerApp::initialise(const juce::String& commandLine) {
           });
         }
 
+        if (sequencerResetRequested.exchange(false)) {
+          sequencer.reset();
+        }
         if (!skipDispatchThisTick) {
           sequencer.update(patternSnapshot, transport, audio, plugins, &channelsSnapshot);
         }

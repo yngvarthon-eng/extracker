@@ -115,6 +115,9 @@ public:
   std::array<std::atomic<int>, 4> midiEditorPendingValues{};  // Latest CC values per action, or -1.
   extracker::ChannelManager channels;
   extracker::ChannelLayoutHistory channelHistory;  // insert/delete/move/dup undo
+  // Set by the GUI thread; the playback thread resets the sequencer before its
+  // next update, so per-channel effect state never outlives a channel edit.
+  std::atomic<bool> sequencerResetRequested{false};
   std::atomic<bool> recoveryAutoSaveEnabled{true};
   std::atomic<std::uint64_t> lastRecoverySnapshotEpochMs{0};
 

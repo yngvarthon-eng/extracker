@@ -387,6 +387,14 @@ The CLI has the same controls:
 
 Instrument, mute, volume and names are saved with the song; solo is not.
 
+### Channel Filter
+
+The **Filter** section of the right panel (type, cutoff, resonance) sets a filter on each ticked
+channel. It is kept per channel: it survives play/stop and pattern edits, and it moves with its
+channel on insert, delete, move and duplicate (channel undo restores it too). Pattern effects
+`18`/`19`/`1A` can override it during playback; changing the panel again takes it back. The
+filter is saved with the song.
+
 ### Channel Insert, Delete, Move and Duplicate
 
 Right-click a channel number in the pattern header for **Mute**, **Solo**, **Insert empty
@@ -490,6 +498,7 @@ After all pattern data, the following tokens appear:
 | `CHANNEL_MUTED` | one `0`/`1` per channel | Channel mute state |
 | `CHANNEL_VOLUME` | one integer (0–200) per channel | Channel volume in percent |
 | `CHANNEL_NAMES` | one quoted string per channel | Channel names (`""` = default) |
+| `CHANNEL_FILTERS` | `<type> <cutoff> <resonance>` per channel | Channel filter: type 0=off 1=LP 2=HP 3=BP 4=notch, cutoff and resonance 0–255 |
 
 ### Startup Templates
 

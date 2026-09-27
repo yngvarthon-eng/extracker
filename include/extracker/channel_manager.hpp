@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "extracker/biquad_filter.hpp"
+
 namespace extracker {
 
 // Per-channel mixer state shared by the CLI, the GUI and the sequencer.
@@ -43,6 +45,11 @@ public:
   float volume(std::size_t channel) const;
   void setVolume(std::size_t channel, float volume);
 
+  // Base filter set from the GUI filter panel. Pattern effects 18/19/1A can
+  // override it during playback; a sequencer reset falls back to this value.
+  const BiquadParams& filter(std::size_t channel) const;
+  void setFilter(std::size_t channel, const BiquadParams& filter);
+
   // Default instrument slot for notes entered on this channel.
   std::uint8_t instrument(std::size_t channel) const;
   void setInstrument(std::size_t channel, std::uint8_t instrument);
@@ -58,6 +65,7 @@ private:
     bool soloed = false;
     float volume = 1.0f;
     std::uint8_t instrument = 0;
+    BiquadParams filter;
   };
 
   Channel* ensure(std::size_t channel);
@@ -66,9 +74,10 @@ private:
   std::vector<Channel> channels_;
 };
 
-// Song file persistence. Writes CHANNEL_INSTRUMENTS, CHANNEL_MUTED, CHANNEL_VOLUME
-// and CHANNEL_NAMES lines for channelCount channels; solo is audition state and is
-// not saved.
+// Song file persistence. Writes CHANNEL_INSTRUMENTS, CHANNEL_MUTED, CHANNEL_VOLUME,
+// CHANNEL_NAMES and CHANNEL_FILTERS lines for channelCount channels; solo is
+// audition state and is not saved. CHANNEL_FILTERS holds one "type cutoff
+// resonance" triple per channel (type 0-4, cutoff and resonance 0-255).
 void writeChannelState(std::ostream& out, const ChannelManager& channels, std::size_t channelCount);
 
 bool isChannelFileToken(const std::string& token);

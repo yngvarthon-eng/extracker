@@ -56,6 +56,21 @@ int main() {
     check(result.newIndexOf(1) == 2 && result.newIndexOf(3) == -1, "insert mapping");
   }
 
+  // Channel filters travel with their channel.
+  {
+    Module module;
+    ChannelManager channels;
+    setup(module, channels);
+    extracker::BiquadParams lowPass;
+    lowPass.type = extracker::BiquadType::LowPass;
+    lowPass.cutoffNorm = 0.3f;
+    channels.setFilter(2, lowPass);
+    check(extracker::moveChannel(module, channels, 2, 0).ok, "move filtered channel");
+    check(channels.filter(0).type == extracker::BiquadType::LowPass && channels.filter(0).cutoffNorm == 0.3f &&
+              !channels.filter(2).isActive(),
+          "filter moves with the channel");
+  }
+
   // Insert refuses when it would push content off the end.
   {
     Module module;

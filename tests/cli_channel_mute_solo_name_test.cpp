@@ -1,5 +1,7 @@
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <iostream>
 #include <string>
 
@@ -71,6 +73,39 @@ int main() {
       std::cerr << "FAIL: solo should not be persisted\n";
       ++failures;
     }
+  }
+
+  // Channel filters are set in the GUI; the CLI must keep them when it re-saves a song.
+  {
+    const std::string path = "/tmp/xt_cli_channel_filter_test.xtp";
+    std::filesystem::remove(path);
+    run("save " + path + "; quit");
+
+    std::string song;
+    {
+      std::ifstream in(path);
+      std::stringstream buffer;
+      buffer << in.rdbuf();
+      song = buffer.str();
+    }
+    const std::string defaultFilters = "CHANNEL_FILTERS 0 255 0 0 255 0";
+    const auto pos = song.find(defaultFilters);
+    if (pos == std::string::npos) {
+      std::cerr << "FAIL: CLI save writes default channel filters\n";
+      ++failures;
+    } else {
+      song.replace(pos, defaultFilters.size(), "CHANNEL_FILTERS 0 255 0 2 100 30");
+      std::ofstream(path) << song;
+      run("load " + path + "; save " + path + "; quit");
+      std::ifstream in(path);
+      std::stringstream buffer;
+      buffer << in.rdbuf();
+      if (buffer.str().find("CHANNEL_FILTERS 0 255 0 2 100 30") == std::string::npos) {
+        std::cerr << "FAIL: channel 1 filter lost on CLI load/save\n";
+        ++failures;
+      }
+    }
+    std::filesystem::remove(path);
   }
 
   if (failures != 0) {
