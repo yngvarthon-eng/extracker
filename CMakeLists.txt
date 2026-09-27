@@ -931,6 +931,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_channel_layout_test extracker)
   add_test(NAME extracker_cli_channel_layout_test COMMAND extracker_cli_channel_layout_test)
 
+  add_executable(extracker_cli_reverb_persist_test tests/cli_reverb_persist_test.cpp)
+  add_dependencies(extracker_cli_reverb_persist_test extracker)
+  add_test(NAME extracker_cli_reverb_persist_test COMMAND extracker_cli_reverb_persist_test)
+
   add_executable(extracker_cli_instr_sample_persist_test tests/cli_instr_sample_persist_test.cpp)
   add_dependencies(extracker_cli_instr_sample_persist_test extracker)
   add_test(NAME extracker_cli_instr_sample_persist_test COMMAND extracker_cli_instr_sample_persist_test)

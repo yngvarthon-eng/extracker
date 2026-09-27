@@ -585,6 +585,7 @@ bool ExTrackerApp::savePatternToFile(const std::string& path, bool blocking) {
   out << "\n";
 
   extracker::writeChannelState(out, channels, module.currentEditor().channels());
+  extracker::writeReverbLine(out, audio.getReverbParams());
 
   std::ostringstream instrumentNamesOut;
   std::ostringstream instrumentAssignsOut;
@@ -736,6 +737,7 @@ bool ExTrackerApp::loadPatternFromFile(const std::string& path, bool blocking) {
   }
 
   channels = extracker::ChannelManager(fileChannels);
+  audio.setReverbParams(extracker::ReverbParams{});
   channelHistory.clear();
 
   for (std::size_t sampleSlot = 0; sampleSlot < extracker::PluginHost::kMaxSampleSlots; ++sampleSlot) {
@@ -760,7 +762,7 @@ bool ExTrackerApp::loadPatternFromFile(const std::string& path, bool blocking) {
              token == "TRANSPORT" || token == "MIDI_MAP" ||
              token == "MIDI_TRANSPORT" || token == "MIDI_EDITOR_CC_MAP" ||
              token == "SAMPLE_BANK" || token == "SAMPLE_ENTRY" ||
-             token == "CHANNEL_INSTRUMENTS" || extracker::isChannelFileToken(token) ||
+             token == "CHANNEL_INSTRUMENTS" || extracker::isChannelFileToken(token) || token == "REVERB" ||
              token == "MODULE_MESSAGE" || token == "INSTRUMENT_ASSIGN" ||
              token == "INSTR_SAMPLE_SLOT" ||
              token == "INSTRUMENT_NAME" || token == "INSTRUMENT_PARAM" ||
@@ -973,6 +975,8 @@ bool ExTrackerApp::loadPatternFromFile(const std::string& path, bool blocking) {
           plugins.loadSampleToSlot(static_cast<std::uint16_t>(slot), resolvedPath);
           plugins.setSampleNameForSlot(static_cast<std::uint16_t>(slot), sampleName);
         }
+      } else if (tailToken == "REVERB") {
+        audio.setReverbParams(extracker::readReverbLine(in));
       } else if (extracker::applyChannelFileToken(in, tailToken, channels)) {
         // mute, volume and names
       } else if (tailToken == "MODULE_MESSAGE") {
@@ -1236,6 +1240,8 @@ bool ExTrackerApp::loadPatternFromFile(const std::string& path, bool blocking) {
         plugins.loadSampleToSlot(static_cast<std::uint16_t>(slot), resolvedPath);
         plugins.setSampleNameForSlot(static_cast<std::uint16_t>(slot), sampleName);
       }
+    } else if (tailToken == "REVERB") {
+      audio.setReverbParams(extracker::readReverbLine(in));
     } else if (extracker::applyChannelFileToken(in, tailToken, channels)) {
       // mute, volume and names
     } else if (tailToken == "MODULE_MESSAGE") {

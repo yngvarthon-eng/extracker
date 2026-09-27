@@ -604,6 +604,7 @@ int main() {
     out << "MODULE_MESSAGE " << std::quoted(escapeModuleMessage(module.message())) << "\n";
 
     extracker::writeChannelState(out, channels, module.currentEditor().channels());
+    extracker::writeReverbLine(out, audio.getReverbParams());
 
     extracker::writeRecordState(out, recordState);
 
@@ -634,6 +635,7 @@ int main() {
     }
 
     channels = extracker::ChannelManager(fileChannels);
+    audio.setReverbParams(extracker::ReverbParams{});
     channelHistory.clear();
 
     for (std::size_t instrument = 0; instrument < extracker::PluginHost::kMaxInstrumentSlots; ++instrument) {
@@ -668,7 +670,7 @@ int main() {
                token == "INSTRUMENT_PITCH" || token == "INSTRUMENT_REVERB" ||
                token == "INSTRUMENT_DEPTH" ||
                token == "MODULE_MESSAGE" ||
-               token == "CHANNEL_INSTRUMENTS" || extracker::isChannelFileToken(token) ||
+               token == "CHANNEL_INSTRUMENTS" || extracker::isChannelFileToken(token) || token == "REVERB" ||
                token.rfind("RECORD_", 0) == 0;
       };
 
@@ -1015,6 +1017,8 @@ int main() {
             int code = -1;
             in >> code;
           }
+        } else if (tailToken == "REVERB") {
+          audio.setReverbParams(extracker::readReverbLine(in));
         } else if (extracker::applyChannelFileToken(in, tailToken, channels)) {
           // mute, volume and names
         } else {

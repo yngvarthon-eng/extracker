@@ -1,8 +1,11 @@
 #pragma once
 
 #include <filesystem>
+#include <iosfwd>
 #include <string>
 #include <unordered_map>
+
+#include "extracker/reverb.hpp"
 
 namespace extracker {
 
@@ -80,5 +83,12 @@ InstrumentIdParts parseInstrumentId(const std::string& pluginId);
 // portion (unchanged prefix/suffix). For a NotBundlable `parts`, `newPath`
 // is ignored and `parts.path` (the original id) is returned as-is.
 std::string rebuildInstrumentId(const InstrumentIdParts& parts, const std::string& newPath);
+
+// Global reverb in the song file: "REVERB <room> <damping> <wet> <width>",
+// each 0-255 (the same scale as the GUI sliders and `reverb set`).
+void writeReverbLine(std::ostream& out, const ReverbParams& params);
+// Reads the values after a REVERB token (rest of the line). Missing trailing
+// values keep their defaults.
+ReverbParams readReverbLine(std::istream& in);
 
 }  // namespace extracker

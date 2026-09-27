@@ -498,6 +498,7 @@ After all pattern data, the following tokens appear:
 | `CHANNEL_MUTED` | one `0`/`1` per channel | Channel mute state |
 | `CHANNEL_VOLUME` | one integer (0–200) per channel | Channel volume in percent |
 | `CHANNEL_NAMES` | one quoted string per channel | Channel names (`""` = default) |
+| `REVERB` | `<room> <damping> <wet> <width>`, each 0–255 | Global reverb (Reverb panel / `reverb set`) |
 | `CHANNEL_FILTERS` | `<type> <cutoff> <resonance>` per channel | Channel filter: type 0=off 1=LP 2=HP 3=BP 4=notch, cutoff and resonance 0–255 |
 
 ### Startup Templates

@@ -1,6 +1,11 @@
 #include "extracker/song_bundle.hpp"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <istream>
+#include <ostream>
+#include <sstream>
 #include <cstdint>
 #include <system_error>
 
@@ -316,6 +321,28 @@ std::string rebuildInstrumentId(const InstrumentIdParts& parts, const std::strin
     return parts.path;
   }
   return parts.prefix + newPath + parts.suffix;
+}
+
+void writeReverbLine(std::ostream& out, const ReverbParams& params) {
+  auto to255 = [](float value) { return static_cast<int>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f)); };
+  out << "REVERB " << to255(params.roomSize) << " " << to255(params.damping) << " " << to255(params.wet) << " "
+      << to255(params.width) << "\n";
+}
+
+ReverbParams readReverbLine(std::istream& in) {
+  std::string line;
+  std::getline(in, line);
+  std::istringstream values(line);
+  ReverbParams params;
+  float* fields[] = {&params.roomSize, &params.damping, &params.wet, &params.width};
+  int value = 0;
+  for (float* field : fields) {
+    if (!(values >> value)) {
+      break;
+    }
+    *field = static_cast<float>(std::clamp(value, 0, 255)) / 255.0f;
+  }
+  return params;
 }
 
 }  // namespace extracker
