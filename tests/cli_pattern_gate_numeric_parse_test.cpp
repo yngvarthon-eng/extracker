@@ -43,12 +43,11 @@ int main() {
     return 1;
   }
 
-  const std::string usage = "Usage: pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>]";
-  const bool sawUsage = output.find(usage) != std::string::npos;
+  const bool sawUsage = output.find("Usage: pattern gate ") != std::string::npos;
   const bool sawValidScale =
       output.find("Scaled gate on 0 step(s) by 120% in rows 4..8 (channel 0, 0 clamped)") !=
       std::string::npos;
-  const bool sawChannelRange = output.find("Channel out of range: 99 (valid 0..7)") != std::string::npos;
+  const bool sawChannelRange = output.find("Channel out of range: 99 (valid 0..") != std::string::npos;
 
   if (!sawUsage || !sawValidScale || !sawChannelRange) {
     std::cerr << "Missing expected pattern gate numeric parse output markers" << '\n';

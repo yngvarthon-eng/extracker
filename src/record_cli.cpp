@@ -385,6 +385,36 @@ void handleRecordCommand(std::istringstream& recordInput,
         std::cout << "Record jump " << jumpArg << " -> " << recordInsertJump << '\n';
       }
     }
+  } else if (subcommand == "play") {
+    transport.jumpToRow(static_cast<std::uint32_t>(recordCursorRow));
+    transport.play();
+    recordEnabled = true;
+    recordState.enabled = true;
+    std::cout << "Recording from row " << recordCursorRow << '\n';
+  } else if (subcommand == "punch") {
+    std::string arg1;
+    recordInput >> arg1;
+    if (arg1 == "off") {
+      recordState.punchEnabled = false;
+      std::cout << "Punch recording disabled" << '\n';
+    } else if (arg1 == "status" || arg1.empty()) {
+      if (recordState.punchEnabled)
+        std::cout << "Punch: rows " << recordState.punchIn << "-" << recordState.punchOut << '\n';
+      else
+        std::cout << "Punch: off" << '\n';
+    } else {
+      int pIn = 0, pOut = 0;
+      std::string arg2;
+      recordInput >> arg2;
+      if (!cli::parseStrictIntToken(arg1, pIn) || !cli::parseStrictIntToken(arg2, pOut) || pOut < pIn) {
+        std::cout << "Usage: record punch <in_row> <out_row>\n";
+      } else {
+        recordState.punchIn = pIn;
+        recordState.punchOut = pOut;
+        recordState.punchEnabled = true;
+        std::cout << "Punch: rows " << pIn << "-" << pOut << '\n';
+      }
+    }
   } else if (subcommand == "undo") {
     std::lock_guard<std::mutex> lock(stateMutex);
     if (!undoRecordWrite(editor, recordState)) {
@@ -402,7 +432,7 @@ void handleRecordCommand(std::istringstream& recordInput,
                 << ", channel " << recordState.undoState.channel << '\n';
     }
   } else {
-    std::cout << "Usage: record <on|off|channel|cursor|note|quantize|overdub|jump|undo|redo> ..." << '\n';
+    std::cout << "Usage: record <on|off|play|punch|channel|cursor|note|quantize|overdub|jump|undo|redo> ..." << '\n';
   }
 }
 

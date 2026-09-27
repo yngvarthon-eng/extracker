@@ -1,5 +1,7 @@
-build/
-build-make/
+# Build trees (build/, build-make/, build-make-gui/, ...)
+/build*/
+# CTest output
+/Testing/
 .vscode/
 *.o
 *.obj
@@ -7,4 +9,8 @@ build-make/
 *.a
 *.out
 .DS_Store
-extracker
+# Local launcher script in the repo root only; a bare "extracker" would also
+# match include/extracker/ and hide every new header.
+/extracker
+# Source snapshots
+/extracker-*.tar.gz

@@ -6,7 +6,7 @@ namespace {
 
 constexpr int kMinMidiNote = 0;
 constexpr int kMaxMidiNote = 127;
-constexpr std::uint8_t kDefaultVelocity = 100;
+constexpr std::uint8_t kDefaultVelocity = extracker::PatternEditor::kDefaultVelocity;
 
 }  // namespace
 
@@ -48,6 +48,16 @@ void PatternEditor::insertNote(
   step.retrigger = retrigger;
   step.effectCommand = effectCommand;
   step.effectValue = effectValue;
+}
+
+void PatternEditor::insertNoteOff(int row, int channel) {
+  if (!isValidCell(row, channel)) {
+    return;
+  }
+  Step& step = cell(row, channel);
+  step.hasNote = true;
+  step.note = kNoteOff;
+  step.gateTicks = 0;
 }
 
 void PatternEditor::setInstrument(int row, int channel, std::uint8_t instrument) {
@@ -103,6 +113,38 @@ void PatternEditor::setEffect(int row, int channel, std::uint8_t effectCommand, 
   Step& step = cell(row, channel);
   step.effectCommand = effectCommand;
   step.effectValue = effectValue;
+}
+
+void PatternEditor::insertRowAt(int row, int channel) {
+  if (!isValidCell(row, channel)) return;
+  for (int r = static_cast<int>(rows_) - 1; r > row; --r) {
+    cell(r, channel) = cell(r - 1, channel);
+  }
+  Step empty;
+  cell(row, channel) = empty;
+}
+
+void PatternEditor::deleteRowAt(int row, int channel) {
+  if (!isValidCell(row, channel)) return;
+  for (int r = row; r < static_cast<int>(rows_) - 1; ++r) {
+    cell(r, channel) = cell(r + 1, channel);
+  }
+  Step empty;
+  cell(static_cast<int>(rows_) - 1, channel) = empty;
+}
+
+void PatternEditor::insertRowAllChannels(int row) {
+  if (row < 0 || static_cast<std::size_t>(row) >= rows_) return;
+  for (std::size_t ch = 0; ch < channels_; ++ch) {
+    insertRowAt(row, static_cast<int>(ch));
+  }
+}
+
+void PatternEditor::deleteRowAllChannels(int row) {
+  if (row < 0 || static_cast<std::size_t>(row) >= rows_) return;
+  for (std::size_t ch = 0; ch < channels_; ++ch) {
+    deleteRowAt(row, static_cast<int>(ch));
+  }
 }
 
 void PatternEditor::clearStep(int row, int channel) {
@@ -208,6 +250,40 @@ std::size_t PatternEditor::rows() const {
 
 std::size_t PatternEditor::channels() const {
   return channels_;
+}
+
+std::size_t PatternEditor::noteCount() const {
+  std::size_t count = 0;
+  for (const auto& step : steps_) {
+    if (step.hasNote) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+std::pair<int, int> PatternEditor::activeRowSpan() const {
+  int first = -1;
+  int last = -1;
+
+  for (std::size_t row = 0; row < rows_; ++row) {
+    bool rowHasNote = false;
+    for (std::size_t channel = 0; channel < channels_; ++channel) {
+      if (steps_[row * channels_ + channel].hasNote) {
+        rowHasNote = true;
+        break;
+      }
+    }
+
+    if (rowHasNote) {
+      if (first < 0) {
+        first = static_cast<int>(row);
+      }
+      last = static_cast<int>(row);
+    }
+  }
+
+  return {first, last};
 }
 
 void PatternEditor::resizeRows(std::size_t newRows) {

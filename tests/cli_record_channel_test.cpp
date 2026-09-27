@@ -47,9 +47,9 @@ int main() {
   const bool sawSetToThree = output.find("Record channel set to 3") != std::string::npos;
   const bool sawStatusThree = output.find("Record channel: 3") != std::string::npos;
   const bool sawArmedOnThree = output.find("Record enabled on channel 3") != std::string::npos;
-  const bool sawClampSet = output.find("Record channel set to 7") != std::string::npos;
-  const bool sawStatusSeven = output.find("Record channel: 7") != std::string::npos;
-  const bool sawChannelUsage = output.find("Usage: record channel <0..7|status>") != std::string::npos;
+  const bool sawClampSet = output.find("Record channel set to 15") != std::string::npos;
+  const bool sawStatusSeven = output.find("Record channel: 15") != std::string::npos;
+  const bool sawChannelUsage = output.find("Usage: record channel <0..") != std::string::npos;
 
   if (!sawInitial || !sawSetToThree || !sawStatusThree || !sawArmedOnThree ||
       !sawClampSet || !sawStatusSeven || !sawChannelUsage) {

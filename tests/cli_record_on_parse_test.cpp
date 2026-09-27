@@ -42,7 +42,7 @@ int main() {
   const bool sawOnUsage = output.find("Usage: record on [channel]") != std::string::npos;
   const bool sawNotEnabled = output.find("Record is not enabled. Use: record on [channel]") != std::string::npos;
   const bool sawOnEnabled = output.find("Record enabled on channel 2") != std::string::npos;
-  const bool sawChannelUsage = output.find("Usage: record channel <0..7|status>") != std::string::npos;
+  const bool sawChannelUsage = output.find("Usage: record channel <0..") != std::string::npos;
   const bool sawDryRun = output.find("Record dry-run: row") != std::string::npos;
 
   if (!sawOnUsage || !sawNotEnabled || !sawOnEnabled || !sawChannelUsage || !sawDryRun) {

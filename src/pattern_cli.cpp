@@ -19,7 +19,7 @@ void handlePatternCommand(PatternCommandContext context,
     return;
   }
 
-  std::cout << "Usage: pattern <print|play|template|transpose|velocity|gate|effect|copy|paste|humanize|randomize|undo|redo> ..." << '\n';
+  std::cout << "Usage: pattern <print|play|template|transpose|velocity|gate|effect|copy|paste|clip|humanize|randomize|undo|redo> ..." << '\n';
 }
 
 }  // namespace extracker

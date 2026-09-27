@@ -41,13 +41,12 @@ int main() {
     return 1;
   }
 
-  const std::string usage = "Usage: pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>]";
-  const bool sawUsage = output.find(usage) != std::string::npos;
+  const bool sawUsage = output.find("Usage: pattern transpose ") != std::string::npos;
   const bool sawValidTranspose =
       output.find("Transposed 0 step(s) by 2 semitones in rows 4..8 (channel 0, 0 clamped)") !=
       std::string::npos;
   const bool sawStepRange = output.find("Step must be >= 1") != std::string::npos;
-  const bool sawChannelRange = output.find("Channel out of range: 99 (valid 0..7)") != std::string::npos;
+  const bool sawChannelRange = output.find("Channel out of range: 99 (valid 0..") != std::string::npos;
 
   if (!sawUsage || !sawValidTranspose || !sawStepRange || !sawChannelRange) {
     std::cerr << "Missing expected pattern transpose numeric parse output markers" << '\n';

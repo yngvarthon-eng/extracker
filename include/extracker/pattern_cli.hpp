@@ -26,6 +26,9 @@ struct PatternCommandContext {
   int& recordCursorRow;
 };
 
+// Drops `pattern undo/redo` state, e.g. after channels were reordered.
+void discardPatternUndoHistory();
+
 void handlePatternCommand(PatternCommandContext context,
                           std::istringstream& patternInput);
 
