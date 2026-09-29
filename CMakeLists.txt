@@ -277,6 +277,14 @@ if(BUILD_TESTING)
     PRIVATE EXTRACKER_LV2_TEST_PLUGIN_PATH="$<TARGET_FILE:extracker_lv2_test_plugin>")
   add_test(NAME extracker_lv2_event_port_integration_test COMMAND extracker_lv2_event_port_integration_test)
 
+  add_executable(extracker_lv2_host_features_test tests/lv2_host_features_test.cpp)
+  target_include_directories(extracker_lv2_host_features_test PRIVATE include)
+  target_link_libraries(extracker_lv2_host_features_test PRIVATE extracker_core)
+  add_dependencies(extracker_lv2_host_features_test extracker_lv2_test_plugin)
+  target_compile_definitions(extracker_lv2_host_features_test
+    PRIVATE EXTRACKER_LV2_TEST_PLUGIN_PATH="$<TARGET_FILE:extracker_lv2_test_plugin>")
+  add_test(NAME extracker_lv2_host_features_test COMMAND extracker_lv2_host_features_test)
+
   add_executable(extracker_midi_clock_cli_logic_test
     tests/midi_clock_cli_logic_test.cpp
     src/midi_cli.cpp

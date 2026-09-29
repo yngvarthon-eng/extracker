@@ -79,9 +79,12 @@ Real-time-ish playback pipeline, all driven by a background thread:
 - **Module** — owns multiple `PatternEditor`s plus the song order (sequence of pattern indices),
   per-pattern swing, and module message. `currentEditor()` is what the CLI/GUI edit live.
 - **PluginHost** — instrument slots (assign a plugin id like `builtin.sine`/`builtin.square` to an
-  instrument number), sample slots, a plugin registry/factory layer, and an external-adapter
-  scaffold with an LV2 manifest backend (`dlopen` + `lv2_descriptor` probing; audio still falls
-  back to built-in synthesis until the full LV2 port bridge lands).
+  instrument number), sample slots, a plugin registry/factory layer, and external adapters. LV2
+  plugins run for real: `Lv2HostFeatures` offers urid:map/unmap, options, boundedBlockLength and a
+  synchronous worker, plus the bundle path; a plugin that still fails to instantiate warns once on
+  stderr and plays a built-in tone (effects pass audio through). LV2 instruments keep rendering
+  after the last note-off until quiet (max 10 s) so release tails play. The TTL parsers are
+  line-based but follow Turtle statements (subject after a `.`, `@prefix` names, nested `[ ]`).
   There are 256 instrument slots (`kInstrumentSlotCount` in `instrument_mix.hpp`; every
   per-instrument table uses it — loop over slots with a `std::size_t`, never a `std::uint8_t`).
   A sample instrument linked to a sample-bank slot (`assignSampleSlotToInstrument`) shares that

@@ -1093,6 +1093,7 @@ struct Lv2UridMapData {
 struct Lv2UridRegistry {
   std::mutex mutex;
   std::unordered_map<std::string, Lv2Urid> ids;
+  std::unordered_map<Lv2Urid, std::string> uris;  // reverse, for urid:unmap
   Lv2Urid next = 3;  // ids 1 and 2 are reserved for the two URIs below
 };
 
@@ -1116,10 +1117,31 @@ static Lv2Urid staticUridMap(void* /*handle*/, const char* uri) {
   std::lock_guard<std::mutex> lock(registry.mutex);
   auto [it, inserted] = registry.ids.emplace(std::string(view), registry.next);
   if (inserted) {
+    registry.uris.emplace(registry.next, it->first);
     registry.next += 1;
   }
   return it->second;
 }
+
+static const char* staticUridUnmap(void* /*handle*/, Lv2Urid urid) {
+  if (urid == kUridAtomSequence) {
+    return "http://lv2plug.in/ns/ext/atom#Sequence";
+  }
+  if (urid == kUridMidiEvent) {
+    return "http://lv2plug.in/ns/ext/midi#MidiEvent";
+  }
+  auto& registry = uridRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  const auto it = registry.uris.find(urid);
+  return it == registry.uris.end() ? nullptr : it->second.c_str();  // node-stable
+}
+
+struct Lv2UridUnmapData {
+  void* handle;
+  const char* (*unmap)(void* handle, Lv2Urid urid);
+};
+
+static Lv2UridUnmapData kStaticUridUnmapData{nullptr, staticUridUnmap};
 
 static Lv2UridMapData kStaticUridMapData{nullptr, staticUridMap};
 
@@ -1148,6 +1170,153 @@ struct Lv2Descriptor {
 };
 
 using Lv2DescriptorFunction = const Lv2Descriptor* (*)(std::uint32_t index);
+
+// ── Host features offered to every LV2 instance ─────────────────────────────
+// urid:map/unmap, options (sample rate, block lengths, sequence size),
+// buf-size:boundedBlockLength and worker:schedule. Plugins that list one of
+// these as lv2:requiredFeature (ZynAddSubFX, the LSP samplers, ...) refuse to
+// instantiate without it. Mirrors of the C structs in lv2/options/options.h
+// and lv2/worker/worker.h.
+
+struct Lv2OptionsOption {
+  std::uint32_t context;  // 0 = LV2_OPTIONS_INSTANCE
+  std::uint32_t subject;
+  Lv2Urid key;
+  std::uint32_t size;
+  Lv2Urid type;
+  const void* value;
+};
+
+using Lv2WorkerStatus = int;  // 0 = success, 1 = unknown error
+using Lv2WorkerRespondFunction = Lv2WorkerStatus (*)(void* handle, std::uint32_t size, const void* data);
+
+struct Lv2WorkerSchedule {
+  void* handle;
+  Lv2WorkerStatus (*scheduleWork)(void* handle, std::uint32_t size, const void* data);
+};
+
+struct Lv2WorkerInterface {
+  Lv2WorkerStatus (*work)(Lv2Handle instance, Lv2WorkerRespondFunction respond, void* handle,
+                          std::uint32_t size, const void* data);
+  Lv2WorkerStatus (*workResponse)(Lv2Handle instance, std::uint32_t size, const void* body);
+  Lv2WorkerStatus (*endRun)(Lv2Handle instance);
+};
+
+// Owns the feature list for one plugin instance; must outlive the instance.
+// The worker runs jobs synchronously: work() is called as soon as the plugin
+// schedules it (from inside run(), as jalv does when not threaded) and the
+// responses are handed back after run() returns (deliverWorkerResponses).
+class Lv2HostFeatures {
+public:
+  static constexpr std::uint32_t kMaxBlockLength = 8192;
+  static constexpr std::int32_t kSequenceSize = 4096;
+
+  // Call before instantiate(). `bundlePath` is the plugin's bundle directory.
+  const Lv2Feature* const* prepare(double sampleRate, std::uint32_t maxBlockLength) {
+    sampleRate_ = static_cast<float>(sampleRate);
+    minBlockLength_ = 1;
+    maxBlockLength_ = static_cast<std::int32_t>(std::max(maxBlockLength, kMaxBlockLength));
+    nominalBlockLength_ = static_cast<std::int32_t>(std::min(maxBlockLength, kMaxBlockLength));
+    sequenceSize_ = kSequenceSize;
+    const Lv2Urid atomInt = staticUridMap(nullptr, "http://lv2plug.in/ns/ext/atom#Int");
+    const Lv2Urid atomFloat = staticUridMap(nullptr, "http://lv2plug.in/ns/ext/atom#Float");
+    options_ = {{
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/lv2core#sampleRate"), sizeof(float), atomFloat, &sampleRate_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/extensions/parameters#sampleRate"), sizeof(float), atomFloat, &sampleRate_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/ext/buf-size#minBlockLength"), sizeof(std::int32_t), atomInt, &minBlockLength_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/ext/buf-size#maxBlockLength"), sizeof(std::int32_t), atomInt, &maxBlockLength_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/ext/buf-size#nominalBlockLength"), sizeof(std::int32_t), atomInt, &nominalBlockLength_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/ext/buf-size#sequenceSize"), sizeof(std::int32_t), atomInt, &sequenceSize_},
+        {0, 0, 0, 0, 0, nullptr},
+    }};
+    workerSchedule_ = {this, &Lv2HostFeatures::scheduleWork};
+    uridMap_ = {"http://lv2plug.in/ns/ext/urid#map", &kStaticUridMapData};
+    uridUnmap_ = {"http://lv2plug.in/ns/ext/urid#unmap", &kStaticUridUnmapData};
+    optionsFeature_ = {"http://lv2plug.in/ns/ext/options#options", options_.data()};
+    bounded_ = {"http://lv2plug.in/ns/ext/buf-size#boundedBlockLength", nullptr};
+    worker_ = {"http://lv2plug.in/ns/ext/worker#schedule", &workerSchedule_};
+    list_ = {&uridMap_, &uridUnmap_, &optionsFeature_, &bounded_, &worker_, nullptr};
+    return list_.data();
+  }
+
+  std::uint32_t maxBlockLength() const { return static_cast<std::uint32_t>(maxBlockLength_); }
+
+  // Call after instantiate() succeeded.
+  void attach(const Lv2Descriptor* descriptor, Lv2Handle instance) {
+    instance_ = instance;
+    workerInterface_ = nullptr;
+    if (descriptor != nullptr && descriptor->extensionData != nullptr) {
+      workerInterface_ = static_cast<const Lv2WorkerInterface*>(
+          descriptor->extensionData("http://lv2plug.in/ns/ext/worker#interface"));
+    }
+  }
+
+  void detach() {
+    instance_ = nullptr;
+    workerInterface_ = nullptr;
+    responses_.clear();
+  }
+
+  // Call after every run(): hands queued worker responses to the plugin.
+  void deliverWorkerResponses() {
+    if (workerInterface_ == nullptr || instance_ == nullptr) {
+      return;
+    }
+    if (!responses_.empty() && workerInterface_->workResponse != nullptr) {
+      std::vector<std::vector<std::uint8_t>> pending;
+      pending.swap(responses_);
+      for (const auto& response : pending) {
+        workerInterface_->workResponse(instance_, static_cast<std::uint32_t>(response.size()), response.data());
+      }
+    }
+    if (workerInterface_->endRun != nullptr) {
+      workerInterface_->endRun(instance_);
+    }
+  }
+
+private:
+  static Lv2WorkerStatus scheduleWork(void* handle, std::uint32_t size, const void* data) {
+    auto* self = static_cast<Lv2HostFeatures*>(handle);
+    if (self == nullptr || self->workerInterface_ == nullptr || self->workerInterface_->work == nullptr ||
+        self->instance_ == nullptr) {
+      return 1;
+    }
+    return self->workerInterface_->work(self->instance_, &Lv2HostFeatures::respond, self, size, data);
+  }
+
+  static Lv2WorkerStatus respond(void* handle, std::uint32_t size, const void* data) {
+    auto* self = static_cast<Lv2HostFeatures*>(handle);
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    self->responses_.emplace_back(bytes, bytes + size);
+    return 0;
+  }
+
+  float sampleRate_ = 44100.0f;
+  std::int32_t minBlockLength_ = 1;
+  std::int32_t maxBlockLength_ = static_cast<std::int32_t>(kMaxBlockLength);
+  std::int32_t nominalBlockLength_ = 512;
+  std::int32_t sequenceSize_ = kSequenceSize;
+  std::array<Lv2OptionsOption, 7> options_{};
+  Lv2WorkerSchedule workerSchedule_{};
+  Lv2Feature uridMap_{};
+  Lv2Feature uridUnmap_{};
+  Lv2Feature optionsFeature_{};
+  Lv2Feature bounded_{};
+  Lv2Feature worker_{};
+  std::array<const Lv2Feature*, 6> list_{};
+  Lv2Handle instance_ = nullptr;
+  const Lv2WorkerInterface* workerInterface_ = nullptr;
+  std::vector<std::vector<std::uint8_t>> responses_;
+};
+
+// Bundle directory of a plugin binary, with the trailing slash LV2 expects.
+static std::string lv2BundlePath(const std::filesystem::path& binaryPath) {
+  std::string dir = binaryPath.parent_path().string();
+  if (!dir.empty() && dir.back() != '/') {
+    dir += '/';
+  }
+  return dir;
+}
 
 struct Lv2DiscoveredPlugin {
   std::string uri;
@@ -1242,14 +1411,24 @@ public:
   }
 
   void renderAdd(std::vector<double>& monoBuffer, std::uint32_t sampleRate) override {
+    bool notesHeld = false;
+    bool eventsPending = false;
     {
       std::lock_guard<std::mutex> lock(eventsMutex_);
-      if (activePitches_.empty()) {
-        return;  // No note should be sounding — skip rendering entirely.
-        // Any pending note-off events remain in pendingNoteEvents_ and will be
-        // flushed on the next render cycle that follows a new note-on.
-      }
+      notesHeld = !activePitches_.empty();
+      eventsPending = !pendingNoteEvents_.empty();
     }
+    // Render while notes are held, and afterwards until the plugin has gone
+    // quiet (release envelopes, delays) -- this also delivers the note-offs
+    // right away instead of leaving the synth frozen mid-note until the next
+    // note-on. Idle instruments cost nothing.
+    if (notesHeld) {
+      tailFramesRemaining_ = static_cast<std::size_t>(sampleRate) * kMaxTailSeconds;
+      quietFrames_ = 0;
+    } else if (tailFramesRemaining_ == 0 && !eventsPending) {
+      return;
+    }
+
     bool renderedLv2 = false;
     if (sampleRate > 0) {
       renderedLv2 = renderLv2Runtime(monoBuffer, sampleRate);
@@ -1258,6 +1437,19 @@ public:
     // Guarded fallback keeps existing behavior intact when runtime bridge isn't active yet.
     if (!renderedLv2) {
       fallbackSynth_.renderAdd(monoBuffer, sampleRate);
+    }
+
+    if (!notesHeld) {
+      const std::size_t frames = monoBuffer.size();
+      tailFramesRemaining_ = frames >= tailFramesRemaining_ ? 0 : tailFramesRemaining_ - frames;
+      double peak = 0.0;
+      for (const double sample : monoBuffer) {
+        peak = std::max(peak, std::abs(sample));
+      }
+      quietFrames_ = peak < kQuietLevel ? quietFrames_ + frames : 0;
+      if (quietFrames_ >= sampleRate / 4) {  // a quarter second of silence
+        tailFramesRemaining_ = 0;
+      }
     }
   }
 
@@ -1397,6 +1589,7 @@ private:
     if (descriptor_->cleanup != nullptr) {
       descriptor_->cleanup(instance_);
     }
+    hostFeatures_.detach();
 
     instance_ = nullptr;
     runtimeActive_ = false;
@@ -1427,6 +1620,13 @@ private:
   }
 
   bool ensureRuntimeInstance(std::uint32_t sampleRate, std::size_t frameCount) {
+    // The plugin was promised blocks of at most maxBlockLength frames.
+    if (runtimeActive_ && frameCount > hostFeatures_.maxBlockLength()) {
+      shutdownRuntimeInstance();
+    }
+    if (instantiateFailed_) {
+      return false;
+    }
     if (runtimeActive_) {
       if (audioInputBuffer_.size() != frameCount) {
         audioInputBuffer_.assign(frameCount, 0.0f);
@@ -1446,12 +1646,16 @@ private:
       return false;
     }
 
-    Lv2Feature uridMapFeature{"http://lv2plug.in/ns/ext/urid#map", &kStaticUridMapData};
-    const Lv2Feature* features[] = {&uridMapFeature, nullptr};
-    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), nullptr, features);
+    const std::string bundlePath = lv2BundlePath(binaryPath_);
+    const Lv2Feature* const* features =
+        hostFeatures_.prepare(static_cast<double>(sampleRate), static_cast<std::uint32_t>(frameCount));
+    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), bundlePath.c_str(), features);
     if (instance_ == nullptr) {
+      instantiateFailed_ = true;
+      std::fprintf(stderr, "[lv2] %s failed to start; playing a built-in tone instead\n", uri_.c_str());
       return false;
     }
+    hostFeatures_.attach(descriptor_, instance_);
 
     audioInputBuffer_.assign(frameCount, 0.0f);
     audioOutputBuffer_.assign(frameCount, 0.0f);
@@ -1549,6 +1753,7 @@ private:
     }
 
     descriptor_->run(instance_, static_cast<std::uint32_t>(monoBuffer.size()));
+    hostFeatures_.deliverWorkerResponses();
 
     const bool hasStereo = audioOutputPort2_ >= 0 && audioOutputBufferR_.size() == monoBuffer.size();
     const double scale   = hasStereo ? 0.5 : 1.0;
@@ -1694,6 +1899,12 @@ private:
   std::mutex eventsMutex_;
   bool loaded_;
   bool runtimeActive_ = false;
+  bool instantiateFailed_ = false;  // don't retry every block; warned once
+  static constexpr std::size_t kMaxTailSeconds = 10;
+  static constexpr double kQuietLevel = 1e-4;
+  std::size_t tailFramesRemaining_ = 0;  // frames still rendered after the last note-off
+  std::size_t quietFrames_ = 0;
+  Lv2HostFeatures hostFeatures_;  // must outlive instance_
 };
 
 // ---------------------------------------------------------------------------
@@ -3173,6 +3384,7 @@ public:
     }
 
     descriptor_->run(instance_, static_cast<std::uint32_t>(monoBuffer.size()));
+    hostFeatures_.deliverWorkerResponses();
 
     for (std::size_t i = 0; i < monoBuffer.size(); ++i) {
       const double sample = static_cast<double>(audioOutputBuffer_[i]);
@@ -3237,11 +3449,19 @@ private:
     if (descriptor_->cleanup != nullptr) {
       descriptor_->cleanup(instance_);
     }
+    hostFeatures_.detach();
     instance_ = nullptr;
     runtimeActive_ = false;
   }
 
   bool ensureRuntimeInstance(std::uint32_t sampleRate, std::size_t frameCount) {
+    // The plugin was promised blocks of at most maxBlockLength frames.
+    if (runtimeActive_ && frameCount > hostFeatures_.maxBlockLength()) {
+      shutdownRuntimeInstance();
+    }
+    if (instantiateFailed_) {
+      return false;
+    }
     if (runtimeActive_) {
       audioInputBuffer_.resize(frameCount, 0.0f);
       audioOutputBuffer_.resize(frameCount, 0.0f);
@@ -3252,12 +3472,16 @@ private:
         descriptor_->connectPort == nullptr) {
       return false;
     }
-    Lv2Feature uridMapFeature{"http://lv2plug.in/ns/ext/urid#map", &kStaticUridMapData};
-    const Lv2Feature* features[] = {&uridMapFeature, nullptr};
-    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), nullptr, features);
+    const std::string bundlePath = lv2BundlePath(binaryPath_);
+    const Lv2Feature* const* features =
+        hostFeatures_.prepare(static_cast<double>(sampleRate), static_cast<std::uint32_t>(frameCount));
+    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), bundlePath.c_str(), features);
     if (instance_ == nullptr) {
+      instantiateFailed_ = true;
+      std::fprintf(stderr, "[lv2] effect %s failed to start; passing audio through\n", uri_.c_str());
       return false;
     }
+    hostFeatures_.attach(descriptor_, instance_);
     audioInputBuffer_.assign(frameCount, 0.0f);
     audioOutputBuffer_.assign(frameCount, 0.0f);
     if (controlInputValues_.size() < controlInputPorts_.size()) {
@@ -3335,6 +3559,8 @@ private:
   std::vector<float> controlOutputValues_;
   bool loaded_;
   bool runtimeActive_;
+  bool instantiateFailed_ = false;  // don't retry every block; warned once
+  Lv2HostFeatures hostFeatures_;  // must outlive instance_
 };
 
 class Lv2ManifestAdapter final : public extracker::IExternalPluginAdapter {
@@ -3537,10 +3763,55 @@ private:
     return it == prefixes.end() ? "" : it->second + token.substr(colon + 1);
   }
 
-  // A statement's subject starts at column 0; indented lines continue the
-  // previous subject's predicate list.
-  static std::string turtleSubjectOnLine(const std::string& line, const TurtlePrefixes& prefixes) {
-    if (line.empty() || std::isspace(static_cast<unsigned char>(line[0])) ||
+  // The last significant character of a line, ignoring comments and anything
+  // inside <IRIs> or "strings" (both may contain '#' or '.'); '\0' if none.
+  static char lastTurtleChar(const std::string& line) {
+    char last = '\0';
+    bool inIri = false;
+    bool inString = false;
+    for (std::size_t i = 0; i < line.size(); ++i) {
+      const char c = line[i];
+      if (inString) {
+        if (c == '\\') {
+          ++i;
+        } else if (c == '"') {
+          inString = false;
+          last = c;
+        }
+      } else if (inIri) {
+        if (c == '>') {
+          inIri = false;
+          last = c;
+        }
+      } else if (c == '#') {
+        break;
+      } else if (c == '"') {
+        inString = true;
+      } else if (c == '<') {
+        inIri = true;
+      } else if (!std::isspace(static_cast<unsigned char>(c))) {
+        last = c;
+      }
+    }
+    return last;
+  }
+
+  // Tracks whether the previous Turtle statement was closed with '.', i.e.
+  // whether the next line can start a new statement. Call after each line.
+  static void updateStatementEnd(const std::string& line, bool& statementEnded) {
+    const char last = lastTurtleChar(line);
+    if (last != '\0') {
+      statementEnded = (last == '.');
+    }
+  }
+
+  // A statement's subject starts at column 0 on the first line after the
+  // previous statement ended with '.'; other lines continue the current
+  // statement even when unindented (x42 matrixmixer writes "lv2:port [" at
+  // column 0).
+  static std::string turtleSubjectOnLine(const std::string& line, const TurtlePrefixes& prefixes,
+                                         bool statementEnded) {
+    if (!statementEnded || line.empty() || std::isspace(static_cast<unsigned char>(line[0])) ||
         line[0] == '@' || line[0] == '#' || line[0] == '[') {
       return "";
     }
@@ -3737,14 +4008,25 @@ private:
 
       TurtlePrefixes prefixes;
       std::string lastSubject;
+      bool statementEnded = true;
       std::string line;
       while (std::getline(ttl, line)) {
         if (parseTurtlePrefix(line, prefixes)) {
           continue;
         }
-        const std::string subject = turtleSubjectOnLine(line, prefixes);
+        const bool canStartStatement = statementEnded;
+        updateStatementEnd(line, statementEnded);
+        const std::string subject = turtleSubjectOnLine(line, prefixes, canStartStatement);
         if (!subject.empty()) {
           lastSubject = subject;
+          // A new statement starts. Its ports belong to a plugin only when its
+          // subject is a plugin the manifest declared, whatever class this
+          // file types it with (lsp:sampler_mono is only "a
+          // lv2:InstrumentPlugin"); other subjects (port groups, UIs, ...)
+          // own no ports.
+          const bool isKnownPlugin = std::any_of(plugins.begin(), plugins.end(),
+              [&subject](const Lv2DiscoveredPlugin& plugin) { return plugin.uri == subject; });
+          currentUri = isKnownPlugin ? subject : std::string();
         }
         if (declaresLv2Plugin(line)) {
           std::string uri = pluginUriForLine(line, subject, lastSubject);
@@ -3908,13 +4190,16 @@ private:
 
         TurtlePrefixes prefixes;
         std::string lastSubject;
+        bool statementEnded = true;
         std::string currentUri;
         std::string line;
         while (std::getline(manifest, line)) {
           if (parseTurtlePrefix(line, prefixes)) {
             continue;
           }
-          const std::string subject = turtleSubjectOnLine(line, prefixes);
+          const bool canStartStatement = statementEnded;
+          updateStatementEnd(line, statementEnded);
+          const std::string subject = turtleSubjectOnLine(line, prefixes, canStartStatement);
           if (!subject.empty()) {
             lastSubject = subject;
           }
