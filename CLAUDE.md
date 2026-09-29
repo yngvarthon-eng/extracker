@@ -96,6 +96,11 @@ Real-time-ish playback pipeline, all driven by a background thread:
   `sample load`, GUI note entry with an armed sample, keyboard routing). Bank previews use
   `previewSampleNoteOn/Off`. On load, `INSTR_SAMPLE_SLOT` links with
   `SampleLinkProperties::FromInstrument` so the instrument's saved root/loop params survive.
+  Unloading a bank slot silences its sample instruments but keeps them linked; loading the slot
+  again brings them back. Both song loaders start with `resetInstrumentsToDefaults()`
+  (0 = sine, 1 = square, all per-instrument settings cleared) so songs never inherit the
+  previous song's instruments. CLI: `instrument clear`, and assignments that replace an
+  occupied slot print `Replaced <what> on instrument N`.
 - **MidiInput** — ALSA-seq based MIDI in, with clock/transport sync and channel→instrument mapping.
 - **ChannelManager** (`channel_manager.hpp`) — the single owner of per-channel user state: name,
   default instrument, mute, solo, volume and base filter. Solo wins over mute (`isAudible`). The

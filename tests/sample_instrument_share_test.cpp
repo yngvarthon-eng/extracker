@@ -1,7 +1,8 @@
 // A sample instrument plays the sample-bank slot it is linked to, sharing the
 // data instead of copying it: bank edits reach every linked instrument,
-// clearing the bank slot silences them, and loading a WAV straight into a
-// linked instrument never overwrites the bank sample.
+// clearing the bank slot silences them (they stay linked, and play again once
+// the slot is reloaded), and loading a WAV straight into a linked instrument
+// never overwrites the bank sample.
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -148,12 +149,22 @@ int main() {
   if (!plugins.clearSampleSlot(kBank)) {
     return fail("clearSampleSlot failed", dir);
   }
-  if (plugins.sampleSlotForInstrument(kInstrB) != -1) {
-    return fail("Instrument still linked to a cleared bank slot", dir);
+  if (plugins.sampleSlotForInstrument(kInstrB) != kBank) {
+    return fail("Instrument lost its link when the bank slot was cleared", dir);
   }
   plugins.triggerNoteOn(kInstrB, 60, 127, true);
   if (renderEnergy(plugins, kInstrB) != 0.0) {
     return fail("Instrument kept playing a sample that was cleared from the bank", dir);
+  }
+  plugins.allNotesOff();
+
+  // Loading a sample into the slot again brings the linked instrument back.
+  if (!plugins.loadSampleToSlot(kBank, longWav.string())) {
+    return fail("Reloading the bank slot failed", dir);
+  }
+  plugins.triggerNoteOn(kInstrB, 60, 127, true);
+  if (renderEnergy(plugins, kInstrB) <= 0.0) {
+    return fail("Linked instrument stayed silent after its bank slot was reloaded", dir);
   }
 
   std::filesystem::remove_all(dir);

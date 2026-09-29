@@ -142,6 +142,13 @@ public:
 
   void unloadAll();
   void clearInstrumentSlots();
+  // Empties every instrument slot, resets per-instrument settings (filter,
+  // effects, pitch, depth, reverb send) and restores the startup instruments
+  // (0 = builtin.sine, 1 = builtin.square). Song loaders call this so a song
+  // never inherits the previous song's instruments.
+  void resetInstrumentsToDefaults();
+  // Empties one instrument slot and resets its per-instrument settings.
+  bool clearInstrument(std::uint8_t instrument);
 
   std::string status() const;
   std::vector<std::string> discoverAvailablePlugins() const;

@@ -753,6 +753,7 @@ bool ExTrackerApp::readSongFile(const std::string& path) {
   audio.setReverbParams(extracker::ReverbParams{});
   channelHistory.clear();
 
+  plugins.resetInstrumentsToDefaults();
   for (std::size_t sampleSlot = 0; sampleSlot < extracker::PluginHost::kMaxSampleSlots; ++sampleSlot) {
     plugins.clearSampleSlot(static_cast<std::uint16_t>(sampleSlot));
   }

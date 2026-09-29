@@ -5730,6 +5730,38 @@ void PluginHost::clearInstrumentSlots() {
   instrumentSampleSlots_.fill(-1);
 }
 
+void PluginHost::resetInstrumentsToDefaults() {
+  {
+    std::lock_guard<std::timed_mutex> lock(mutex_);
+    for (auto& p : instrumentPlugins_) p.reset();
+    instrumentSlots_.fill({});
+    instrumentSampleSlots_.fill(-1);
+    for (auto& filter : instrumentFilters_) filter = BiquadFilter{};
+    for (auto& effects : instrumentEffects_) effects = InstrumentEffectSlot{};
+    pitchOffsets_.fill(0.0f);
+    reverbSends_.fill(0.0f);
+    depthOffsets_.fill(0.0f);
+  }
+  assignInstrument(0, "builtin.sine");
+  assignInstrument(1, "builtin.square");
+}
+
+bool PluginHost::clearInstrument(std::uint8_t instrument) {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  if (!isValidInstrument(instrument)) {
+    return false;
+  }
+  instrumentPlugins_[instrument].reset();
+  instrumentSlots_[instrument].clear();
+  instrumentSampleSlots_[instrument] = -1;
+  instrumentFilters_[instrument] = BiquadFilter{};
+  instrumentEffects_[instrument] = InstrumentEffectSlot{};
+  pitchOffsets_[instrument] = 0.0f;
+  reverbSends_[instrument] = 0.0f;
+  depthOffsets_[instrument] = 0.0f;
+  return true;
+}
+
 void PluginHost::unloadAll() {
   std::lock_guard<std::timed_mutex> lock(mutex_);
   for (auto& p : instrumentPlugins_) p.reset();
@@ -6318,6 +6350,15 @@ bool PluginHost::loadSampleToSlot(std::uint16_t sampleSlot, const std::string& w
   }
 
   sampleSlotPaths_[sampleSlot] = wavPath;
+  // Instruments still linked to this slot (e.g. after it was unloaded) play
+  // the new sample.
+  for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
+    if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot)) {
+      if (auto* instrumentPlugin = asSamplePlugin(instrumentPlugins_[instrument].get())) {
+        instrumentPlugin->shareSampleWith(*samplePlugin);
+      }
+    }
+  }
   return true;
 }
 
@@ -6354,9 +6395,8 @@ bool PluginHost::clearSampleSlot(std::uint16_t sampleSlot) {
   sampleSlotPlugins_[sampleSlot].reset();
   for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
     if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot)) {
-      instrumentSampleSlots_[instrument] = -1;
-      // Instruments that played this sample fall silent rather than keep a
-      // private copy of a sample that is no longer in the bank.
+      // Instruments that played this sample stay linked to the bank slot but
+      // fall silent; loading a sample into the slot again brings them back.
       if (auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get())) {
         samplePlugin->detachSample();
       }

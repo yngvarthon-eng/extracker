@@ -1,6 +1,7 @@
 #include "extracker/plugin_cli.hpp"
 
 #include "extracker/cli_parse_utils.hpp"
+#include "extracker/instrument_cli.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -134,7 +135,9 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
     }
 
     int instrument = -1;
-    if (!tryParseInstrumentToken(instrumentToken, instrument) || pluginId.empty()) {
+    const bool validAssign = tryParseInstrumentToken(instrumentToken, instrument) && !pluginId.empty();
+    const std::string before = validAssign ? describeInstrumentSlot(plugins, instrument) : std::string();
+    if (!validAssign) {
       std::cout << "Usage: plugin assign <instrument> <id>" << '\n';
     } else if (pluginId.size() >= 4 &&
                (pluginId.substr(pluginId.size() - 4) == ".xpm" ||
@@ -207,6 +210,9 @@ void handlePluginCommand(PluginHost& plugins, std::istringstream& pluginInput) {
       std::cout << "Assigned " << pluginId << " to instrument " << instrument << '\n';
     } else {
       std::cout << "Failed to assign plugin; ensure it is loaded and instrument index is valid" << '\n';
+    }
+    if (validAssign) {
+      reportInstrumentReplacement(plugins, instrument, before);
     }
   } else if (subcommand == "set") {
     std::string instrumentToken;
@@ -695,12 +701,14 @@ void handleHelpCommand() {
   std::cout << "plugin preset load <i> <f> load plugin state preset from file f" << '\n';
   std::cout << "plugin editor open <i>     open plugin GUI editor for instrument i (VST3)" << '\n';
   std::cout << "plugin editor close <i>    close plugin GUI editor for instrument i" << '\n';
+  std::cout << "Notes play instruments 0-255; an instrument is a plugin or a sample from the sample bank." << '\n';
   std::cout << "instrument list             list assigned instruments" << '\n';
   std::cout << "instrument status [i]       show one or all instrument assignments" << '\n';
   std::cout << "instrument assign <i> <id>  assign loaded plugin to instrument slot" << '\n';
-  std::cout << "instrument sample <i> <s>   route loaded sample slot s to instrument i" << '\n';
+  std::cout << "instrument sample <i> <s>   make instrument i play sample slot s" << '\n';
+  std::cout << "instrument clear <i>        empty instrument slot i" << '\n';
   std::cout << "instrument edit ...         edit instrument parameters" << '\n';
-  std::cout << "sample load <s> <name> <f> load WAV into slot s with a name" << '\n';
+  std::cout << "sample load <s> <name> <f> load WAV into sample slot s and create its instrument" << '\n';
   std::cout << "song pos                 compact song position and mode status" << '\n';
   std::cout << "song p                   alias for song pos" << '\n';
   std::cout << "song gp                  alias for song pos" << '\n';
