@@ -976,6 +976,10 @@ if(BUILD_TESTING)
   add_dependencies(extracker_cli_instrument_sample_model_test extracker)
   add_test(NAME extracker_cli_instrument_sample_model_test COMMAND extracker_cli_instrument_sample_model_test)
 
+  add_executable(extracker_cli_sample_instrument_relink_test tests/cli_sample_instrument_relink_test.cpp)
+  add_dependencies(extracker_cli_sample_instrument_relink_test extracker)
+  add_test(NAME extracker_cli_sample_instrument_relink_test COMMAND extracker_cli_sample_instrument_relink_test)
+
   add_executable(extracker_cli_instr_sample_persist_test tests/cli_instr_sample_persist_test.cpp)
   add_dependencies(extracker_cli_instr_sample_persist_test extracker)
   add_test(NAME extracker_cli_instr_sample_persist_test COMMAND extracker_cli_instr_sample_persist_test)

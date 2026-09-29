@@ -78,10 +78,15 @@ int ensureSampleInstrument(PluginHost& plugins,
     return existing;
   }
 
+  // Free: no plugin, or a leftover sample instrument with no sample and no link.
   const auto isFree = [&](int slot) {
-    return slot >= 0 && slot < static_cast<int>(kInstrumentSlotCount) &&
-           !reserved[static_cast<std::size_t>(slot)] &&
-           plugins.pluginForInstrument(static_cast<std::uint8_t>(slot)).empty();
+    if (slot < 0 || slot >= static_cast<int>(kInstrumentSlotCount) || reserved[static_cast<std::size_t>(slot)]) {
+      return false;
+    }
+    const auto index = static_cast<std::uint8_t>(slot);
+    const std::string plugin = plugins.pluginForInstrument(index);
+    return plugin.empty() || (plugin == "builtin.sample" && plugins.sampleSlotForInstrument(index) < 0 &&
+                              plugins.sampleFrameCountForInstrument(index) == 0);
   };
   int target = isFree(preferredSlot) ? preferredSlot : -1;
   for (int slot = 0; target < 0 && slot < static_cast<int>(kInstrumentSlotCount); ++slot) {

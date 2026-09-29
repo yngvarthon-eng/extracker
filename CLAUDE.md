@@ -99,8 +99,10 @@ Real-time-ish playback pipeline, all driven by a background thread:
   `sample load`, GUI note entry with an armed sample, keyboard routing). Bank previews use
   `previewSampleNoteOn/Off`. On load, `INSTR_SAMPLE_SLOT` links with
   `SampleLinkProperties::FromInstrument` so the instrument's saved root/loop params survive.
-  Unloading a bank slot silences its sample instruments but keeps them linked; loading the slot
-  again brings them back. Both song loaders start with `resetInstrumentsToDefaults()`
+  Unloading a bank slot silences its sample instruments but keeps them linked (with their own
+  gain/root/loop); loading the slot again brings them back. Loaders link with
+  `SampleLinkProperties::FromInstrument`, which also links to an empty slot (missing file).
+  Panel sliders ignore the mouse wheel (it scrolls the tab page instead). Both song loaders start with `resetInstrumentsToDefaults()`
   (0 = sine, 1 = square, all per-instrument settings cleared) so songs never inherit the
   previous song's instruments. CLI: `instrument clear`, and assignments that replace an
   occupied slot print `Replaced <what> on instrument N`.

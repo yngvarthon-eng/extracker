@@ -77,7 +77,16 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
     const int instrument = ensureSampleInstrument(plugins, static_cast<std::uint16_t>(slot),
                                                   InstrumentUseMap{}, slot);
     if (instrument >= 0) {
-      std::cout << "Instrument " << instrument << " plays sample slot " << slot << "\n";
+      const auto players = instrumentsPlayingSample(plugins, slot);
+      if (players.size() > 1) {
+        std::cout << "Instruments";
+        for (std::size_t i = 0; i < players.size(); ++i) {
+          std::cout << (i ? ", " : " ") << players[i];
+        }
+        std::cout << " play sample slot " << slot << "\n";
+      } else {
+        std::cout << "Instrument " << instrument << " plays sample slot " << slot << "\n";
+      }
     } else {
       std::cout << "No free instrument slot for sample slot " << slot << "\n";
     }

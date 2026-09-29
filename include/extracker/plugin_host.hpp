@@ -126,8 +126,9 @@ struct PluginPortInfo {
 // Whose playback properties (root note, gain, pan, loop) a sample instrument
 // keeps when it is linked to a sample-bank slot and starts sharing its sample.
 enum class SampleLinkProperties {
-  FromSample,      // the bank sample's (interactive linking)
-  FromInstrument,  // the instrument's own, e.g. just read from a song file
+  FromSample,      // the bank sample's (interactive linking; the slot must hold a sample)
+  FromInstrument,  // the instrument's own, as read from a song file; links even to an
+                   // empty slot (missing file), the instrument then waits silently for it
 };
 
 class PluginHost {

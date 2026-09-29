@@ -1284,6 +1284,16 @@ public:
       reparentToPage(*instrumentsPage, *bar);
     }
 
+    // Panel sliders ignore the mouse wheel so scrolling a tab page never
+    // changes a value by accident (it once turned a hi-hat's gain to 0.05).
+    for (auto* page : {songPage.get(), instrumentsPage.get(), samplesPage.get(), editPage.get()}) {
+      for (auto* child : page->getChildren()) {
+        if (auto* slider = dynamic_cast<juce::Slider*>(child)) {
+          slider->setScrollWheelEnabled(false);
+        }
+      }
+    }
+
     patternGrid.setSelectionChangedCallback([this](int row, int channel) {
       selectedStepRow = row;
       selectedStepChannel = channel;
@@ -4733,6 +4743,9 @@ private:
 
   void configureParameterSlider(juce::Slider& slider, double min, double max, double step) {
     slider.setSliderStyle(juce::Slider::LinearHorizontal);
+    // The wheel scrolls the panel; it must not change a value the pointer
+    // happens to pass over.
+    slider.setScrollWheelEnabled(false);
     slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
     slider.setRange(min, max, step);
   }
@@ -5771,6 +5784,7 @@ private:
         row->slider.setValue(curVal, juce::dontSendNotification);
         row->slider.setSliderStyle(juce::Slider::LinearHorizontal);
         row->slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
+        row->slider.setScrollWheelEnabled(false);
 
         juce::Slider* sliderPtr = &row->slider;
         const std::string paramCapture = row->paramName;

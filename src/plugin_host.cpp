@@ -994,9 +994,17 @@ public:
     a_->loopEnd = other.a_->loopEnd;
   }
 
-  // Stop sharing: this plugin gets its own, empty sample.
+  // Stop sharing: this plugin gets its own, empty sample but keeps its
+  // playback properties, so re-linking it later restores its settings.
   void detachSample() {
-    a_ = std::make_shared<SampleAsset>();
+    auto fresh = std::make_shared<SampleAsset>();
+    fresh->rootMidiNote = a_->rootMidiNote;
+    fresh->gain = a_->gain;
+    fresh->pan = a_->pan;
+    fresh->loopMode = a_->loopMode;
+    fresh->loopStart = a_->loopStart;
+    fresh->loopEnd = a_->loopEnd;
+    a_ = std::move(fresh);
     voices_.clear();
   }
 
@@ -6645,12 +6653,20 @@ bool PluginHost::loadSampleToSlot(std::uint16_t sampleSlot, const std::string& w
   }
 
   sampleSlotPaths_[sampleSlot] = wavPath;
-  // Instruments still linked to this slot (e.g. after it was unloaded) play
-  // the new sample.
+  // Instruments still linked to this slot (after it was unloaded, or when a
+  // song's sample file was missing) play the new sample. Silent ones keep
+  // their own settings (gain, root, loop) rather than the new sample's.
   for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
     if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot)) {
       if (auto* instrumentPlugin = asSamplePlugin(instrumentPlugins_[instrument].get())) {
-        instrumentPlugin->shareSampleWith(*samplePlugin);
+        if (instrumentPlugin->sampleFrameCount() == 0) {
+          BuiltinSamplePlugin saved;
+          saved.copySamplePropertiesFrom(*instrumentPlugin);
+          instrumentPlugin->shareSampleWith(*samplePlugin);
+          instrumentPlugin->copySamplePropertiesFrom(saved);
+        } else {
+          instrumentPlugin->shareSampleWith(*samplePlugin);
+        }
       }
     }
   }
@@ -6901,8 +6917,11 @@ bool PluginHost::assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uin
     return false;
   }
 
-  const std::string& sourcePath = sampleSlotPaths_[sampleSlot];
-  if (sourcePath.empty()) {
+  const bool bankLoaded = !sampleSlotPaths_[sampleSlot].empty() && sampleSlotPlugins_[sampleSlot] != nullptr;
+  // Interactive linking needs a sample; a song being loaded keeps the link even
+  // when the slot is empty (e.g. its file was missing), so loading a sample
+  // into the slot later brings the instrument back.
+  if (!bankLoaded && properties != SampleLinkProperties::FromInstrument) {
     return false;
   }
 
@@ -6922,10 +6941,12 @@ bool PluginHost::assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uin
 
   auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get());
   auto* bankPlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
-  if (!samplePlugin || !bankPlugin) {
+  if (samplePlugin == nullptr || (bankLoaded && bankPlugin == nullptr)) {
     return false;
   }
-  if (properties == SampleLinkProperties::FromInstrument) {
+  if (!bankLoaded) {
+    samplePlugin->detachSample();  // silent until the slot is loaded; keeps its settings
+  } else if (properties == SampleLinkProperties::FromInstrument) {
     // Song files store a sample instrument's root/gain/loop as INSTRUMENT_PARAM
     // lines ahead of the link; keep them once the instrument plays the bank's
     // shared sample.

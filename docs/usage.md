@@ -367,7 +367,8 @@ plays a sample from the sample bank. Pattern cells show the note's 2-digit instr
   same for a sample that has none; the tab shows which instrument plays the selected sample.
 - Several instruments can play one sample; edits on the Samples tab (trim, normalize, loop, ...)
   reach all of them. Unloading a sample silences its instruments until a sample is loaded into
-  that slot again.
+  that slot again; they keep their own settings (gain, root, loop). The same happens when a
+  song's sample file is missing: load the WAV into that sample slot and the instrument is back.
 - Assigning a plugin or instrument file to a slot that is in use asks before replacing it.
 - Songs from older versions, where a note could pick a sample through its sample column or by
   sharing its number with a sample slot, are converted when loaded; the status line says so.
