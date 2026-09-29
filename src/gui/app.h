@@ -107,8 +107,8 @@ public:
   // MIDI state
   bool midiThruEnabled = true;
   int midiInstrument = 0;
-  int activeSampleSlot = -1;
-  int sampleTargetChannel = -1;  // -1 = follow cursor; >= 0 = lock to this channel when armed
+  // Instrument written into newly entered notes (Instruments tab / toolbar).
+  int selectedInstrument = 0;
   bool midiLearnEnabled = false;
   bool midiTransportSyncEnabled = false;
   std::atomic<bool> midiTransportRunning{false};

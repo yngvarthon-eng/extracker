@@ -6018,6 +6018,18 @@ bool PluginHost::previewSampleNoteOff(std::uint16_t sampleSlot, int midiNote) {
   return true;
 }
 
+std::vector<int> PluginHost::instrumentsForSampleSlot(std::uint16_t sampleSlot) const {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  std::vector<int> result;
+  for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
+    if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot) &&
+        instrumentSlots_[instrument] == "builtin.sample") {
+      result.push_back(static_cast<int>(instrument));
+    }
+  }
+  return result;
+}
+
 int PluginHost::instrumentForSampleSlot(std::uint16_t sampleSlot) const {
   std::lock_guard<std::timed_mutex> lock(mutex_);
   for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {

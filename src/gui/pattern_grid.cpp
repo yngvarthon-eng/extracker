@@ -1,7 +1,6 @@
 #include "pattern_grid.h"
 #include "app.h"
 #include "extracker/pattern_editor.hpp"
-#include "extracker/sample_instrument_migration.hpp"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <algorithm>
 #include <chrono>
@@ -12,34 +11,9 @@
 
 namespace {
 
-std::uint8_t defaultInsertInstrument(const ExTrackerApp& app, int channel) {
-  if (channel >= 0 && static_cast<std::size_t>(channel) < app.channels.count()) {
-    return app.channels.instrument(static_cast<std::size_t>(channel));
-  }
-  return static_cast<std::uint8_t>(std::clamp(app.midiInstrument, 0, 255));
-}
-
-// The sample instrument that plays sample-bank slot `sampleSlot` (created on
-// first use in a free instrument slot), or -1 if the bank slot is empty or no
-// slot is free. A note's instrument alone decides its sound, so an armed or
-// typed sample is written as that instrument. Call with app.stateMutex held.
-int sampleInstrumentFor(ExTrackerApp& app, int sampleSlot) {
-  if (sampleSlot < 0 || sampleSlot >= static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
-    return -1;
-  }
-  return extracker::ensureSampleInstrument(app.plugins, static_cast<std::uint16_t>(sampleSlot),
-                                           extracker::instrumentsUsedByNotes(app.module), sampleSlot);
-}
-
-// Instrument for a note placed on `channel`: the armed sample's instrument
-// when a sample is armed, otherwise the channel's default instrument.
-std::uint8_t insertInstrument(ExTrackerApp& app, int channel, bool sampleArmed) {
-  if (sampleArmed) {
-    if (const int instrument = sampleInstrumentFor(app, app.activeSampleSlot); instrument >= 0) {
-      return static_cast<std::uint8_t>(instrument);
-    }
-  }
-  return defaultInsertInstrument(app, channel);
+// New notes get the instrument selected in the Instruments tab / toolbar.
+std::uint8_t insertInstrument(const ExTrackerApp& app) {
+  return static_cast<std::uint8_t>(std::clamp(app.selectedInstrument, 0, 255));
 }
 
 std::string toUpperHex(unsigned int value, int width) {
@@ -412,7 +386,7 @@ void PatternGrid::drawHeaders(juce::Graphics& g) {
   juce::String hint = "KB" + juce::String(keyboardOctave) + " Stp" + juce::String(editStep);
   if (fxInputMode) hint = "[FX] " + hint;
   if (volumeInputMode) hint = "[VOL] " + hint;
-  if (sampleInputMode) hint = "[SMP] " + hint;
+  if (instrumentInputMode) hint = "[INS] " + hint;
   if (selectedRow >= 0 && selectedChannel >= 0) {
     int minRow = selectedRow;
     int maxRow = selectedRow;
@@ -422,7 +396,7 @@ void PatternGrid::drawHeaders(juce::Graphics& g) {
     hint += "  Sel:" + juce::String(maxRow - minRow + 1) + "x" + juce::String(maxChannel - minChannel + 1);
   }
   hint += "  FXadv:" + juce::String(fxCommitAutoAdvance ? "ON" : "OFF") + "(F6)";
-  hint += "  F2:step-edit  </> switch col(Smp|Vol|FX)  Esc:exit  FX:|/`  VOL:'  SMP:;";
+  hint += "  F2:step-edit  </> switch col(Ins|Vol|FX)  Esc:exit  FX:|/`  VOL:'  INS:;";
   hint += "  Alt+drag:scrub  Shift+arrows/drag:mark  Ctrl+C/X/V  Ctrl+Up/Down:transpose";
   if (hintBandHeight > 0) {
     g.drawText(hint, 4, hintBandY, getWidth() - 8, hintBandHeight, juce::Justification::centredLeft, true);
@@ -533,10 +507,10 @@ void PatternGrid::drawGrid(juce::Graphics& g) {
     g.setColour(juce::Colour(0xFFFFCC00));
     g.drawRoundedRectangle(badge.toFloat(), 5.0f, 1.0f);
     g.setFont(compactDensity ? 11.0f : 12.0f);
-    g.drawText("Vol  (< Smp | > FX)", badge, juce::Justification::centred);
+    g.drawText("Vol  (< Ins | > FX)", badge, juce::Justification::centred);
   }
 
-  if (sampleInputMode) {
+  if (instrumentInputMode) {
     const int badgeH = compactDensity ? 18 : 22;
     juce::Rectangle<int> badge(labelWidth + 358, headerHeight - badgeH - 2, 188, badgeH);
     g.setColour(juce::Colour(0xCC1F1F1F));
@@ -544,7 +518,7 @@ void PatternGrid::drawGrid(juce::Graphics& g) {
     g.setColour(juce::Colour(0xFFFFCC00));
     g.drawRoundedRectangle(badge.toFloat(), 5.0f, 1.0f);
     g.setFont(compactDensity ? 11.0f : 12.0f);
-    g.drawText("Smp  (> Vol | F2/Esc: exit)", badge, juce::Justification::centred);
+    g.drawText("Ins  (> Vol | F2/Esc: exit)", badge, juce::Justification::centred);
   }
 }
 
@@ -651,12 +625,12 @@ void PatternGrid::drawCell(juce::Graphics& g,
     g.drawText(juce::String(volVisual), innerX, innerY, innerW, innerH, juce::Justification::centredRight, false);
   }
 
-  if (row == selectedRow && channel == selectedChannel && sampleInputMode) {
-    std::string sampleVisual = sampleInputBuffer;
-    while (sampleVisual.size() < 3) sampleVisual += '.';
+  if (row == selectedRow && channel == selectedChannel && instrumentInputMode) {
+    std::string instrumentVisual = instrumentInputBuffer;
+    while (instrumentVisual.size() < 2) instrumentVisual += '.';
     g.setColour(juce::Colour(0xFFFFCC00));
     g.setFont(compactDensity ? 15.0f : 18.0f);
-    g.drawText(juce::String(sampleVisual), innerX, innerY, innerW, innerH, juce::Justification::centred, false);
+    g.drawText(juce::String(instrumentVisual), innerX, innerY, innerW, innerH, juce::Justification::centred, false);
   }
 }
 
@@ -729,15 +703,11 @@ void PatternGrid::mouseDown(const juce::MouseEvent& event) {
       app.module.currentEditor().clearStep(row, channel);
     } else if (event.mods.isLeftButtonDown() && !auditionScrub) {
       // Left-click: select existing note, or insert a default note into an empty cell.
-      // While in a step-edit column mode (FX/Vol/Smp), click just navigates — no auto-insert.
-      if (!fxInputMode && !volumeInputMode && !sampleInputMode &&
+      // While in a step-edit column mode (FX/Vol/Ins), click just navigates — no auto-insert.
+      if (!fxInputMode && !volumeInputMode && !instrumentInputMode &&
           !app.module.currentEditor().hasNoteAt(row, channel)) {
-        const bool sampleArmed = app.activeSampleSlot >= 0 && app.activeSampleSlot <= 255;
-        const int numCh = static_cast<int>(app.module.currentEditor().channels());
-        const int targetChannel = (sampleArmed && app.sampleTargetChannel >= 0 &&
-                                    app.sampleTargetChannel < numCh)
-            ? app.sampleTargetChannel : channel;
-        const std::uint8_t instrument = insertInstrument(app, targetChannel, sampleArmed);
+        const int targetChannel = channel;
+        const std::uint8_t instrument = insertInstrument(app);
         app.module.currentEditor().insertNote(row, targetChannel, 60, instrument, insertGateTicks, insertVelocity, true);
         app.module.currentEditor().setSample(row, targetChannel, 0xFFFF);
         lock.unlock();
@@ -787,7 +757,7 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
   const juce::juce_wchar rawChar = key.getTextCharacter();
   const auto mods = key.getModifiers();
 
-  // Step-edit column helpers: left-to-right visual order is Smp | Vol | FX
+  // Step-edit column helpers: left-to-right visual order is Ins | Vol | FX
   auto enterFxCol = [this]() {
     fxInputMode = true;
     fxInputBuffer.clear();
@@ -795,8 +765,8 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
     fxInputPrefilledValueDigits = 0;
     volumeInputMode = false;
     volumeInputBuffer.clear();
-    sampleInputMode = false;
-    sampleInputBuffer.clear();
+    instrumentInputMode = false;
+    instrumentInputBuffer.clear();
     if (selectedRow >= 0 && selectedChannel >= 0) {
       std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
       if (lock.owns_lock()) {
@@ -816,12 +786,12 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
     fxInputBuffer.clear();
     fxInputPrefilledCommand = false;
     fxInputPrefilledValueDigits = 0;
-    sampleInputMode = false;
-    sampleInputBuffer.clear();
+    instrumentInputMode = false;
+    instrumentInputBuffer.clear();
   };
-  auto enterSmpCol = [this]() {
-    sampleInputMode = true;
-    sampleInputBuffer.clear();
+  auto enterInsCol = [this]() {
+    instrumentInputMode = true;
+    instrumentInputBuffer.clear();
     fxInputMode = false;
     fxInputBuffer.clear();
     fxInputPrefilledCommand = false;
@@ -836,8 +806,8 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
     fxInputPrefilledValueDigits = 0;
     volumeInputMode = false;
     volumeInputBuffer.clear();
-    sampleInputMode = false;
-    sampleInputBuffer.clear();
+    instrumentInputMode = false;
+    instrumentInputBuffer.clear();
   };
 
   if (mods.isCommandDown() && key.getKeyCode() == 'M') {
@@ -860,7 +830,7 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
 
   // F2: toggle step-edit mode (enter FX column, or exit if already in any column)
   if (key == juce::KeyPress::F2Key) {
-    if (fxInputMode || volumeInputMode || sampleInputMode) {
+    if (fxInputMode || volumeInputMode || instrumentInputMode) {
       exitStepEdit();
     } else {
       enterFxCol();
@@ -885,8 +855,8 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
     if (volumeInputMode) {
       fxInputMode = false;
       fxInputBuffer.clear();
-      sampleInputMode = false;
-      sampleInputBuffer.clear();
+      instrumentInputMode = false;
+      instrumentInputBuffer.clear();
     }
     if (selectedRow >= 0 && selectedChannel >= 0) {
       repaintCell(selectedRow, selectedChannel);
@@ -896,9 +866,9 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
 
   // Sample mode toggle: ; or F4. Input is 3 hex digits for sample slot (000-0FF).
   if (rawChar == ';' || key == juce::KeyPress::F4Key) {
-    sampleInputMode = !sampleInputMode;
-    sampleInputBuffer.clear();
-    if (sampleInputMode) {
+    instrumentInputMode = !instrumentInputMode;
+    instrumentInputBuffer.clear();
+    if (instrumentInputMode) {
       fxInputMode = false;
       fxInputBuffer.clear();
       volumeInputMode = false;
@@ -1158,9 +1128,9 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
       return true;
     }
 
-    // Left: move to Smp column
+    // Left: move to Ins column
     if (key == juce::KeyPress::leftKey) {
-      enterSmpCol();
+      enterInsCol();
       if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
       return true;
     }
@@ -1186,8 +1156,8 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
     }
   }
 
-  if (sampleInputMode) {
-    auto applySampleInputAtSelection = [this](unsigned int parsed) -> bool {
+  if (instrumentInputMode) {
+    auto applyInstrumentInputAtSelection = [this](unsigned int parsed) -> bool {
       if (selectedRow < 0 || selectedChannel < 0) {
         return false;
       }
@@ -1198,17 +1168,13 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
       }
 
       auto& editor = app.module.currentEditor();
-      // A typed sample number sets the note's instrument to that sample's instrument.
-      const int instrument = sampleInstrumentFor(app, std::clamp(static_cast<int>(parsed), 0, 255));
-      if (instrument >= 0) {
-        editor.setInstrument(selectedRow, selectedChannel, static_cast<std::uint8_t>(instrument));
-        editor.setSample(selectedRow, selectedChannel, 0xFFFF);
-      }
+      editor.setInstrument(selectedRow, selectedChannel, static_cast<std::uint8_t>(std::min(parsed, 255u)));
+      editor.setSample(selectedRow, selectedChannel, 0xFFFF);
 
       const int nextRow = std::min(static_cast<int>(editor.rows()) - 1, selectedRow + editStep);
       lock.unlock();
 
-      sampleInputBuffer.clear();
+      instrumentInputBuffer.clear();
       refreshSnapshot();
       if (selectionChangedCallback) {
         selectionChangedCallback(selectedRow, selectedChannel);
@@ -1218,45 +1184,36 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
     };
 
     if (key == juce::KeyPress::escapeKey) {
-      sampleInputMode = false;
-      sampleInputBuffer.clear();
+      instrumentInputMode = false;
+      instrumentInputBuffer.clear();
       if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
       return true;
     }
 
     if (key == juce::KeyPress::backspaceKey || key == juce::KeyPress::deleteKey) {
-      if (!sampleInputBuffer.empty()) {
-        sampleInputBuffer.pop_back();
+      if (!instrumentInputBuffer.empty()) {
+        instrumentInputBuffer.pop_back();
         if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
-      } else if (selectedRow >= 0 && selectedChannel >= 0) {
-        std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
-        if (lock.owns_lock()) {
-          app.module.currentEditor().setSample(selectedRow, selectedChannel, 0xFFFF);
-          lock.unlock();
-          refreshSnapshot();
-          repaintCell(selectedRow, selectedChannel);
-          if (selectionChangedCallback) selectionChangedCallback(selectedRow, selectedChannel);
-        }
       }
       return true;
     }
 
-    if (key == juce::KeyPress::returnKey && !sampleInputBuffer.empty() && selectedRow >= 0 && selectedChannel >= 0) {
-      std::string padded = sampleInputBuffer;
-      while (padded.size() < 3) padded += '0';
-      const unsigned int parsed = std::stoul(padded.substr(0, 3), nullptr, 16);
-      (void)applySampleInputAtSelection(parsed);
+    if (key == juce::KeyPress::returnKey && !instrumentInputBuffer.empty() && selectedRow >= 0 && selectedChannel >= 0) {
+      std::string padded = instrumentInputBuffer;
+      while (padded.size() < 2) padded.insert(padded.begin(), '0');
+      const unsigned int parsed = std::stoul(padded.substr(0, 2), nullptr, 16);
+      (void)applyInstrumentInputAtSelection(parsed);
       return true;
     }
 
     char c = static_cast<char>(juce::CharacterFunctions::toLowerCase(rawChar));
     if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
       if (selectedRow >= 0 && selectedChannel >= 0) {
-        sampleInputBuffer += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        if (sampleInputBuffer.size() == 3) {
-          const unsigned int parsed = std::stoul(sampleInputBuffer.substr(0, 3), nullptr, 16);
-          if (!applySampleInputAtSelection(parsed)) {
-            sampleInputBuffer.pop_back();
+        instrumentInputBuffer += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (instrumentInputBuffer.size() == 2) {
+          const unsigned int parsed = std::stoul(instrumentInputBuffer.substr(0, 2), nullptr, 16);
+          if (!applyInstrumentInputAtSelection(parsed)) {
+            instrumentInputBuffer.pop_back();
             repaintCell(selectedRow, selectedChannel);
           }
         } else {
@@ -1266,7 +1223,7 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
       return true;
     }
 
-    // Left: Smp is leftmost — exit step-edit mode
+    // Left: Ins is leftmost — exit step-edit mode
     if (key == juce::KeyPress::leftKey) {
       exitStepEdit();
       if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
@@ -1285,8 +1242,8 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
         || key == juce::KeyPress::spaceKey
         || key.getModifiers().isCommandDown();
     if (isNavOrShortcut) {
-      if (!sampleInputBuffer.empty()) {
-        sampleInputBuffer.clear();
+      if (!instrumentInputBuffer.empty()) {
+        instrumentInputBuffer.clear();
         if (selectedRow >= 0 && selectedChannel >= 0) repaintCell(selectedRow, selectedChannel);
       }
     } else {
@@ -1609,14 +1566,8 @@ bool PatternGrid::commitNoteFromKeyboard(int midiNote) {
     return false;
   }
 
-  // When a sample is armed and a channel lock is active, redirect to the locked channel.
-  const bool sampleArmed = app.activeSampleSlot >= 0 && app.activeSampleSlot <= 255;
-  const int numChannels = static_cast<int>(app.module.currentEditor().channels());
-  const int targetChannel = (sampleArmed && app.sampleTargetChannel >= 0 &&
-                              app.sampleTargetChannel < numChannels)
-      ? app.sampleTargetChannel : selectedChannel;
-
-  const std::uint8_t instrument = insertInstrument(app, targetChannel, sampleArmed);
+  const int targetChannel = selectedChannel;
+  const std::uint8_t instrument = insertInstrument(app);
 
   app.module.currentEditor().insertNote(selectedRow, targetChannel, midiNote, instrument, insertGateTicks, insertVelocity, true);
   app.module.currentEditor().setSample(selectedRow, targetChannel, 0xFFFF);

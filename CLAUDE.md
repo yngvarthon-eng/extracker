@@ -142,6 +142,13 @@ Real-time-ish playback pipeline, all driven by a background thread:
 `ExTrackerApp` (a `juce::JUCEApplication`) owns its **own** copies of the same core engine objects
 and its own sequencer thread, reusing `extracker_core` for all the actual logic. `pattern_grid`
 renders the tracker grid; `main_window` hosts it.
+The side panel is four tab pages (`PanelTab`: Song / Instruments / Samples / Edit), each a
+`PanelWrapper` shown in `panelViewport`; `resized()` lays out every page from the top and
+`finishPage` sizes it. Put new panel controls on a page (`reparentToPage`), not on the component.
+`pluginStatusLabel` sits under the tab row so messages show on every tab. New notes use
+`ExTrackerApp::selectedInstrument` (Instruments tab slot list = toolbar "Ins" box); the grid's
+`;`/F4 column mode types a 2-hex-digit instrument. Assigning to an occupied instrument slot goes
+through `confirmReplaceInstrument`.
 
 ### Save/load & file format
 

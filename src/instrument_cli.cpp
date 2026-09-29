@@ -61,15 +61,10 @@ std::string describeInstrumentSlot(PluginHost& plugins, int instrument) {
 }
 
 std::vector<int> instrumentsPlayingSample(PluginHost& plugins, int sampleSlot) {
-  std::vector<int> result;
-  for (std::size_t slot = 0; slot < PluginHost::kMaxInstrumentSlots; ++slot) {
-    const auto index = static_cast<std::uint8_t>(slot);
-    if (plugins.sampleSlotForInstrument(index) == sampleSlot &&
-        plugins.pluginForInstrument(index) == "builtin.sample") {
-      result.push_back(static_cast<int>(slot));
-    }
+  if (sampleSlot < 0 || sampleSlot >= static_cast<int>(PluginHost::kMaxSampleSlots)) {
+    return {};
   }
-  return result;
+  return plugins.instrumentsForSampleSlot(static_cast<std::uint16_t>(sampleSlot));
 }
 
 void reportInstrumentReplacement(PluginHost& plugins, int instrument, const std::string& before) {

@@ -22,6 +22,13 @@ juce::String formatSampleSlotHex(int slot) {
   return juce::String(out.str());
 }
 
+// Instrument slots print as I00-IFF, like sample slots print as S000-S100.
+juce::String formatInstrumentHex(int instrument) {
+  std::ostringstream out;
+  out << "I" << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << std::clamp(instrument, 0, 255);
+  return juce::String(out.str());
+}
+
 juce::String formatHexByte(int value) {
   std::ostringstream out;
   out << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << std::clamp(value, 0, 255);
@@ -703,6 +710,8 @@ class TrackerMainComponent : public juce::Component,
                              private juce::Timer {
 public:
   static constexpr int kModuleMessageMaxChars = 2048;
+  // Pages of the side panel.
+  enum class PanelTab { Song, Instruments, Samples, Edit };
 
   void paint(juce::Graphics& g) override {
     g.fillAll(app.darkMode ? juce::Colour(0xFF111111) : juce::Colour(0xFF383838));
@@ -826,6 +835,17 @@ public:
     addAndMakeVisible(swingSlider);
     addAndMakeVisible(volumeLabel);
     addAndMakeVisible(volumeSlider);
+    currentInstrumentLabel.setText("Ins", juce::dontSendNotification);
+    currentInstrumentLabel.setJustificationType(juce::Justification::centredRight);
+    currentInstrumentBox.setTooltip("Instrument written into new notes (same as the Instruments tab selection)");
+    currentInstrumentBox.onChange = [this]() {
+      const int slot = currentInstrumentBox.getSelectedId() - 1;
+      if (slot >= 0) {
+        selectInstrumentSlot(slot);
+      }
+    };
+    addAndMakeVisible(currentInstrumentLabel);
+    addAndMakeVisible(currentInstrumentBox);
     addAndMakeVisible(ticksPerBeatLabel);
     addAndMakeVisible(ticksPerBeatSlider);
     addAndMakeVisible(ticksPerRowLabel);
@@ -876,9 +896,6 @@ public:
     addAndMakeVisible(sampleAssignButton);
     addAndMakeVisible(sampleAssignToChannelButton);
     addAndMakeVisible(sampleRouteKeystationButton);
-    addAndMakeVisible(sampleArmButton);
-    addAndMakeVisible(sampleArmChannelLabel);
-    addAndMakeVisible(sampleArmChannelSelector);
     addAndMakeVisible(sampleRenameEditor);
     addAndMakeVisible(sampleRenameButton);
     addAndMakeVisible(sampleClearButton);
@@ -1054,10 +1071,15 @@ public:
     };
     addAndMakeVisible(pianoKeyboard);
 
-    // Create and set up panelWrapper for scrollable panel content
-    panelWrapper = std::make_unique<PanelWrapper>();
+    // The side panel is split into tabbed pages; the viewport scrolls the
+    // active one.
+    songPage = std::make_unique<PanelWrapper>();
+    instrumentsPage = std::make_unique<PanelWrapper>();
+    samplesPage = std::make_unique<PanelWrapper>();
+    editPage = std::make_unique<PanelWrapper>();
     addAndMakeVisible(panelViewport);
-    panelViewport.setViewedComponent(panelWrapper.get(), false);
+    panelViewport.setViewedComponent(songPage.get(), false);
+    initPanelTabs();
     panelViewport.setScrollBarsShown(true, false);
     panelViewport.setScrollBarThickness(12);
 
@@ -1065,210 +1087,208 @@ public:
     initChannelRows();
     initSlotActivityRows();
 
-    // Reparent panel controls to panelWrapper for scrolling
-    auto reparentToPanelWrapper = [this](juce::Component& comp) {
+    // Move panel controls onto their tab page
+    auto reparentToPage = [this](PanelWrapper& page, juce::Component& comp) {
       removeChildComponent(&comp);
-      panelWrapper->addAndMakeVisible(comp);
+      page.addAndMakeVisible(comp);
     };
 
-    reparentToPanelWrapper(instrumentPanelTitle);
-    reparentToPanelWrapper(songOrderTitle);
-    reparentToPanelWrapper(songOrderListView);
-    reparentToPanelWrapper(songOrderEntryLabel);
-    reparentToPanelWrapper(songOrderEntrySelector);
-    reparentToPanelWrapper(songOrderPatternLabel);
-    reparentToPanelWrapper(songOrderPatternSelector);
-    reparentToPanelWrapper(songOrderAddButton);
-    reparentToPanelWrapper(songOrderRemoveButton);
-    reparentToPanelWrapper(songOrderUpButton);
-    reparentToPanelWrapper(songOrderDownButton);
-    reparentToPanelWrapper(songArrangerTitle);
-    reparentToPanelWrapper(songArrangerBarsLabel);
-    reparentToPanelWrapper(songArrangerBarsSlider);
-    reparentToPanelWrapper(songArrangerDuplicateButton);
-    reparentToPanelWrapper(songArrangerInsertBarsButton);
-    reparentToPanelWrapper(songArrangerRippleLeftButton);
-    reparentToPanelWrapper(songArrangerRippleRightButton);
-    reparentToPanelWrapper(startupTemplateLabel);
-    reparentToPanelWrapper(startupTemplateSelector);
-    reparentToPanelWrapper(startupTemplatePreviewButton);
-    reparentToPanelWrapper(startupTemplateSetDefaultButton);
-    reparentToPanelWrapper(moduleMessageTitle);
-    reparentToPanelWrapper(moduleMessageEditor);
-    reparentToPanelWrapper(moduleMessageCounterLabel);
-    reparentToPanelWrapper(moduleMessageStateLabel);
-    reparentToPanelWrapper(moduleMessageApplyButton);
-    reparentToPanelWrapper(channelPanelTitle);
-    reparentToPanelWrapper(applyChannelMapButton);
+    reparentToPage(*instrumentsPage, instrumentPanelTitle);
+    reparentToPage(*songPage, songOrderTitle);
+    reparentToPage(*songPage, songOrderListView);
+    reparentToPage(*songPage, songOrderEntryLabel);
+    reparentToPage(*songPage, songOrderEntrySelector);
+    reparentToPage(*songPage, songOrderPatternLabel);
+    reparentToPage(*songPage, songOrderPatternSelector);
+    reparentToPage(*songPage, songOrderAddButton);
+    reparentToPage(*songPage, songOrderRemoveButton);
+    reparentToPage(*songPage, songOrderUpButton);
+    reparentToPage(*songPage, songOrderDownButton);
+    reparentToPage(*songPage, songArrangerTitle);
+    reparentToPage(*songPage, songArrangerBarsLabel);
+    reparentToPage(*songPage, songArrangerBarsSlider);
+    reparentToPage(*songPage, songArrangerDuplicateButton);
+    reparentToPage(*songPage, songArrangerInsertBarsButton);
+    reparentToPage(*songPage, songArrangerRippleLeftButton);
+    reparentToPage(*songPage, songArrangerRippleRightButton);
+    reparentToPage(*songPage, startupTemplateLabel);
+    reparentToPage(*songPage, startupTemplateSelector);
+    reparentToPage(*songPage, startupTemplatePreviewButton);
+    reparentToPage(*songPage, startupTemplateSetDefaultButton);
+    reparentToPage(*songPage, moduleMessageTitle);
+    reparentToPage(*songPage, moduleMessageEditor);
+    reparentToPage(*songPage, moduleMessageCounterLabel);
+    reparentToPage(*songPage, moduleMessageStateLabel);
+    reparentToPage(*songPage, moduleMessageApplyButton);
+    reparentToPage(*songPage, channelPanelTitle);
+    reparentToPage(*songPage, applyChannelMapButton);
     for (auto& label : channelLabels) {
-      reparentToPanelWrapper(*label);
+      reparentToPage(*songPage, *label);
     }
     for (auto& selector : channelInstrumentSelectors) {
-      reparentToPanelWrapper(*selector);
+      reparentToPage(*songPage, *selector);
     }
     for (auto& toggle : channelMuteToggles) {
-      reparentToPanelWrapper(*toggle);
+      reparentToPage(*songPage, *toggle);
     }
     for (auto& toggle : channelSoloToggles) {
-      reparentToPanelWrapper(*toggle);
+      reparentToPage(*songPage, *toggle);
     }
     for (auto& label : channelPluginLabels) {
-      reparentToPanelWrapper(*label);
+      reparentToPage(*songPage, *label);
     }
-    reparentToPanelWrapper(slotPanelTitle);
-    reparentToPanelWrapper(slotLabel);
-    reparentToPanelWrapper(slotSelector);
-    reparentToPanelWrapper(pluginPanelTitle);
-    reparentToPanelWrapper(scanPluginsButton);
-    reparentToPanelWrapper(pluginSelector);
-    reparentToPanelWrapper(assignPluginButton);
-    reparentToPanelWrapper(loadInstrumentFileButton);
-    reparentToPanelWrapper(openPluginEditorButton);
-    reparentToPanelWrapper(pluginStatusLabel);
-    reparentToPanelWrapper(sampleBankTitle);
-    reparentToPanelWrapper(sampleSlotLabel);
-    reparentToPanelWrapper(sampleSlotSelector);
-    reparentToPanelWrapper(sampleLoadButton);
-    reparentToPanelWrapper(sampleAssignButton);
-    reparentToPanelWrapper(sampleAssignToChannelButton);
-    reparentToPanelWrapper(sampleRouteKeystationButton);
-    reparentToPanelWrapper(sampleArmButton);
-    reparentToPanelWrapper(sampleArmChannelLabel);
-    reparentToPanelWrapper(sampleArmChannelSelector);
-    reparentToPanelWrapper(sampleRenameEditor);
-    reparentToPanelWrapper(sampleRenameButton);
-    reparentToPanelWrapper(sampleClearButton);
-    reparentToPanelWrapper(sampleTrimStartLabel);
-    reparentToPanelWrapper(sampleTrimStartSlider);
-    reparentToPanelWrapper(sampleTrimEndLabel);
-    reparentToPanelWrapper(sampleTrimEndSlider);
-    reparentToPanelWrapper(sampleTrimApplyButton);
-    reparentToPanelWrapper(sampleTrimReloadButton);
-    reparentToPanelWrapper(sampleNormalizeButton);
-    reparentToPanelWrapper(sampleFadeInButton);
-    reparentToPanelWrapper(sampleFadeOutButton);
-    reparentToPanelWrapper(sampleReverseButton);
-    reparentToPanelWrapper(sampleRateSelector);
-    reparentToPanelWrapper(sampleResampleButton);
-    reparentToPanelWrapper(sampleBitDepthSelector);
-    reparentToPanelWrapper(sampleBitDepthButton);
-    reparentToPanelWrapper(sampleLoopXfadeButton);
-    reparentToPanelWrapper(sampleWaveformView);
-    reparentToPanelWrapper(samplePathLabel);
-    reparentToPanelWrapper(sampleVolumeLabel);
-    reparentToPanelWrapper(sampleVolumeSlider);
-    reparentToPanelWrapper(samplePanLabel);
-    reparentToPanelWrapper(samplePanSlider);
-    reparentToPanelWrapper(sampleTransposeLabel);
-    reparentToPanelWrapper(sampleTransposeSlider);
-    reparentToPanelWrapper(sampleLoopModeLabel);
-    reparentToPanelWrapper(sampleLoopModeBox);
-    reparentToPanelWrapper(stepEditorTitle);
-    reparentToPanelWrapper(selectedStepLabel);
-    reparentToPanelWrapper(patternSearchTitle);
-    reparentToPanelWrapper(patternSearchMode);
-    reparentToPanelWrapper(patternSearchValue);
-    reparentToPanelWrapper(patternSearchPrevButton);
-    reparentToPanelWrapper(patternSearchNextButton);
-    reparentToPanelWrapper(patternSearchStatusLabel);
-    reparentToPanelWrapper(patternCompareTitle);
-    reparentToPanelWrapper(patternCompareCaptureButton);
-    reparentToPanelWrapper(patternCompareToggleButton);
-    reparentToPanelWrapper(patternCompareStatusLabel);
-    reparentToPanelWrapper(copyBlockButton);
-    reparentToPanelWrapper(cutBlockButton);
-    reparentToPanelWrapper(pasteBlockButton);
-    reparentToPanelWrapper(pasteSpecialButton);
-    reparentToPanelWrapper(clipboardHistorySelector);
-    reparentToPanelWrapper(clearClipboardHistoryButton);
-    reparentToPanelWrapper(transposeDownButton);
-    reparentToPanelWrapper(transposeUpButton);
-    reparentToPanelWrapper(applyFxToBlockButton);
-    reparentToPanelWrapper(patternMacroTitle);
-    reparentToPanelWrapper(patternMacroFillHatsButton);
-    reparentToPanelWrapper(patternMacroAccent4Button);
-    reparentToPanelWrapper(patternMacroInvertVelocityButton);
-    reparentToPanelWrapper(undoHistoryTitle);
-    reparentToPanelWrapper(undoHistoryTimelineLabel);
-    reparentToPanelWrapper(undoHistorySelector);
-    reparentToPanelWrapper(stepVelocityLabel);
-    reparentToPanelWrapper(stepVelocitySlider);
-    reparentToPanelWrapper(stepGateLabel);
-    reparentToPanelWrapper(stepGateSlider);
-    reparentToPanelWrapper(stepEffectCommandLabel);
-    reparentToPanelWrapper(stepEffectCommandSlider);
-    reparentToPanelWrapper(stepEffectCommandHexEditor);
-    reparentToPanelWrapper(stepEffectValueLabel);
-    reparentToPanelWrapper(stepEffectValueSlider);
-    reparentToPanelWrapper(stepEffectValueHexEditor);
-    reparentToPanelWrapper(midiLearnTitle);
-    reparentToPanelWrapper(midiLearnVelocityButton);
-    reparentToPanelWrapper(midiLearnGateButton);
-    reparentToPanelWrapper(midiLearnEffectCommandButton);
-    reparentToPanelWrapper(midiLearnEffectValueButton);
-    reparentToPanelWrapper(midiLearnClearButton);
-    reparentToPanelWrapper(midiLearnStatusLabel);
-    reparentToPanelWrapper(keyboardOctaveLabel);
-    reparentToPanelWrapper(keyboardOctaveSlider);
-    reparentToPanelWrapper(editStepLabel);
-    reparentToPanelWrapper(editStepSlider);
-    reparentToPanelWrapper(notePreviewMsLabel);
-    reparentToPanelWrapper(notePreviewMsSlider);
-    reparentToPanelWrapper(followPreviewToggle);
-    reparentToPanelWrapper(gainLabel);
-    reparentToPanelWrapper(gainSlider);
-    reparentToPanelWrapper(attackLabel);
-    reparentToPanelWrapper(attackSlider);
-    reparentToPanelWrapper(releaseLabel);
-    reparentToPanelWrapper(releaseSlider);
-    reparentToPanelWrapper(pitchLabel);
-    reparentToPanelWrapper(pitchSlider);
-    reparentToPanelWrapper(depthLabel);
-    reparentToPanelWrapper(depthSlider);
-    reparentToPanelWrapper(instrumentRootLabel);
-    reparentToPanelWrapper(instrumentRootSlider);
-    reparentToPanelWrapper(instrumentPanLabel);
-    reparentToPanelWrapper(instrumentPanSlider);
-    reparentToPanelWrapper(instrumentLoopModeLabel);
-    reparentToPanelWrapper(instrumentLoopModeBox);
-    reparentToPanelWrapper(instrumentLoopStartLabel);
-    reparentToPanelWrapper(instrumentLoopStartSlider);
-    reparentToPanelWrapper(instrumentLoopEndLabel);
-    reparentToPanelWrapper(instrumentLoopEndSlider);
-    reparentToPanelWrapper(fxResetButton);
-    reparentToPanelWrapper(fxSectionLabel);
-    reparentToPanelWrapper(fxDelayLabel);
-    reparentToPanelWrapper(fxDelayTimeSlider);
-    reparentToPanelWrapper(fxDelayFeedbackSlider);
-    reparentToPanelWrapper(fxDelayWetSlider);
-    reparentToPanelWrapper(fxDistLabel);
-    reparentToPanelWrapper(fxDistTypeBox);
-    reparentToPanelWrapper(fxDistDriveSlider);
-    reparentToPanelWrapper(fxChorusLabel);
-    reparentToPanelWrapper(fxChorusRateSlider);
-    reparentToPanelWrapper(fxChorusDepthSlider);
-    reparentToPanelWrapper(fxChorusWetSlider);
-    reparentToPanelWrapper(fxReverbSendLabel);
-    reparentToPanelWrapper(fxReverbSendSlider);
-    reparentToPanelWrapper(reverbSectionLabel);
-    reparentToPanelWrapper(reverbRoomSlider);
-    reparentToPanelWrapper(reverbDampSlider);
-    reparentToPanelWrapper(reverbWetSlider);
-    reparentToPanelWrapper(reverbWidthSlider);
-    reparentToPanelWrapper(filterSectionLabel);
-    reparentToPanelWrapper(filterChannelLabel);
-    reparentToPanelWrapper(filterTypeBox);
-    reparentToPanelWrapper(filterCutoffLabel);
-    reparentToPanelWrapper(filterCutoffSlider);
-    reparentToPanelWrapper(filterResonanceLabel);
-    reparentToPanelWrapper(filterResonanceSlider);
-    reparentToPanelWrapper(controlPortSectionTitle);
-    reparentToPanelWrapper(slotActivityTitle);
+    reparentToPage(*instrumentsPage, slotPanelTitle);
+    reparentToPage(*instrumentsPage, slotLabel);
+    reparentToPage(*instrumentsPage, slotSelector);
+    reparentToPage(*instrumentsPage, pluginPanelTitle);
+    reparentToPage(*instrumentsPage, scanPluginsButton);
+    reparentToPage(*instrumentsPage, pluginSelector);
+    reparentToPage(*instrumentsPage, assignPluginButton);
+    reparentToPage(*instrumentsPage, loadInstrumentFileButton);
+    reparentToPage(*instrumentsPage, openPluginEditorButton);
+    reparentToPage(*samplesPage, sampleBankTitle);
+    reparentToPage(*samplesPage, sampleSlotLabel);
+    reparentToPage(*samplesPage, sampleSlotSelector);
+    reparentToPage(*samplesPage, sampleLoadButton);
+    reparentToPage(*samplesPage, sampleAssignButton);
+    reparentToPage(*samplesPage, sampleAssignToChannelButton);
+    reparentToPage(*samplesPage, sampleRouteKeystationButton);
+    samplesPage->addAndMakeVisible(sampleInstrumentLabel);
+    samplesPage->addAndMakeVisible(sampleMakeInstrumentButton);
+    reparentToPage(*samplesPage, sampleRenameEditor);
+    reparentToPage(*samplesPage, sampleRenameButton);
+    reparentToPage(*samplesPage, sampleClearButton);
+    reparentToPage(*samplesPage, sampleTrimStartLabel);
+    reparentToPage(*samplesPage, sampleTrimStartSlider);
+    reparentToPage(*samplesPage, sampleTrimEndLabel);
+    reparentToPage(*samplesPage, sampleTrimEndSlider);
+    reparentToPage(*samplesPage, sampleTrimApplyButton);
+    reparentToPage(*samplesPage, sampleTrimReloadButton);
+    reparentToPage(*samplesPage, sampleNormalizeButton);
+    reparentToPage(*samplesPage, sampleFadeInButton);
+    reparentToPage(*samplesPage, sampleFadeOutButton);
+    reparentToPage(*samplesPage, sampleReverseButton);
+    reparentToPage(*samplesPage, sampleRateSelector);
+    reparentToPage(*samplesPage, sampleResampleButton);
+    reparentToPage(*samplesPage, sampleBitDepthSelector);
+    reparentToPage(*samplesPage, sampleBitDepthButton);
+    reparentToPage(*samplesPage, sampleLoopXfadeButton);
+    reparentToPage(*samplesPage, sampleWaveformView);
+    reparentToPage(*samplesPage, samplePathLabel);
+    reparentToPage(*samplesPage, sampleVolumeLabel);
+    reparentToPage(*samplesPage, sampleVolumeSlider);
+    reparentToPage(*samplesPage, samplePanLabel);
+    reparentToPage(*samplesPage, samplePanSlider);
+    reparentToPage(*samplesPage, sampleTransposeLabel);
+    reparentToPage(*samplesPage, sampleTransposeSlider);
+    reparentToPage(*samplesPage, sampleLoopModeLabel);
+    reparentToPage(*samplesPage, sampleLoopModeBox);
+    reparentToPage(*editPage, stepEditorTitle);
+    reparentToPage(*editPage, selectedStepLabel);
+    reparentToPage(*editPage, patternSearchTitle);
+    reparentToPage(*editPage, patternSearchMode);
+    reparentToPage(*editPage, patternSearchValue);
+    reparentToPage(*editPage, patternSearchPrevButton);
+    reparentToPage(*editPage, patternSearchNextButton);
+    reparentToPage(*editPage, patternSearchStatusLabel);
+    reparentToPage(*editPage, patternCompareTitle);
+    reparentToPage(*editPage, patternCompareCaptureButton);
+    reparentToPage(*editPage, patternCompareToggleButton);
+    reparentToPage(*editPage, patternCompareStatusLabel);
+    reparentToPage(*editPage, copyBlockButton);
+    reparentToPage(*editPage, cutBlockButton);
+    reparentToPage(*editPage, pasteBlockButton);
+    reparentToPage(*editPage, pasteSpecialButton);
+    reparentToPage(*editPage, clipboardHistorySelector);
+    reparentToPage(*editPage, clearClipboardHistoryButton);
+    reparentToPage(*editPage, transposeDownButton);
+    reparentToPage(*editPage, transposeUpButton);
+    reparentToPage(*editPage, applyFxToBlockButton);
+    reparentToPage(*editPage, patternMacroTitle);
+    reparentToPage(*editPage, patternMacroFillHatsButton);
+    reparentToPage(*editPage, patternMacroAccent4Button);
+    reparentToPage(*editPage, patternMacroInvertVelocityButton);
+    reparentToPage(*editPage, undoHistoryTitle);
+    reparentToPage(*editPage, undoHistoryTimelineLabel);
+    reparentToPage(*editPage, undoHistorySelector);
+    reparentToPage(*editPage, stepVelocityLabel);
+    reparentToPage(*editPage, stepVelocitySlider);
+    reparentToPage(*editPage, stepGateLabel);
+    reparentToPage(*editPage, stepGateSlider);
+    reparentToPage(*editPage, stepEffectCommandLabel);
+    reparentToPage(*editPage, stepEffectCommandSlider);
+    reparentToPage(*editPage, stepEffectCommandHexEditor);
+    reparentToPage(*editPage, stepEffectValueLabel);
+    reparentToPage(*editPage, stepEffectValueSlider);
+    reparentToPage(*editPage, stepEffectValueHexEditor);
+    reparentToPage(*editPage, midiLearnTitle);
+    reparentToPage(*editPage, midiLearnVelocityButton);
+    reparentToPage(*editPage, midiLearnGateButton);
+    reparentToPage(*editPage, midiLearnEffectCommandButton);
+    reparentToPage(*editPage, midiLearnEffectValueButton);
+    reparentToPage(*editPage, midiLearnClearButton);
+    reparentToPage(*editPage, midiLearnStatusLabel);
+    reparentToPage(*editPage, keyboardOctaveLabel);
+    reparentToPage(*editPage, keyboardOctaveSlider);
+    reparentToPage(*editPage, editStepLabel);
+    reparentToPage(*editPage, editStepSlider);
+    reparentToPage(*editPage, notePreviewMsLabel);
+    reparentToPage(*editPage, notePreviewMsSlider);
+    reparentToPage(*editPage, followPreviewToggle);
+    reparentToPage(*instrumentsPage, gainLabel);
+    reparentToPage(*instrumentsPage, gainSlider);
+    reparentToPage(*instrumentsPage, attackLabel);
+    reparentToPage(*instrumentsPage, attackSlider);
+    reparentToPage(*instrumentsPage, releaseLabel);
+    reparentToPage(*instrumentsPage, releaseSlider);
+    reparentToPage(*instrumentsPage, pitchLabel);
+    reparentToPage(*instrumentsPage, pitchSlider);
+    reparentToPage(*instrumentsPage, depthLabel);
+    reparentToPage(*instrumentsPage, depthSlider);
+    reparentToPage(*instrumentsPage, instrumentRootLabel);
+    reparentToPage(*instrumentsPage, instrumentRootSlider);
+    reparentToPage(*instrumentsPage, instrumentPanLabel);
+    reparentToPage(*instrumentsPage, instrumentPanSlider);
+    reparentToPage(*instrumentsPage, instrumentLoopModeLabel);
+    reparentToPage(*instrumentsPage, instrumentLoopModeBox);
+    reparentToPage(*instrumentsPage, instrumentLoopStartLabel);
+    reparentToPage(*instrumentsPage, instrumentLoopStartSlider);
+    reparentToPage(*instrumentsPage, instrumentLoopEndLabel);
+    reparentToPage(*instrumentsPage, instrumentLoopEndSlider);
+    reparentToPage(*instrumentsPage, fxResetButton);
+    reparentToPage(*instrumentsPage, fxSectionLabel);
+    reparentToPage(*instrumentsPage, fxDelayLabel);
+    reparentToPage(*instrumentsPage, fxDelayTimeSlider);
+    reparentToPage(*instrumentsPage, fxDelayFeedbackSlider);
+    reparentToPage(*instrumentsPage, fxDelayWetSlider);
+    reparentToPage(*instrumentsPage, fxDistLabel);
+    reparentToPage(*instrumentsPage, fxDistTypeBox);
+    reparentToPage(*instrumentsPage, fxDistDriveSlider);
+    reparentToPage(*instrumentsPage, fxChorusLabel);
+    reparentToPage(*instrumentsPage, fxChorusRateSlider);
+    reparentToPage(*instrumentsPage, fxChorusDepthSlider);
+    reparentToPage(*instrumentsPage, fxChorusWetSlider);
+    reparentToPage(*instrumentsPage, fxReverbSendLabel);
+    reparentToPage(*instrumentsPage, fxReverbSendSlider);
+    reparentToPage(*songPage, reverbSectionLabel);
+    reparentToPage(*songPage, reverbRoomSlider);
+    reparentToPage(*songPage, reverbDampSlider);
+    reparentToPage(*songPage, reverbWetSlider);
+    reparentToPage(*songPage, reverbWidthSlider);
+    reparentToPage(*songPage, filterSectionLabel);
+    reparentToPage(*songPage, filterChannelLabel);
+    reparentToPage(*songPage, filterTypeBox);
+    reparentToPage(*songPage, filterCutoffLabel);
+    reparentToPage(*songPage, filterCutoffSlider);
+    reparentToPage(*songPage, filterResonanceLabel);
+    reparentToPage(*songPage, filterResonanceSlider);
+    reparentToPage(*instrumentsPage, controlPortSectionTitle);
+    reparentToPage(*instrumentsPage, slotActivityTitle);
     for (auto& label : slotActivityLabels) {
-      reparentToPanelWrapper(*label);
+      reparentToPage(*instrumentsPage, *label);
     }
     for (auto& bar : slotActivityBars) {
-      reparentToPanelWrapper(*bar);
+      reparentToPage(*instrumentsPage, *bar);
     }
 
     patternGrid.setSelectionChangedCallback([this](int row, int channel) {
@@ -1296,6 +1316,7 @@ public:
       patternGrid.repaint();
     });
     patternGrid.setFocusModuleMessageCallback([this]() {
+      showPanelTab(PanelTab::Song);
       moduleMessageEditor.grabKeyboardFocus();
       moduleMessageEditor.setCaretPosition(moduleMessageEditor.getText().length());
       const int targetY = std::max(0, moduleMessageEditor.getY() - 24);
@@ -1701,12 +1722,12 @@ public:
         "Del/Bsp clear selected step\n"
         "Right-click  - clear step\n"
         "\n"
-        "=== FX / VOL / SMP DIRECT ENTRY ===\n"
-        "F2      cycle modes: Normal -> FX -> Volume -> Sample -> Normal\n"
+        "=== FX / VOL / INS DIRECT ENTRY ===\n"
+        "F2      cycle modes: Normal -> FX -> Volume -> Instrument -> Normal\n"
         "`/|     toggle FX mode directly (header shows [FX])\n"
         "'       toggle Volume mode directly (header shows [VOL])\n"
-        ";       toggle Sample mode directly (header shows [SMP])\n"
-        "F3/F4   direct Volume / Sample mode (same as ' and ;)\n"
+        ";       toggle Instrument mode directly (header shows [INS])\n"
+        "F3/F4   direct Volume / Instrument mode (same as ' and ;)\n"
         "\n"
         "=== FX DIRECT ENTRY ===\n"
         "        Type 3 hex chars: 1 command digit + 2 value digits\n"
@@ -1725,14 +1746,14 @@ public:
         "Bsp     remove last typed digit\n"
         "Esc     exit volume mode\n"
         "\n"
-        "=== SAMPLE DIRECT ENTRY ===\n"
-        ";/F4    toggle sample mode (header shows [SMP])\n"
-        "        Type 3 hex chars: sample slot 000-0FF\n"
-        "        e.g. 00A = sample slot 10\n"
+        "=== INSTRUMENT DIRECT ENTRY ===\n"
+        ";/F4    toggle instrument mode (header shows [INS])\n"
+        "        Type 2 hex chars: instrument 00-FF (the note plays that instrument)\n"
+        "        e.g. 0A = instrument 10\n"
         "        Auto-advances by step\n"
-        "Enter   commit partial buffer (zero-pads remaining digits)\n"
-        "Bsp     remove last typed digit (or clear sample if empty)\n"
-        "Esc     exit sample mode\n"
+        "Enter   commit partial buffer (zero-pads to 2 digits)\n"
+        "Bsp     remove last typed digit\n"
+        "Esc     exit instrument mode\n"
         "\n"
         "=== BLOCK EDITING ===\n"
         "Shift+Arrows / Click+Drag  - mark block\n"
@@ -1779,8 +1800,11 @@ public:
         "Fxx  Set tempo: xx<32 sets ticks/row, xx>=32 sets BPM\n"
         "\n"
         "=== INSTRUMENTS / SAMPLES ===\n"
-        "Per-channel instrument selector - fallback target when no sample slot is armed\n"
-        "Sample bank selector - arms the selected sample slot for new notes\n"
+        "Notes play instruments 00-FF; an instrument is a plugin or a sample\n"
+        "Ins box (toolbar) / Instruments tab slot - instrument written into new notes\n"
+        "Samples tab - sample bank; Make Instrument creates an instrument playing the sample\n"
+        "Replacing an instrument slot that is in use asks first\n"
+        "Per-channel instrument selector - used by Apply Channel Map and MIDI routing\n"
         "Waveform editor - drag green handles for trim start/end selection\n"
         "Apply Trim crops to selection (non-destructive source retained in memory)\n"
         "Normalize / Fade In / Fade Out process the current selection\n"
@@ -1971,7 +1995,11 @@ public:
 
     slotSelector.onChange = [this]() {
       const int slot = getSelectedSlot();
-      if (slot >= 0) app.midiInstrument = slot;
+      if (slot >= 0) {
+        app.midiInstrument = slot;
+        app.selectedInstrument = slot;
+        currentInstrumentBox.setSelectedId(slot + 1, juce::dontSendNotification);
+      }
       refreshParameterSlidersFromSlot();
       updateStatusLabels();
     };
@@ -1994,11 +2022,63 @@ public:
     };
 
     assignPluginButton.onClick = [this]() {
-      int slot = getSelectedSlot();
-      if (slot < 0) {
+      const int slot = getSelectedSlot();
+      if (slot < 0 || pluginSelector.getText().isEmpty()) {
         return;
       }
+      confirmReplaceInstrument(slot, [this, slot]() { assignSelectedPluginToSlot(slot); });
+    };
 
+    loadInstrumentFileButton.onClick = [this]() {
+      const int slot = getSelectedSlot();
+      if (slot < 0) {
+        pluginStatusLabel.setText("Select an instrument slot first", juce::dontSendNotification);
+        return;
+      }
+      confirmReplaceInstrument(slot, [this, slot]() { chooseInstrumentFileForSlot(slot); });
+    };
+
+    initRemainingPanelCallbacks();
+  }
+
+  // Runs `proceed` right away for an empty instrument slot; for an occupied
+  // one, first asks whether to replace what is there (and how many notes use it).
+  void confirmReplaceInstrument(int slot, std::function<void()> proceed) {
+    const auto index = static_cast<std::uint8_t>(slot);
+    if (app.plugins.pluginForInstrument(index).empty()) {
+      proceed();
+      return;
+    }
+    int notesUsingSlot = 0;
+    {
+      std::lock_guard<std::mutex> lock(app.stateMutex);
+      for (std::size_t p = 0; p < app.module.patternCount(); ++p) {
+        const auto& editor = app.module.patternEditor(p);
+        for (int r = 0; r < static_cast<int>(editor.rows()); ++r) {
+          for (int c = 0; c < static_cast<int>(editor.channels()); ++c) {
+            if (editor.hasNoteAt(r, c) && editor.noteAt(r, c) >= 0 && editor.instrumentAt(r, c) == index) {
+              ++notesUsingSlot;
+            }
+          }
+        }
+      }
+    }
+    juce::String message = formatInstrumentHex(slot) + " already holds " + instrumentSlotText(slot).fromFirstOccurrenceOf(" ", false, false) + ".";
+    if (notesUsingSlot > 0) {
+      message += "\n" + juce::String(notesUsingSlot) + " note(s) use this instrument and will play the new sound.";
+    }
+    message += "\n\nReplace it? (Choose an empty slot to keep it.)";
+    juce::AlertWindow::showOkCancelBox(
+        juce::MessageBoxIconType::QuestionIcon, "Replace instrument " + formatInstrumentHex(slot) + "?", message,
+        "Replace", "Cancel", this,
+        juce::ModalCallbackFunction::create([proceed = std::move(proceed)](int result) {
+          if (result != 0) {
+            proceed();
+          }
+        }));
+  }
+
+  void assignSelectedPluginToSlot(int slot) {
       std::string pluginId = pluginSelector.getText().toStdString();
       if (pluginId.empty()) {
         return;
@@ -2039,14 +2119,9 @@ public:
       assignPluginButton.setEnabled(true);
       slotSelector.setEnabled(true);
       pluginSelector.setEnabled(true);
-    };
+  }
 
-    loadInstrumentFileButton.onClick = [this]() {
-      const int slot = getSelectedSlot();
-      if (slot < 0) {
-        pluginStatusLabel.setText("Select an instrument slot first", juce::dontSendNotification);
-        return;
-      }
+  void chooseInstrumentFileForSlot(int slot) {
       loadInstrumentFileChooser = std::make_unique<juce::FileChooser>(
           "Load Instrument File",
           juce::File::getSpecialLocation(juce::File::userHomeDirectory),
@@ -2095,8 +2170,12 @@ public:
             refreshChannelPluginLabels();
             refreshParameterSlidersFromSlot();
           });
-    };
+  }
 
+  // The rest of the constructor's control setup (plugin editor, sample bank,
+  // step editor, ...), split off when the instrument-assign handlers became
+  // member functions.
+  void initRemainingPanelCallbacks() {
     openPluginEditorButton.onClick = [this]() {
       const int slot = getSelectedSlot();
       if (slot < 0) {
@@ -2157,9 +2236,6 @@ public:
     };
 
     sampleSlotSelector.onChange = [this]() {
-      // Do NOT auto-arm here — browsing slots shouldn't silently corrupt
-      // notes typed while the user is on a different panel.
-      // activeSampleSlot is updated only after an explicit load or clear.
       refreshSampleSlotDetails();
     };
 
@@ -2388,7 +2464,6 @@ public:
               : " - no free instrument slot";
         }
 
-        // Don't auto-arm on load: arming must be explicit (Arm for Notes button).
         pluginStatusLabel.setText(statusText, juce::dontSendNotification);
         refreshSlotSelector();
         refreshSampleSlotSelector();
@@ -2454,7 +2529,7 @@ public:
         app.midiInstrument = instrSlot;
         app.midiThruEnabled = true;
         pluginStatusLabel.setText(
-            "Keystation -> sample slot " + formatSampleSlotHex(selectedSampleSlot) + " (instrument " +
+            "MIDI keys -> sample " + formatSampleSlotHex(selectedSampleSlot) + " (instrument " +
                 juce::String::toHexString(instrSlot).paddedLeft('0', 2).toUpperCase() + ")",
             juce::dontSendNotification);
       } else {
@@ -2462,16 +2537,27 @@ public:
       }
     };
 
-    sampleArmButton.onClick = [this]() {
+    sampleMakeInstrumentButton.onClick = [this]() {
       const int selectedSampleSlot = getSelectedSampleSlot();
-      if (selectedSampleSlot < 0 || selectedSampleSlot > 255) {
+      if (selectedSampleSlot < 0) {
         return;
       }
-      if (app.activeSampleSlot == selectedSampleSlot) {
-        app.activeSampleSlot = -1;
-      } else if (!app.plugins.samplePathForSlot(static_cast<std::uint16_t>(selectedSampleSlot)).empty()) {
-        app.activeSampleSlot = selectedSampleSlot;
+      // The sample's instrument: the one already playing it, else the selected
+      // instrument slot if it is empty, else the lowest free slot.
+      const int instrument = extracker::ensureSampleInstrument(
+          app.plugins, static_cast<std::uint16_t>(selectedSampleSlot), extracker::InstrumentUseMap{},
+          getSelectedSlot());
+      if (instrument < 0) {
+        pluginStatusLabel.setText("No free instrument slot for " + formatSampleSlotHex(selectedSampleSlot),
+                                  juce::dontSendNotification);
+        return;
       }
+      pluginStatusLabel.setText(formatSampleSlotHex(selectedSampleSlot) + " plays on instrument " +
+                                    formatInstrumentHex(instrument),
+                                juce::dontSendNotification);
+      refreshSlotSelector();
+      selectInstrumentSlot(instrument);
+      refreshSampleSlotSelector();
       refreshSampleSlotDetails();
     };
 
@@ -2482,7 +2568,6 @@ public:
       }
 
       const bool cleared = app.plugins.clearSampleSlot(static_cast<std::uint16_t>(selectedSampleSlot));
-      syncActiveSampleWriteSlot();
       pluginStatusLabel.setText(
           cleared ? "Cleared sample slot " + formatSampleSlotHex(selectedSampleSlot)
             : "Failed clearing sample slot " + formatSampleSlotHex(selectedSampleSlot),
@@ -2840,7 +2925,7 @@ public:
     // Toolbar 2: Timing parameters (~890px)
     toolbar2.removeFromLeft(12);
     tempoLabel.setBounds(toolbar2.removeFromLeft(55));
-    tempoSlider.setBounds(toolbar2.removeFromLeft(200));
+    tempoSlider.setBounds(toolbar2.removeFromLeft(170));
     toolbar2.removeFromLeft(10);
     swingLabel.setBounds(toolbar2.removeFromLeft(48));
     swingSlider.setBounds(toolbar2.removeFromLeft(120));
@@ -2860,6 +2945,10 @@ public:
     insertPatternAfterButton.setBounds(toolbar2.removeFromLeft(90));
     toolbar2.removeFromLeft(4);
     removePatternButton.setBounds(toolbar2.removeFromLeft(90));
+    toolbar2.removeFromLeft(12);
+    currentInstrumentLabel.setBounds(toolbar2.removeFromLeft(30));
+    toolbar2.removeFromLeft(4);
+    currentInstrumentBox.setBounds(toolbar2.removeFromLeft(150));
     toolbar2.removeFromLeft(12);
     volumeLabel.setBounds(toolbar2.removeFromLeft(28));
     volumeSlider.setBounds(toolbar2.removeFromLeft(160));
@@ -2910,6 +2999,18 @@ public:
     // Make panel flexible: min 280px, max 360px, or 25% of available space
     int panelWidth = std::clamp(contentArea.getWidth() / 4, 280, 360);
     auto panelViewportBounds = contentArea.removeFromRight(panelWidth);
+    {
+      // Tab buttons and the status line stay put above the scrolling page.
+      auto tabRow = panelViewportBounds.removeFromTop(26);
+      const int tabWidth = tabRow.getWidth() / 4;
+      songTabButton.setBounds(tabRow.removeFromLeft(tabWidth));
+      instrumentsTabButton.setBounds(tabRow.removeFromLeft(tabWidth));
+      samplesTabButton.setBounds(tabRow.removeFromLeft(tabWidth));
+      editTabButton.setBounds(tabRow);
+      panelViewportBounds.removeFromTop(2);
+      pluginStatusLabel.setBounds(panelViewportBounds.removeFromTop(22));
+      panelViewportBounds.removeFromTop(4);
+    }
     auto patternArea = contentArea;
     auto patternSliderArea = patternArea.removeFromRight(16);
     mixerAreaFull.removeFromRight(panelWidth + 16 + 8);  // align with pattern area (excl. panel + scrollbar + gap)
@@ -2920,7 +3021,9 @@ public:
     panelViewport.setViewPosition(0, panelViewport.getViewPositionY());
 
     // Lay out into a temporary tall area, then compute the exact content height needed.
-    auto panelLayoutBounds = juce::Rectangle<int>(0, 0, panelViewportBounds.getWidth(), 5000);
+    // Pages are laid out inside the vertical scrollbar so nothing hides under it.
+    auto panelLayoutBounds = juce::Rectangle<int>(
+        0, 0, panelViewportBounds.getWidth() - panelViewport.getScrollBarThickness() - 2, 5000);
     auto panelArea = panelLayoutBounds;
 
     const int gridColumns = static_cast<int>(app.module.currentEditor().channels());
@@ -2935,6 +3038,15 @@ public:
     syncPatternRowSliderFromViewport();
     syncMixerLayout();
 
+    // Each tab page is laid out from the top of its own component; finishPage
+    // sizes the page to its content and starts the next one.
+    const auto finishPage = [&](PanelWrapper& page) {
+      const int usedHeight = panelLayoutBounds.getHeight() - panelArea.getHeight();
+      page.setBounds(0, 0, panelLayoutBounds.getWidth(), std::max(usedHeight + 8, panelViewportBounds.getHeight()));
+      panelArea = panelLayoutBounds;
+    };
+
+    // ---- Song: arrangement, module message, channels, channel filter, reverb
     songOrderTitle.setBounds(panelArea.removeFromTop(28));
     panelArea.removeFromTop(6);
 
@@ -3008,10 +3120,6 @@ public:
     panelArea.removeFromTop(4);
     moduleMessageApplyButton.setBounds(panelArea.removeFromTop(26));
 
-    panelArea.removeFromTop(12);
-    instrumentPanelTitle.setBounds(panelArea.removeFromTop(28));
-    panelArea.removeFromTop(6);
-
     channelPanelTitle.setBounds(panelArea.removeFromTop(22));
     panelArea.removeFromTop(4);
 
@@ -3032,12 +3140,47 @@ public:
     applyChannelMapButton.setBounds(panelArea.removeFromTop(26));
     panelArea.removeFromTop(10);
 
+    panelArea.removeFromTop(10);
+    filterSectionLabel.setBounds(panelArea.removeFromTop(20));
+    if (!filterChannelToggles.empty()) {
+      filterChannelLabel.setBounds(panelArea.removeFromTop(18));
+      const int toggleW = std::max(22, std::min(36, panelArea.getWidth() /
+                                                static_cast<int>(filterChannelToggles.size())));
+      const int perRow = std::max(1, panelArea.getWidth() / toggleW);
+      for (std::size_t ti = 0; ti < filterChannelToggles.size(); ) {
+        auto row = panelArea.removeFromTop(22);
+        for (int col = 0; col < perRow && ti < filterChannelToggles.size(); ++col, ++ti)
+          filterChannelToggles[ti]->setBounds(row.removeFromLeft(toggleW));
+      }
+      panelArea.removeFromTop(4);
+    }
+    filterTypeBox.setBounds(panelArea.removeFromTop(24));
+    panelArea.removeFromTop(4);
+    filterCutoffLabel.setBounds(panelArea.removeFromTop(18));
+    filterCutoffSlider.setBounds(panelArea.removeFromTop(24));
+    panelArea.removeFromTop(4);
+    filterResonanceLabel.setBounds(panelArea.removeFromTop(18));
+    filterResonanceSlider.setBounds(panelArea.removeFromTop(24));
+
+    panelArea.removeFromTop(10);
+    reverbSectionLabel.setBounds(panelArea.removeFromTop(20));
+    reverbRoomSlider.setBounds(panelArea.removeFromTop(22));
+    reverbDampSlider.setBounds(panelArea.removeFromTop(22));
+    reverbWetSlider.setBounds(panelArea.removeFromTop(22));
+    reverbWidthSlider.setBounds(panelArea.removeFromTop(22));
+
+    finishPage(*songPage);
+
+    // ---- Instruments: slot, plugin, sound settings, effects, controls, activity
+    instrumentPanelTitle.setBounds(panelArea.removeFromTop(28));
+    panelArea.removeFromTop(6);
+
     slotPanelTitle.setBounds(panelArea.removeFromTop(22));
     panelArea.removeFromTop(4);
 
     auto slotRow = panelArea.removeFromTop(26);
     slotLabel.setBounds(slotRow.removeFromLeft(45));
-    slotSelector.setBounds(slotRow.removeFromLeft(120));
+    slotSelector.setBounds(slotRow);
 
     panelArea.removeFromTop(8);
     pluginPanelTitle.setBounds(panelArea.removeFromTop(22));
@@ -3052,10 +3195,110 @@ public:
     loadInstrumentFileButton.setBounds(panelArea.removeFromTop(26));
     panelArea.removeFromTop(4);
     openPluginEditorButton.setBounds(panelArea.removeFromTop(26));
+
+    panelArea.removeFromTop(12);
+    gainLabel.setBounds(panelArea.removeFromTop(20));
+    gainSlider.setBounds(panelArea.removeFromTop(24));
     panelArea.removeFromTop(6);
-    pluginStatusLabel.setBounds(panelArea.removeFromTop(24));
+    attackLabel.setBounds(panelArea.removeFromTop(20));
+    attackSlider.setBounds(panelArea.removeFromTop(24));
+    panelArea.removeFromTop(6);
+    releaseLabel.setBounds(panelArea.removeFromTop(20));
+    releaseSlider.setBounds(panelArea.removeFromTop(24));
+
+    panelArea.removeFromTop(6);
+    instrumentRootLabel.setBounds(panelArea.removeFromTop(20));
+    instrumentRootSlider.setBounds(panelArea.removeFromTop(24));
+
+    panelArea.removeFromTop(6);
+    instrumentPanLabel.setBounds(panelArea.removeFromTop(20));
+    instrumentPanSlider.setBounds(panelArea.removeFromTop(24));
+
+    panelArea.removeFromTop(6);
+    pitchLabel.setBounds(panelArea.removeFromTop(20));
+    pitchSlider.setBounds(panelArea.removeFromTop(24));
+    panelArea.removeFromTop(4);
+    depthLabel.setBounds(panelArea.removeFromTop(20));
+    depthSlider.setBounds(panelArea.removeFromTop(24));
+
+    panelArea.removeFromTop(10);
+    {
+      auto headerRow = panelArea.removeFromTop(20);
+      fxResetButton.setBounds(headerRow.removeFromRight(68));
+      fxSectionLabel.setBounds(headerRow);
+    }
+
+    panelArea.removeFromTop(4);
+    fxDelayLabel.setBounds(panelArea.removeFromTop(18));
+    fxDelayTimeSlider.setBounds(panelArea.removeFromTop(22));
+    fxDelayFeedbackSlider.setBounds(panelArea.removeFromTop(22));
+    fxDelayWetSlider.setBounds(panelArea.removeFromTop(22));
+
+    panelArea.removeFromTop(4);
+    fxDistLabel.setBounds(panelArea.removeFromTop(18));
+    fxDistTypeBox.setBounds(panelArea.removeFromTop(24));
+    fxDistDriveSlider.setBounds(panelArea.removeFromTop(22));
+
+    panelArea.removeFromTop(4);
+    fxChorusLabel.setBounds(panelArea.removeFromTop(18));
+    fxChorusRateSlider.setBounds(panelArea.removeFromTop(22));
+    fxChorusDepthSlider.setBounds(panelArea.removeFromTop(22));
+    fxChorusWetSlider.setBounds(panelArea.removeFromTop(22));
+
+    panelArea.removeFromTop(4);
+    fxReverbSendLabel.setBounds(panelArea.removeFromTop(18));
+    fxReverbSendSlider.setBounds(panelArea.removeFromTop(22));
+
+    panelArea.removeFromTop(4);
+    {
+      auto row = panelArea.removeFromTop(26);
+      instrumentLoopModeLabel.setBounds(row.removeFromLeft(80));
+      instrumentLoopModeBox.setBounds(row.removeFromLeft(130));
+    }
+
+    panelArea.removeFromTop(4);
+    instrumentLoopStartLabel.setBounds(panelArea.removeFromTop(20));
+    instrumentLoopStartSlider.setBounds(panelArea.removeFromTop(24));
+
+    panelArea.removeFromTop(4);
+    instrumentLoopEndLabel.setBounds(panelArea.removeFromTop(20));
+    instrumentLoopEndSlider.setBounds(panelArea.removeFromTop(24));
+
+    if (!controlPortRows.empty()) {
+      panelArea.removeFromTop(8);
+      controlPortSectionTitle.setBounds(panelArea.removeFromTop(20));
+      for (auto& row : controlPortRows) {
+        panelArea.removeFromTop(4);
+        row->label.setBounds(panelArea.removeFromTop(18));
+        row->slider.setBounds(panelArea.removeFromTop(22));
+      }
+    }
 
     panelArea.removeFromTop(8);
+    slotActivityTitle.setBounds(panelArea.removeFromTop(20));
+    panelArea.removeFromTop(4);
+
+    for (std::size_t i = 0; i < slotActivityLabels.size(); i += 2) {
+      auto row = panelArea.removeFromTop(18);
+      auto left = row.removeFromLeft(panelArea.getWidth() / 2);
+      auto leftLabel = left.removeFromLeft(static_cast<int>(left.getWidth() * 0.72f));
+      slotActivityLabels[i]->setBounds(leftLabel);
+      if (i < slotActivityBars.size()) {
+        slotActivityBars[i]->setBounds(left.reduced(2, 4));
+      }
+      if (i + 1 < slotActivityLabels.size()) {
+        auto rightLabel = row.removeFromLeft(static_cast<int>(row.getWidth() * 0.72f));
+        slotActivityLabels[i + 1]->setBounds(rightLabel);
+        if (i + 1 < slotActivityBars.size()) {
+          slotActivityBars[i + 1]->setBounds(row.reduced(2, 4));
+        }
+      }
+      panelArea.removeFromTop(2);
+    }
+
+    finishPage(*instrumentsPage);
+
+    // ---- Samples: sample bank, preview, instrument link, editing
     sampleBankTitle.setBounds(panelArea.removeFromTop(20));
     panelArea.removeFromTop(4);
 
@@ -3072,16 +3315,14 @@ public:
     sampleAssignToChannelButton.setBounds(sampleButtonRow.removeFromLeft(110));
 
     panelArea.removeFromTop(4);
-    auto sampleKeystationRow = panelArea.removeFromTop(26);
-    sampleRouteKeystationButton.setBounds(sampleKeystationRow.removeFromLeft(160));
-    sampleKeystationRow.removeFromLeft(4);
-    sampleArmButton.setBounds(sampleKeystationRow);
-
+    sampleInstrumentLabel.setBounds(panelArea.removeFromTop(22));
     panelArea.removeFromTop(4);
-    auto sampleArmChannelRow = panelArea.removeFromTop(24);
-    sampleArmChannelLabel.setBounds(sampleArmChannelRow.removeFromLeft(64));
-    sampleArmChannelRow.removeFromLeft(4);
-    sampleArmChannelSelector.setBounds(sampleArmChannelRow);
+    {
+      auto row = panelArea.removeFromTop(26);
+      sampleMakeInstrumentButton.setBounds(row.removeFromLeft(row.getWidth() / 2 - 2));
+      row.removeFromLeft(4);
+      sampleRouteKeystationButton.setBounds(row);
+    }
 
     panelArea.removeFromTop(4);
     auto sampleRenameRow = panelArea.removeFromTop(26);
@@ -3171,22 +3412,9 @@ public:
       sampleLoopModeBox.setBounds(row.removeFromLeft(130));
     }
 
-    panelArea.removeFromTop(4);
-    {
-      auto row = panelArea.removeFromTop(26);
-      instrumentLoopModeLabel.setBounds(row.removeFromLeft(80));
-      instrumentLoopModeBox.setBounds(row.removeFromLeft(130));
-    }
+    finishPage(*samplesPage);
 
-    panelArea.removeFromTop(4);
-    instrumentLoopStartLabel.setBounds(panelArea.removeFromTop(20));
-    instrumentLoopStartSlider.setBounds(panelArea.removeFromTop(24));
-
-    panelArea.removeFromTop(4);
-    instrumentLoopEndLabel.setBounds(panelArea.removeFromTop(20));
-    instrumentLoopEndSlider.setBounds(panelArea.removeFromTop(24));
-
-    panelArea.removeFromTop(8);
+    // ---- Edit: step editor, search, clipboard, MIDI learn, macros, undo
     stepEditorTitle.setBounds(panelArea.removeFromTop(20));
     panelArea.removeFromTop(4);
     selectedStepLabel.setBounds(panelArea.removeFromTop(20));
@@ -3315,123 +3543,7 @@ public:
     panelArea.removeFromTop(4);
     followPreviewToggle.setBounds(panelArea.removeFromTop(24));
 
-    panelArea.removeFromTop(12);
-    gainLabel.setBounds(panelArea.removeFromTop(20));
-    gainSlider.setBounds(panelArea.removeFromTop(24));
-    panelArea.removeFromTop(6);
-    attackLabel.setBounds(panelArea.removeFromTop(20));
-    attackSlider.setBounds(panelArea.removeFromTop(24));
-    panelArea.removeFromTop(6);
-    releaseLabel.setBounds(panelArea.removeFromTop(20));
-    releaseSlider.setBounds(panelArea.removeFromTop(24));
-
-    panelArea.removeFromTop(6);
-    instrumentRootLabel.setBounds(panelArea.removeFromTop(20));
-    instrumentRootSlider.setBounds(panelArea.removeFromTop(24));
-
-    panelArea.removeFromTop(6);
-    instrumentPanLabel.setBounds(panelArea.removeFromTop(20));
-    instrumentPanSlider.setBounds(panelArea.removeFromTop(24));
-
-    panelArea.removeFromTop(6);
-    pitchLabel.setBounds(panelArea.removeFromTop(20));
-    pitchSlider.setBounds(panelArea.removeFromTop(24));
-    panelArea.removeFromTop(4);
-    depthLabel.setBounds(panelArea.removeFromTop(20));
-    depthSlider.setBounds(panelArea.removeFromTop(24));
-
-    panelArea.removeFromTop(10);
-    {
-      auto headerRow = panelArea.removeFromTop(20);
-      fxResetButton.setBounds(headerRow.removeFromRight(68));
-      fxSectionLabel.setBounds(headerRow);
-    }
-
-    panelArea.removeFromTop(4);
-    fxDelayLabel.setBounds(panelArea.removeFromTop(18));
-    fxDelayTimeSlider.setBounds(panelArea.removeFromTop(22));
-    fxDelayFeedbackSlider.setBounds(panelArea.removeFromTop(22));
-    fxDelayWetSlider.setBounds(panelArea.removeFromTop(22));
-
-    panelArea.removeFromTop(4);
-    fxDistLabel.setBounds(panelArea.removeFromTop(18));
-    fxDistTypeBox.setBounds(panelArea.removeFromTop(24));
-    fxDistDriveSlider.setBounds(panelArea.removeFromTop(22));
-
-    panelArea.removeFromTop(4);
-    fxChorusLabel.setBounds(panelArea.removeFromTop(18));
-    fxChorusRateSlider.setBounds(panelArea.removeFromTop(22));
-    fxChorusDepthSlider.setBounds(panelArea.removeFromTop(22));
-    fxChorusWetSlider.setBounds(panelArea.removeFromTop(22));
-
-    panelArea.removeFromTop(4);
-    fxReverbSendLabel.setBounds(panelArea.removeFromTop(18));
-    fxReverbSendSlider.setBounds(panelArea.removeFromTop(22));
-
-    panelArea.removeFromTop(10);
-    reverbSectionLabel.setBounds(panelArea.removeFromTop(20));
-    reverbRoomSlider.setBounds(panelArea.removeFromTop(22));
-    reverbDampSlider.setBounds(panelArea.removeFromTop(22));
-    reverbWetSlider.setBounds(panelArea.removeFromTop(22));
-    reverbWidthSlider.setBounds(panelArea.removeFromTop(22));
-
-    panelArea.removeFromTop(10);
-    filterSectionLabel.setBounds(panelArea.removeFromTop(20));
-    if (!filterChannelToggles.empty()) {
-      filterChannelLabel.setBounds(panelArea.removeFromTop(18));
-      const int toggleW = std::max(22, std::min(36, panelArea.getWidth() /
-                                                static_cast<int>(filterChannelToggles.size())));
-      const int perRow = std::max(1, panelArea.getWidth() / toggleW);
-      for (std::size_t ti = 0; ti < filterChannelToggles.size(); ) {
-        auto row = panelArea.removeFromTop(22);
-        for (int col = 0; col < perRow && ti < filterChannelToggles.size(); ++col, ++ti)
-          filterChannelToggles[ti]->setBounds(row.removeFromLeft(toggleW));
-      }
-      panelArea.removeFromTop(4);
-    }
-    filterTypeBox.setBounds(panelArea.removeFromTop(24));
-    panelArea.removeFromTop(4);
-    filterCutoffLabel.setBounds(panelArea.removeFromTop(18));
-    filterCutoffSlider.setBounds(panelArea.removeFromTop(24));
-    panelArea.removeFromTop(4);
-    filterResonanceLabel.setBounds(panelArea.removeFromTop(18));
-    filterResonanceSlider.setBounds(panelArea.removeFromTop(24));
-
-    if (!controlPortRows.empty()) {
-      panelArea.removeFromTop(8);
-      controlPortSectionTitle.setBounds(panelArea.removeFromTop(20));
-      for (auto& row : controlPortRows) {
-        panelArea.removeFromTop(4);
-        row->label.setBounds(panelArea.removeFromTop(18));
-        row->slider.setBounds(panelArea.removeFromTop(22));
-      }
-    }
-
-    panelArea.removeFromTop(8);
-    slotActivityTitle.setBounds(panelArea.removeFromTop(20));
-    panelArea.removeFromTop(4);
-
-    for (std::size_t i = 0; i < slotActivityLabels.size(); i += 2) {
-      auto row = panelArea.removeFromTop(18);
-      auto left = row.removeFromLeft(panelArea.getWidth() / 2);
-      auto leftLabel = left.removeFromLeft(static_cast<int>(left.getWidth() * 0.72f));
-      slotActivityLabels[i]->setBounds(leftLabel);
-      if (i < slotActivityBars.size()) {
-        slotActivityBars[i]->setBounds(left.reduced(2, 4));
-      }
-      if (i + 1 < slotActivityLabels.size()) {
-        auto rightLabel = row.removeFromLeft(static_cast<int>(row.getWidth() * 0.72f));
-        slotActivityLabels[i + 1]->setBounds(rightLabel);
-        if (i + 1 < slotActivityBars.size()) {
-          slotActivityBars[i + 1]->setBounds(row.reduced(2, 4));
-        }
-      }
-      panelArea.removeFromTop(2);
-    }
-
-    const int usedHeight = panelLayoutBounds.getHeight() - panelArea.getHeight();
-    const int contentHeight = std::max(usedHeight + 8, panelViewportBounds.getHeight());
-    panelWrapper->setBounds(0, 0, panelViewportBounds.getWidth(), contentHeight);
+    finishPage(*editPage);
   }
 
   void visibilityChanged() override {
@@ -4138,6 +4250,50 @@ private:
     }
   }
 
+  void initPanelTabs() {
+    constexpr int kPanelTabGroup = 4201;
+    const std::array<std::pair<juce::TextButton*, PanelTab>, 4> tabs{{
+        {&songTabButton, PanelTab::Song},
+        {&instrumentsTabButton, PanelTab::Instruments},
+        {&samplesTabButton, PanelTab::Samples},
+        {&editTabButton, PanelTab::Edit},
+    }};
+    for (const auto& [button, tab] : tabs) {
+      button->setClickingTogglesState(true);
+      button->setRadioGroupId(kPanelTabGroup);
+      button->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF3A6EA5));
+      button->onClick = [this, tab = tab]() { showPanelTab(tab); };
+      addAndMakeVisible(*button);
+    }
+    songTabButton.setTooltip("Song order, arranger, module message, channels, channel filter, reverb");
+    instrumentsTabButton.setTooltip("Instrument slots 00-FF: plugin or sample, sound settings, effects");
+    samplesTabButton.setTooltip("Sample bank: load, preview, edit; which instrument plays each sample");
+    editTabButton.setTooltip("Step editor, search, clipboard, MIDI learn, macros, undo, keyboard");
+    showPanelTab(PanelTab::Song);
+  }
+
+  PanelWrapper* pageForTab(PanelTab tab) const {
+    switch (tab) {
+      case PanelTab::Song: return songPage.get();
+      case PanelTab::Instruments: return instrumentsPage.get();
+      case PanelTab::Samples: return samplesPage.get();
+      case PanelTab::Edit: return editPage.get();
+    }
+    return songPage.get();
+  }
+
+  void showPanelTab(PanelTab tab) {
+    activePanelTab = tab;
+    songTabButton.setToggleState(tab == PanelTab::Song, juce::dontSendNotification);
+    instrumentsTabButton.setToggleState(tab == PanelTab::Instruments, juce::dontSendNotification);
+    samplesTabButton.setToggleState(tab == PanelTab::Samples, juce::dontSendNotification);
+    editTabButton.setToggleState(tab == PanelTab::Edit, juce::dontSendNotification);
+    if (auto* page = pageForTab(tab); page != nullptr && panelViewport.getViewedComponent() != page) {
+      panelViewport.setViewedComponent(page, false);
+      panelViewport.setViewPosition(0, 0);
+    }
+  }
+
   void initPanelStyling() {
     instrumentPanelTitle.setText("Instruments", juce::dontSendNotification);
     instrumentPanelTitle.setJustificationType(juce::Justification::centredLeft);
@@ -4215,20 +4371,17 @@ private:
     sampleLoadButton.setTooltip("Load WAV into selected sample slot");
     sampleAssignButton.setTooltip("Preview the selected sample slot using the current keyboard octave");
     sampleAssignToChannelButton.setTooltip("Stop the current preview note for the selected sample slot");
+    sampleRouteKeystationButton.setTooltip(
+        "Play this sample from the MIDI keyboard (uses its instrument, creating one in a free slot if needed)");
     sampleRenameEditor.setTooltip("Edit the display name for the selected sample slot");
     sampleRenameEditor.setTextToShowWhenEmpty("Sample name", juce::Colour(0xFF6A737D));
     sampleRenameButton.setTooltip("Rename the selected sample slot");
     sampleClearButton.setTooltip("Clear the selected sample slot");
 
-    sampleArmChannelLabel.setText("Place on ch", juce::dontSendNotification);
-    sampleArmChannelLabel.setJustificationType(juce::Justification::centredLeft);
-    sampleArmChannelLabel.setTooltip("Channel to write notes to when this sample is armed (-- = follow cursor)");
-    sampleArmChannelSelector.setTooltip("When armed, new notes go to this channel regardless of cursor column");
-    sampleArmChannelSelector.onChange = [this]() {
-      const int selectedId = sampleArmChannelSelector.getSelectedId();
-      app.sampleTargetChannel = selectedId - 2;  // id 1 = "— any —" (-1), id 2 = ch 0, id 3 = ch 1, ...
-      patternGrid.grabKeyboardFocus();
-    };
+    sampleInstrumentLabel.setJustificationType(juce::Justification::centredLeft);
+    sampleInstrumentLabel.setTooltip("Notes play instruments; these instruments play the selected sample");
+    sampleMakeInstrumentButton.setTooltip(
+        "Create an instrument that plays this sample (selected instrument slot if empty, else the first free one)");
 
     sampleTrimStartLabel.setText("Trim Start", juce::dontSendNotification);
     sampleTrimStartLabel.setJustificationType(juce::Justification::centredLeft);
@@ -4615,16 +4768,16 @@ private:
       auto label = std::make_unique<juce::Label>();
       label->setText("", juce::dontSendNotification);
       label->setJustificationType(juce::Justification::centredLeft);
-      if (panelWrapper) {
-        panelWrapper->addAndMakeVisible(*label);
+      if (instrumentsPage) {
+        instrumentsPage->addAndMakeVisible(*label);
       } else {
         addAndMakeVisible(*label);
       }
       slotActivityLabels.push_back(std::move(label));
 
       auto bar = std::make_unique<SlotActivityBar>();
-      if (panelWrapper) {
-        panelWrapper->addAndMakeVisible(*bar);
+      if (instrumentsPage) {
+        instrumentsPage->addAndMakeVisible(*bar);
       } else {
         addAndMakeVisible(*bar);
       }
@@ -4783,9 +4936,6 @@ private:
 
       // Carry index-based state along with the channels.
       if (!edit.sources.empty()) {
-        if (app.sampleTargetChannel >= 0) {
-          app.sampleTargetChannel = edit.newIndexOf(app.sampleTargetChannel);
-        }
         app.recordState.channel = std::max(edit.newIndexOf(app.recordState.channel), 0);
       }
       app.plugins.allNotesOff();
@@ -4798,7 +4948,6 @@ private:
       lock.unlock();
 
       captureUndoHistoryIfPatternChanged();
-      populateSampleArmChannelSelector();
       refreshChannelRows();
       mixerLastNumChannels = -1;
       syncMixerLayout();
@@ -4842,8 +4991,8 @@ private:
       patternGrid.repaint();
       patternGrid.grabKeyboardFocus();
     };
-    if (panelWrapper) {
-      panelWrapper->addAndMakeVisible(*toggle);
+    if (songPage) {
+      songPage->addAndMakeVisible(*toggle);
     } else {
       addAndMakeVisible(*toggle);
     }
@@ -4885,8 +5034,8 @@ private:
       label->setJustificationType(juce::Justification::centredLeft);
       label->setOpaque(true);
       makeChannelLabelRenamable(*label, ch);
-      if (panelWrapper) {
-        panelWrapper->addAndMakeVisible(*label);
+      if (songPage) {
+        songPage->addAndMakeVisible(*label);
       } else {
         addAndMakeVisible(*label);
       }
@@ -4905,8 +5054,8 @@ private:
         }
         patternGrid.grabKeyboardFocus();
       };
-      if (panelWrapper) {
-        panelWrapper->addAndMakeVisible(*combo);
+      if (songPage) {
+        songPage->addAndMakeVisible(*combo);
       } else {
         addAndMakeVisible(*combo);
       }
@@ -4918,8 +5067,8 @@ private:
       pluginLabel->setText("", juce::dontSendNotification);
       pluginLabel->setJustificationType(juce::Justification::centredLeft);
       pluginLabel->setOpaque(true);
-      if (panelWrapper) {
-        panelWrapper->addAndMakeVisible(*pluginLabel);
+      if (songPage) {
+        songPage->addAndMakeVisible(*pluginLabel);
       } else {
         addAndMakeVisible(*pluginLabel);
       }
@@ -4930,21 +5079,7 @@ private:
       channelSoloToggles.push_back(std::move(soloToggle));
       channelPluginLabels.push_back(std::move(pluginLabel));
     }
-    populateSampleArmChannelSelector();
     reinitFilterChannelBox();
-  }
-
-  void populateSampleArmChannelSelector() {
-    const int numChannels = static_cast<int>(app.module.currentEditor().channels());
-    const int prevSelection = app.sampleTargetChannel;
-    sampleArmChannelSelector.clear(juce::dontSendNotification);
-    sampleArmChannelSelector.addItem("-- any --", 1);
-    for (int ch = 0; ch < numChannels; ++ch) {
-      sampleArmChannelSelector.addItem("ch " + juce::String(ch), ch + 2);
-    }
-    const int restoredId = (prevSelection >= 0 && prevSelection < numChannels) ? prevSelection + 2 : 1;
-    sampleArmChannelSelector.setSelectedId(restoredId, juce::dontSendNotification);
-    app.sampleTargetChannel = restoredId - 2;
   }
 
   void reinitChannelRows() {
@@ -4995,8 +5130,8 @@ private:
       label->setJustificationType(juce::Justification::centredLeft);
       label->setOpaque(true);
       makeChannelLabelRenamable(*label, ch);
-      if (panelWrapper) {
-        panelWrapper->addAndMakeVisible(*label);
+      if (songPage) {
+        songPage->addAndMakeVisible(*label);
       } else {
         addAndMakeVisible(*label);
       }
@@ -5015,8 +5150,8 @@ private:
         }
         patternGrid.grabKeyboardFocus();
       };
-      if (panelWrapper) {
-        panelWrapper->addAndMakeVisible(*combo);
+      if (songPage) {
+        songPage->addAndMakeVisible(*combo);
       } else {
         addAndMakeVisible(*combo);
       }
@@ -5028,8 +5163,8 @@ private:
       pluginLabel->setText("", juce::dontSendNotification);
       pluginLabel->setJustificationType(juce::Justification::centredLeft);
       pluginLabel->setOpaque(true);
-      if (panelWrapper) {
-        panelWrapper->addAndMakeVisible(*pluginLabel);
+      if (songPage) {
+        songPage->addAndMakeVisible(*pluginLabel);
       } else {
         addAndMakeVisible(*pluginLabel);
       }
@@ -5041,7 +5176,6 @@ private:
       channelPluginLabels.push_back(std::move(pluginLabel));
     }
 
-    populateSampleArmChannelSelector();
     reinitFilterChannelBox();
     refreshChannelRows();
   }
@@ -5126,26 +5260,54 @@ private:
     });
   }
 
-  void refreshSlotSelector() {
-    const int previousSelectedId = slotSelector.getSelectedId();
-    slotSelector.clear(juce::dontSendNotification);
-
-    for (int slot = 0; slot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots); ++slot) {
-      std::string pluginId = app.plugins.pluginForInstrument(static_cast<std::uint8_t>(slot));
-
-      juce::String text = "I" + juce::String(slot);
-      if (!pluginId.empty()) {
-        const juce::String juceId(pluginId);
-        juce::String displayName = juce::File::isAbsolutePath(juceId)
-            ? juce::File(juceId).getFileNameWithoutExtension()
-            : juceId;
-        text += " -> " + displayName;
-      }
-      slotSelector.addItem(text, slot + 1);
+  // "I03 sine", "I05 [S003] kick", "I07 (empty)".
+  juce::String instrumentSlotText(int slot) const {
+    const auto index = static_cast<std::uint8_t>(slot);
+    const std::string pluginId = app.plugins.pluginForInstrument(index);
+    juce::String text = formatInstrumentHex(slot);
+    if (pluginId.empty()) {
+      return text + " (empty)";
     }
+    const int sampleSlot = app.plugins.sampleSlotForInstrument(index);
+    if (pluginId == "builtin.sample" && sampleSlot >= 0) {
+      const auto bankSlot = static_cast<std::uint16_t>(sampleSlot);
+      const std::string name = app.plugins.sampleNameForSlot(bankSlot);
+      return text + " [" + formatSampleSlotHex(sampleSlot) + "] " +
+             (app.plugins.samplePathForSlot(bankSlot).empty() ? juce::String("(no sample)") : juce::String(name));
+    }
+    const juce::String juceId(pluginId);
+    const juce::String displayName = juce::File::isAbsolutePath(juceId)
+        ? juce::File(juceId).getFileNameWithoutExtension()
+        : juce::String(app.plugins.pluginDisplayName(pluginId));
+    return text + " " + displayName;
+  }
 
-    const int restoreId = previousSelectedId > 0 ? previousSelectedId : 1;
-    slotSelector.setSelectedId(restoreId, juce::dontSendNotification);
+  void refreshSlotSelector() {
+    slotSelector.clear(juce::dontSendNotification);
+    currentInstrumentBox.clear(juce::dontSendNotification);
+    for (int slot = 0; slot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots); ++slot) {
+      const juce::String text = instrumentSlotText(slot);
+      slotSelector.addItem(text, slot + 1);
+      currentInstrumentBox.addItem(text, slot + 1);
+    }
+    const int selectedId = std::clamp(app.selectedInstrument, 0, 255) + 1;
+    slotSelector.setSelectedId(selectedId, juce::dontSendNotification);
+    currentInstrumentBox.setSelectedId(selectedId, juce::dontSendNotification);
+  }
+
+  // Selects `slot` everywhere (Instruments tab, toolbar box); new notes use it.
+  void selectInstrumentSlot(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots)) {
+      return;
+    }
+    slotSelector.setSelectedId(slot + 1, juce::sendNotificationSync);
+  }
+
+  std::vector<int> instrumentsPlayingSample(int sampleSlot) const {
+    if (sampleSlot < 0 || sampleSlot >= static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
+      return {};
+    }
+    return app.plugins.instrumentsForSampleSlot(static_cast<std::uint16_t>(sampleSlot));
   }
 
   void refreshSampleSlotSelector() {
@@ -5156,6 +5318,10 @@ private:
       const std::string name = app.plugins.sampleNameForSlot(static_cast<std::uint16_t>(slot));
       if (!name.empty()) {
         text += " - " + juce::String(name);
+        const auto players = instrumentsPlayingSample(slot);
+        if (!players.empty()) {
+          text += "  (" + formatInstrumentHex(players.front()) + (players.size() > 1 ? "+" : "") + ")";
+        }
       }
       sampleSlotSelector.addItem(text, slot + 1);
     }
@@ -5170,16 +5336,6 @@ private:
       return -1;
     }
     return selected;
-  }
-
-  void syncActiveSampleWriteSlot() {
-    const int selectedSampleSlot = getSelectedSampleSlot();
-    if (selectedSampleSlot >= 0 && selectedSampleSlot <= 255 &&
-        !app.plugins.samplePathForSlot(static_cast<std::uint16_t>(selectedSampleSlot)).empty()) {
-      app.activeSampleSlot = selectedSampleSlot;
-    } else {
-      app.activeSampleSlot = -1;
-    }
   }
 
   bool selectionFramesFromPercent(std::size_t totalFrames,
@@ -5448,23 +5604,21 @@ private:
           text += " (source " + juce::String(static_cast<int>(sourceFrameCount)) + ")";
         }
       }
-      if (selectedSampleSlot <= 255) {
-        text += app.activeSampleSlot == selectedSampleSlot
-            ? "  |  ARMED: placed notes will carry this sample slot"
-            : "  |  not armed";
-      } else {
-        text += "  |  slot 256 is bank-only and not pattern-addressable";
-      }
     }
 
     samplePathLabel.setText(text, juce::dontSendNotification);
 
-    // Keep arm button label in sync with actual arm state
-    const bool slotHasSample = selectedSampleSlot >= 0 && selectedSampleSlot <= 255 &&
-        !app.plugins.samplePathForSlot(static_cast<std::uint16_t>(selectedSampleSlot)).empty();
-    const bool isArmed = (app.activeSampleSlot >= 0 && app.activeSampleSlot == selectedSampleSlot);
-    sampleArmButton.setButtonText(isArmed ? "Disarm" : "Arm for Notes");
-    sampleArmButton.setEnabled(slotHasSample || isArmed);
+    // Which instruments play this sample.
+    const auto players = instrumentsPlayingSample(selectedSampleSlot);
+    juce::String playedBy;
+    for (const int instrument : players) {
+      playedBy += (playedBy.isEmpty() ? "" : ", ") + formatInstrumentHex(instrument);
+    }
+    sampleInstrumentLabel.setText(path.empty() ? juce::String()
+                                  : players.empty() ? juce::String("Not played by any instrument")
+                                                    : "Played by instrument " + playedBy,
+                                  juce::dontSendNotification);
+    sampleMakeInstrumentButton.setEnabled(!path.empty() && players.empty());
     lastTrimSelectionSampleSlot = selectedSampleSlot;
     lastTrimSelectionSamplePath = path;
   }
@@ -5663,7 +5817,7 @@ private:
         filterCutoffSlider.setValue(fp.cutoffNorm * 255.0, juce::dontSendNotification);
         filterResonanceSlider.setValue(fp.resonanceNorm * 255.0, juce::dontSendNotification);
       };
-      if (panelWrapper) panelWrapper->addAndMakeVisible(*btn);
+      if (songPage) songPage->addAndMakeVisible(*btn);
       else             addAndMakeVisible(*btn);
       filterChannelToggles.push_back(std::move(btn));
     }
@@ -5836,8 +5990,8 @@ private:
           setSelectedSlotParameter(paramCapture, sliderPtr->getValue());
         };
 
-        panelWrapper->addAndMakeVisible(row->label);
-        panelWrapper->addAndMakeVisible(row->slider);
+        instrumentsPage->addAndMakeVisible(row->label);
+        instrumentsPage->addAndMakeVisible(row->slider);
         controlPortRows.push_back(std::move(row));
       }
     }
@@ -6922,6 +7076,8 @@ private:
   juce::Slider swingSlider;
   juce::Label volumeLabel;
   juce::Slider volumeSlider;
+  juce::Label currentInstrumentLabel;
+  juce::ComboBox currentInstrumentBox;
   juce::Label ticksPerBeatLabel;
   juce::Slider ticksPerBeatSlider;
   juce::Label ticksPerRowLabel;
@@ -6969,12 +7125,11 @@ private:
   juce::Label sampleSlotLabel;
   juce::ComboBox sampleSlotSelector;
   juce::TextButton sampleLoadButton{"Load WAV"};
-  juce::TextButton sampleAssignButton{"Preview"};
-  juce::TextButton sampleAssignToChannelButton{"Stop Preview"};
-  juce::TextButton sampleRouteKeystationButton{"Keystation >"};
-  juce::TextButton sampleArmButton{"Arm for Notes"};
-  juce::Label sampleArmChannelLabel;
-  juce::ComboBox sampleArmChannelSelector;
+  juce::TextButton sampleAssignButton{"Play"};
+  juce::TextButton sampleAssignToChannelButton{"Stop"};
+  juce::TextButton sampleRouteKeystationButton{"Play from MIDI Keys"};
+  juce::Label sampleInstrumentLabel;
+  juce::TextButton sampleMakeInstrumentButton{"Make Instrument"};
   juce::TextEditor sampleRenameEditor;
   juce::TextButton sampleRenameButton{"Rename"};
   juce::TextButton sampleClearButton{"Clear"};
@@ -7189,7 +7344,15 @@ private:
   ChannelMixerStrip mixerStrip;
   int mixerLastNumChannels = -1;
   juce::Viewport panelViewport;
-  std::unique_ptr<PanelWrapper> panelWrapper;
+  std::unique_ptr<PanelWrapper> songPage;
+  std::unique_ptr<PanelWrapper> instrumentsPage;
+  std::unique_ptr<PanelWrapper> samplesPage;
+  std::unique_ptr<PanelWrapper> editPage;
+  PanelTab activePanelTab = PanelTab::Song;
+  juce::TextButton songTabButton{"Song"};
+  juce::TextButton instrumentsTabButton{"Instruments"};
+  juce::TextButton samplesTabButton{"Samples"};
+  juce::TextButton editTabButton{"Edit"};
   PatternGrid patternGrid;
   bool pianoVisible = true;
   MiniPianoKeyboard pianoKeyboard;
@@ -7257,14 +7420,14 @@ void TrackerMainComponent::saveHelpToFile() {
     "Bsp     remove last typed digit\n"
     "Esc     exit volume mode\n"
     "\n"
-    "=== SAMPLE DIRECT ENTRY ===\n"
-    ";/F4    toggle sample mode (header shows [SMP])\n"
-    "        Type 3 hex chars: sample slot 000-0FF\n"
-    "        e.g. 00A = sample slot 10\n"
+    "=== INSTRUMENT DIRECT ENTRY ===\n"
+    ";/F4    toggle instrument mode (header shows [INS])\n"
+    "        Type 2 hex chars: instrument 00-FF (the note plays that instrument)\n"
+    "        e.g. 0A = instrument 10\n"
     "        Auto-advances by step\n"
-    "Enter   commit partial buffer (zero-pads remaining digits)\n"
-    "Bsp     remove last typed digit (or clear sample if empty)\n"
-    "Esc     exit sample mode\n"
+    "Enter   commit partial buffer (zero-pads to 2 digits)\n"
+    "Bsp     remove last typed digit\n"
+    "Esc     exit instrument mode\n"
     "\n"
     "=== BLOCK EDITING ===\n"
     "Shift+Arrows / Click+Drag  - mark block\n"
@@ -7311,8 +7474,11 @@ void TrackerMainComponent::saveHelpToFile() {
     "Fxx  Set tempo: xx<32 sets ticks/row, xx>=32 sets BPM\n"
     "\n"
     "=== INSTRUMENTS / SAMPLES ===\n"
-    "Per-channel instrument selector - fallback target when no sample slot is armed\n"
-    "Sample bank selector - arms the selected sample slot for new notes\n"
+    "Notes play instruments 00-FF; an instrument is a plugin or a sample\n"
+    "Ins box (toolbar) / Instruments tab slot - instrument written into new notes\n"
+    "Samples tab - sample bank; Make Instrument creates an instrument playing the sample\n"
+    "Replacing an instrument slot that is in use asks first\n"
+    "Per-channel instrument selector - used by Apply Channel Map and MIDI routing\n"
     "Waveform editor - drag green handles for trim start/end selection\n"
     "Apply Trim crops to selection (non-destructive source retained in memory)\n"
     "Normalize / Fade In / Fade Out process the current selection\n"

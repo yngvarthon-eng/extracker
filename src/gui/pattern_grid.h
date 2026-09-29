@@ -116,8 +116,8 @@ private:
   bool fxCommitAutoAdvance = true;
   bool volumeInputMode = false;
   std::string volumeInputBuffer;  // up to 2 hex chars: velocity byte (00-FF, clamped to 1-127)
-  bool sampleInputMode = false;
-  std::string sampleInputBuffer;  // up to 3 hex chars: sample slot (000-0FF)
+  bool instrumentInputMode = false;
+  std::string instrumentInputBuffer;  // up to 2 hex chars: instrument (00-FF)
 
   // Cached snapshot used when the sequencer thread currently owns app.stateMutex.
   int cachedRows = 0;

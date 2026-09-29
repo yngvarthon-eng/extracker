@@ -230,6 +230,8 @@ public:
   int sampleSlotForInstrument(std::uint8_t instrument) const;
   // Lowest sample instrument (builtin.sample) linked to `sampleSlot`, or -1.
   int instrumentForSampleSlot(std::uint16_t sampleSlot) const;
+  // Every sample instrument linked to `sampleSlot`, lowest first.
+  std::vector<int> instrumentsForSampleSlot(std::uint16_t sampleSlot) const;
   bool loadSampleToInstrument(std::uint8_t instrument, const std::string& wavPath);
   bool loadXpmInstrument(const std::string& xpmPath, std::uint8_t instrument);
   bool loadSfzInstrument(const std::string& sfzPath, std::uint8_t instrument);
