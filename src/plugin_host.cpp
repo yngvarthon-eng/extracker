@@ -30,6 +30,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cmath>
 #include <chrono>
@@ -2296,6 +2297,17 @@ public:
   double activeVoiceFrequencyHz(std::size_t /*idx*/) const override { return 0.0; }
 };
 
+// User instrument library folders shared by the sfz/sf2/s3i scan adapters
+// (only used when the adapter's *_PATH env var is unset).
+static void appendUserInstrumentRoots(std::vector<std::string>& searchPaths,
+                                      const std::string& home) {
+  for (const char* sub : {"/Musikk/musicworks/instruments", "/Musikk/instruments",
+                          "/Music/musicworks/instruments", "/Music/instruments",
+                          "/Music/musikk/instruments", "/musikk/instruments"}) {
+    searchPaths.push_back(home + sub);
+  }
+}
+
 // ── SfzScanAdapter (built-in, no sfizz) ────────────────────────────────────
 class BuiltinSfzScanAdapter final : public extracker::IExternalPluginAdapter {
   std::unordered_set<std::string> registered_;
@@ -2322,10 +2334,7 @@ public:
         const std::string h(home);
         searchPaths.push_back(h + "/.local/share/sounds");
         searchPaths.push_back(h + "/.local/share/sfizz");
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
       }
     }
 
@@ -3458,6 +3467,77 @@ private:
     return bundleDirectory / rawValue;
   }
 
+  // Minimal Turtle subject tracking for the line-based parsers below.  Many
+  // bundles (ZynAddSubFX, LSP) put the subject on its own line and
+  // "a lv2:Plugin" on the next, and LSP names subjects with a prefix
+  // ("lsp:compressor_mono") instead of a full <IRI>.
+  using TurtlePrefixes = std::unordered_map<std::string, std::string>;
+
+  // Records "@prefix p: <iri> ." lines; returns true if the line was one.
+  static bool parseTurtlePrefix(const std::string& line, TurtlePrefixes& prefixes) {
+    const std::size_t at = line.find_first_not_of(" \t");
+    if (at == std::string::npos || line.compare(at, 7, "@prefix") != 0) {
+      return false;
+    }
+    std::istringstream parse(line.substr(at + 7));
+    std::string name;
+    parse >> name;
+    if (!name.empty() && name.back() == ':') {
+      name.pop_back();
+      prefixes[name] = firstAngleToken(line);
+    }
+    return true;
+  }
+
+  // The IRI a subject token ("<iri>" or "prefix:local") names, or "".
+  static std::string expandTurtleName(const std::string& token, const TurtlePrefixes& prefixes) {
+    if (token.size() > 2 && token.front() == '<') {
+      const std::size_t end = token.find('>');
+      return end == std::string::npos ? "" : token.substr(1, end - 1);
+    }
+    const std::size_t colon = token.find(':');
+    if (colon == std::string::npos) {
+      return "";
+    }
+    const auto it = prefixes.find(token.substr(0, colon));
+    return it == prefixes.end() ? "" : it->second + token.substr(colon + 1);
+  }
+
+  // A statement's subject starts at column 0; indented lines continue the
+  // previous subject's predicate list.
+  static std::string turtleSubjectOnLine(const std::string& line, const TurtlePrefixes& prefixes) {
+    if (line.empty() || std::isspace(static_cast<unsigned char>(line[0])) ||
+        line[0] == '@' || line[0] == '#' || line[0] == '[') {
+      return "";
+    }
+    std::istringstream parse(line);
+    std::string token;
+    parse >> token;
+    return expandTurtleName(token, prefixes);
+  }
+
+  // True for "a lv2:Plugin"-style lines, but not class definitions such as
+  // midifilter.lv2's "lv2:MIDIPlugin ... rdfs:subClassOf lv2:Plugin".
+  static bool declaresLv2Plugin(const std::string& line) {
+    return line.find("lv2:Plugin") != std::string::npos &&
+           line.find("subClassOf") == std::string::npos;
+  }
+
+  // URI of the plugin declared by a line mentioning lv2:Plugin: the subject
+  // on that line, else a leading <iri>, else the last subject seen.
+  static std::string pluginUriForLine(const std::string& line,
+                                      const std::string& subjectOnLine,
+                                      const std::string& lastSubject) {
+    if (!subjectOnLine.empty()) {
+      return subjectOnLine;
+    }
+    const std::size_t first = line.find_first_not_of(" \t");
+    if (first != std::string::npos && line[first] == '<') {
+      return firstAngleToken(line);
+    }
+    return lastSubject;
+  }
+
   static std::string firstAngleToken(const std::string& line) {
     auto start = line.find('<');
     auto end = line.find('>', start == std::string::npos ? 0 : start + 1);
@@ -3606,6 +3686,9 @@ private:
 
       std::string currentUri;
       bool inPortBlock = false;
+      // Bracket depth inside the current port block: 1 at the port's own
+      // level, deeper inside nested units:unit / lv2:scalePoint blocks.
+      int portDepth = 0;
       int portIndex = -1;
       bool isInput = false;
       bool isOutput = false;
@@ -3618,10 +3701,19 @@ private:
       std::optional<float> portMaxVal;
       std::optional<float> portDefaultVal;
 
+      TurtlePrefixes prefixes;
+      std::string lastSubject;
       std::string line;
       while (std::getline(ttl, line)) {
-        if (line.find("lv2:Plugin") != std::string::npos) {
-          std::string uri = firstAngleToken(line);
+        if (parseTurtlePrefix(line, prefixes)) {
+          continue;
+        }
+        const std::string subject = turtleSubjectOnLine(line, prefixes);
+        if (!subject.empty()) {
+          lastSubject = subject;
+        }
+        if (declaresLv2Plugin(line)) {
+          std::string uri = pluginUriForLine(line, subject, lastSubject);
           if (!uri.empty()) {
             currentUri = uri;
           }
@@ -3642,8 +3734,11 @@ private:
                  l.find("atom:AtomPort") != std::string::npos;
         };
 
+        std::size_t bracketScanFrom = 0;
         if (!inPortBlock && !currentUri.empty() && hasPortBlockStart) {
           inPortBlock = true;
+          portDepth = 0;
+          bracketScanFrom = line.find('[');
           portIndex = parsePortIndexValue(line);
           isInput = (line.find("lv2:InputPort") != std::string::npos);
           isOutput = (line.find("lv2:OutputPort") != std::string::npos);
@@ -3655,7 +3750,7 @@ private:
           portMinVal = parseFloatAfterKey(line, "lv2:minimum");
           portMaxVal = parseFloatAfterKey(line, "lv2:maximum");
           portDefaultVal = parseFloatAfterKey(line, "lv2:default");
-        } else if (inPortBlock) {
+        } else if (inPortBlock && portDepth == 1) {
           int parsedIndex = parsePortIndexValue(line);
           if (parsedIndex >= 0) {
             portIndex = parsedIndex;
@@ -3687,41 +3782,52 @@ private:
 
         }
 
-        // Close the current port block when this line contains ].
-        // Runs after both the if(!inPortBlock) and else-if(inPortBlock) branches,
-        // so single-line [ ... ] ports flush correctly (the if branch sets inPortBlock=true,
-        // then this check immediately flushes it on the same line).
-        if (inPortBlock && line.find(']') != std::string::npos) {
-          applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, isControl, isEvent, portSymbol, portLabel, portMinVal, portMaxVal, portDefaultVal, plugins);
-          inPortBlock = false;
-          portIndex = -1;
-          isInput = false;
-          isOutput = false;
-          isAudio = false;
-          isControl = false;
-          isEvent = false;
-          portSymbol.clear();
-          portLabel.clear();
-          portMinVal = std::nullopt;
-          portMaxVal = std::nullopt;
-          portDefaultVal = std::nullopt;
-          // Handle Turtle "] , [": next port block starts on same line after the ]
-          const std::size_t closeBracket = line.find(']');
-          const std::size_t nextOpen = line.find('[', closeBracket + 1);
-          if (nextOpen != std::string::npos && !currentUri.empty()) {
-            inPortBlock = true;
-            const std::string remainder = line.substr(nextOpen + 1);
-            portIndex = parsePortIndexValue(remainder);
-            isInput  = remainder.find("lv2:InputPort")  != std::string::npos;
-            isOutput = remainder.find("lv2:OutputPort") != std::string::npos;
-            isAudio  = remainder.find("lv2:AudioPort")  != std::string::npos;
-            isControl = remainder.find("lv2:ControlPort") != std::string::npos;
-            isEvent = lineIsEventPort(remainder);
-            portSymbol = parseQuotedStringAfterKey(remainder, "lv2:symbol");
-            portLabel  = parseQuotedStringAfterKey(remainder, "rdfs:label");
-            portMinVal     = parseFloatAfterKey(remainder, "lv2:minimum");
-            portMaxVal     = parseFloatAfterKey(remainder, "lv2:maximum");
-            portDefaultVal = parseFloatAfterKey(remainder, "lv2:default");
+        // Track [ ] depth (ignoring quoted strings) and flush the port when
+        // its own block closes, so nested blocks don't end it early.  Handles
+        // single-line "[ ... ]" ports and Turtle "] , [" continuations.
+        if (inPortBlock) {
+          bool inQuote = false;
+          for (std::size_t i = bracketScanFrom; i < line.size(); ++i) {
+            const char c = line[i];
+            if (c == '"') {
+              inQuote = !inQuote;
+            } else if (inQuote) {
+              continue;
+            } else if (c == '[') {
+              ++portDepth;
+            } else if (c == ']' && --portDepth == 0) {
+              applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, isControl, isEvent, portSymbol, portLabel, portMinVal, portMaxVal, portDefaultVal, plugins);
+              inPortBlock = false;
+              portIndex = -1;
+              isInput = false;
+              isOutput = false;
+              isAudio = false;
+              isControl = false;
+              isEvent = false;
+              portSymbol.clear();
+              portLabel.clear();
+              portMinVal = std::nullopt;
+              portMaxVal = std::nullopt;
+              portDefaultVal = std::nullopt;
+              const std::size_t nextOpen = line.find('[', i + 1);
+              if (nextOpen == std::string::npos || currentUri.empty()) {
+                break;
+              }
+              inPortBlock = true;
+              const std::string remainder = line.substr(nextOpen + 1);
+              portIndex = parsePortIndexValue(remainder);
+              isInput  = remainder.find("lv2:InputPort")  != std::string::npos;
+              isOutput = remainder.find("lv2:OutputPort") != std::string::npos;
+              isAudio  = remainder.find("lv2:AudioPort")  != std::string::npos;
+              isControl = remainder.find("lv2:ControlPort") != std::string::npos;
+              isEvent = lineIsEventPort(remainder);
+              portSymbol = parseQuotedStringAfterKey(remainder, "lv2:symbol");
+              portLabel  = parseQuotedStringAfterKey(remainder, "rdfs:label");
+              portMinVal     = parseFloatAfterKey(remainder, "lv2:minimum");
+              portMaxVal     = parseFloatAfterKey(remainder, "lv2:maximum");
+              portDefaultVal = parseFloatAfterKey(remainder, "lv2:default");
+              i = nextOpen - 1;  // the loop's ++i lands on '[' and counts it
+            }
           }
         }
       }
@@ -3766,11 +3872,20 @@ private:
           continue;
         }
 
+        TurtlePrefixes prefixes;
+        std::string lastSubject;
         std::string currentUri;
         std::string line;
         while (std::getline(manifest, line)) {
-          if (line.find("lv2:Plugin") != std::string::npos || line.find("LV2_PLUGIN") != std::string::npos) {
-            const std::string uri = firstAngleToken(line);
+          if (parseTurtlePrefix(line, prefixes)) {
+            continue;
+          }
+          const std::string subject = turtleSubjectOnLine(line, prefixes);
+          if (!subject.empty()) {
+            lastSubject = subject;
+          }
+          if (declaresLv2Plugin(line) || line.find("LV2_PLUGIN") != std::string::npos) {
+            const std::string uri = pluginUriForLine(line, subject, lastSubject);
             if (!uri.empty()) {
               currentUri = uri;
               if (dedup.insert(uri).second) {
@@ -5191,11 +5306,7 @@ public:
         const std::string h(home);
         searchPaths.push_back(h + "/.local/share/sounds/sf2");
         searchPaths.push_back(h + "/.local/share/soundfonts");
-        // Common user instrument library locations
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
         searchPaths.push_back(h + "/Nedlastinger");
         searchPaths.push_back(h + "/Downloads");
         searchPaths.push_back(h + "/instruments");
@@ -5363,10 +5474,7 @@ public:
         const std::string h(home);
         searchPaths.push_back(h + "/.local/share/sounds");
         searchPaths.push_back(h + "/.local/share/sfizz");
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
       }
     }
 
@@ -5418,10 +5526,7 @@ public:
       const char* home = std::getenv("HOME");
       if (home) {
         const std::string h(home);
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
         searchPaths.push_back(h + "/instruments");
         searchPaths.push_back(h + "/.local/share/instruments");
       }
@@ -5497,10 +5602,7 @@ public:
       const char* home = std::getenv("HOME");
       if (home) {
         const std::string h(home);
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
         searchPaths.push_back(h + "/instruments");
         searchPaths.push_back(h + "/.local/share/instruments");
       }
