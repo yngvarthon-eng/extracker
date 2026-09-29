@@ -1323,6 +1323,9 @@ public:
       panelViewport.setViewPosition(0, targetY);
     });
     patternGrid.setChannelHeaderMenuCallback([this](int ch) { showChannelHeaderMenu(ch); });
+    patternGrid.setRowDoubleClickedCallback([this](int row) {
+      recordStartRowSlider.setValue(row, juce::sendNotificationSync);
+    });
     patternGrid.setSearchNavigationCallback([this](bool forward) {
       findPatternMatch(forward);
     });
@@ -1721,6 +1724,7 @@ public:
         "Shift+O set note-off fadeout (uses current Gate ticks)\n"
         "Del/Bsp clear selected step\n"
         "Right-click  - clear step\n"
+        "Double-click - set Row: (record/step-entry row) to that row\n"
         "\n"
         "=== FX / VOL / INS DIRECT ENTRY ===\n"
         "F2      cycle modes: Normal -> FX -> Volume -> Instrument -> Normal\n"
@@ -7400,6 +7404,7 @@ void TrackerMainComponent::saveHelpToFile() {
     "Shift+O set note-off fadeout (uses current Gate ticks)\n"
     "Del/Bsp clear selected step\n"
     "Right-click  - clear step\n"
+    "Double-click - set Row: (record/step-entry row) to that row\n"
     "\n"
     "=== FX DIRECT ENTRY ===\n"
     "`       toggle FX mode (header shows [FX])\n"

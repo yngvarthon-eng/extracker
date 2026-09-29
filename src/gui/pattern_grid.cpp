@@ -80,6 +80,10 @@ void PatternGrid::setChannelHeaderMenuCallback(std::function<void(int)> callback
   channelHeaderMenuCallback = std::move(callback);
 }
 
+void PatternGrid::setRowDoubleClickedCallback(std::function<void(int)> callback) {
+  rowDoubleClickedCallback = std::move(callback);
+}
+
 void PatternGrid::setClipboardChangedCallback(std::function<void()> callback) {
   clipboardChangedCallback = std::move(callback);
 }
@@ -686,6 +690,29 @@ void PatternGrid::mouseDown(const juce::MouseEvent& event) {
   }
   const bool auditionScrub = event.mods.isAltDown();
 
+  // Double-click on a cell: set the record/step-entry row (toolbar "Row:").
+  // The first click of the pair may have dropped a default note into an
+  // empty cell; take it out again so a double-click never edits the pattern.
+  if (row >= 0 && channel >= 0 && event.getNumberOfClicks() >= 2 && event.mods.isLeftButtonDown()) {
+    if (autoInsertedRow == row && autoInsertedChannel == channel) {
+      std::unique_lock<std::mutex> lock(app.stateMutex, std::defer_lock);
+      if (lockStateWithRetry(lock)) {
+        app.module.currentEditor().clearStep(row, channel);
+      }
+    }
+    autoInsertedRow = -1;
+    autoInsertedChannel = -1;
+    selectCell(row, channel);
+    refreshSnapshot();
+    repaintCell(row, channel);
+    if (rowDoubleClickedCallback) {
+      rowDoubleClickedCallback(row);
+    }
+    return;
+  }
+  autoInsertedRow = -1;
+  autoInsertedChannel = -1;
+
   if (row >= 0 && channel >= 0) {
     grabKeyboardFocus();
     selectCell(row, channel);
@@ -710,6 +737,8 @@ void PatternGrid::mouseDown(const juce::MouseEvent& event) {
         const std::uint8_t instrument = insertInstrument(app);
         app.module.currentEditor().insertNote(row, targetChannel, 60, instrument, insertGateTicks, insertVelocity, true);
         app.module.currentEditor().setSample(row, targetChannel, 0xFFFF);
+        autoInsertedRow = row;
+        autoInsertedChannel = targetChannel;
         lock.unlock();
         previewPlacedNote(instrument, 60, insertVelocity);
         refreshSnapshot();

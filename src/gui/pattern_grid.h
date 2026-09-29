@@ -32,6 +32,8 @@ public:
   void setSearchNavigationCallback(std::function<void(bool)> callback);
   // Right-click on a channel header.
   void setChannelHeaderMenuCallback(std::function<void(int)> callback);
+  // Called with the row of a double-clicked cell.
+  void setRowDoubleClickedCallback(std::function<void(int)> callback);
   // Copy, cut, slot selection or clearing changed the clipboard history.
   void setClipboardChangedCallback(std::function<void()> callback);
   const extracker::ClipboardHistory& clipboardHistory() const { return clipboardHistory_; }
@@ -96,6 +98,11 @@ private:
   std::function<void()> focusModuleMessageCallback;
   std::function<void(bool)> searchNavigationCallback;
   std::function<void(int)> channelHeaderMenuCallback;
+  std::function<void(int)> rowDoubleClickedCallback;
+  // Cell that the last left-click filled with a default note, so the second
+  // click of a double-click can take that note out again.
+  int autoInsertedRow = -1;
+  int autoInsertedChannel = -1;
   std::uint32_t insertGateTicks = 0;
   std::uint8_t insertVelocity = 100;
   std::uint32_t previewDurationMs = 160;
