@@ -370,6 +370,8 @@ plays a sample from the sample bank. Pattern cells show the note's 2-digit instr
   that slot again; they keep their own settings (gain, root, loop). The same happens when a
   song's sample file is missing: load the WAV into that sample slot and the instrument is back.
 - Assigning a plugin or instrument file to a slot that is in use asks before replacing it.
+- **Clear Instrument** (Instruments tab) empties the selected slot after asking; notes that use it
+  fall silent and a sample it played stays in the sample bank.
 - Songs from older versions, where a note could pick a sample through its sample column or by
   sharing its number with a sample slot, are converted when loaded; the status line says so.
 
@@ -445,7 +447,7 @@ plays each sample, e.g. `S003 - kick (I03)`.
 | Make Instrument | Create an instrument that plays this sample (if none does) |
 | Play from MIDI Keys | Play the sample's instrument from the MIDI keyboard |
 | Rename | Set a display name for this slot |
-| Clear | Remove the sample; its instruments fall silent until the slot is loaded again |
+| Clear | Remove the sample (asks first if instruments play it); they fall silent until the slot is loaded again |
 
 ### Waveform Editor
 

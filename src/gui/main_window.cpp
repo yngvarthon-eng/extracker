@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <sstream>
 #include <vector>
 
@@ -495,6 +496,27 @@ public:
   }
 };
 
+// Floating window hosting a plugin's native editor. The close button asks the
+// owner to close it (the owner detaches the editor, then deletes the window).
+class PluginEditorWindow : public juce::DocumentWindow {
+public:
+  PluginEditorWindow(const juce::String& title, std::function<void()> onCloseRequested)
+      : juce::DocumentWindow(title,
+                             juce::Desktop::getInstance().getDefaultLookAndFeel()
+                                 .findColour(juce::ResizableWindow::backgroundColourId),
+                             juce::DocumentWindow::allButtons),
+        onCloseRequested_(std::move(onCloseRequested)) {}
+
+  void closeButtonPressed() override {
+    if (onCloseRequested_) {
+      onCloseRequested_();
+    }
+  }
+
+private:
+  std::function<void()> onCloseRequested_;
+};
+
 class SampleWaveformView : public juce::Component {
 public:
   void setWaveform(std::vector<float> samples) {
@@ -795,6 +817,14 @@ public:
       return true;
     }
     return false;
+  }
+
+  ~TrackerMainComponent() override {
+    // Detach open plugin editors while their plugins still exist.
+    for (const auto& entry : pluginEditorWindows) {
+      app.plugins.closePluginEditor(static_cast<std::uint8_t>(entry.first));
+    }
+    pluginEditorWindows.clear();
   }
 
   explicit TrackerMainComponent(ExTrackerApp& appIn)
@@ -1138,6 +1168,8 @@ public:
     reparentToPage(*instrumentsPage, assignPluginButton);
     reparentToPage(*instrumentsPage, loadInstrumentFileButton);
     reparentToPage(*instrumentsPage, openPluginEditorButton);
+    instrumentsPage->addAndMakeVisible(clearInstrumentButton);
+    clearInstrumentButton.setTooltip("Empty the selected instrument slot (asks first; notes using it fall silent)");
     reparentToPage(*samplesPage, sampleBankTitle);
     reparentToPage(*samplesPage, sampleSlotLabel);
     reparentToPage(*samplesPage, sampleSlotSelector);
@@ -1811,6 +1843,7 @@ public:
         "Ins box (toolbar) / Instruments tab slot - instrument written into new notes\n"
         "Samples tab - sample bank; Make Instrument creates an instrument playing the sample\n"
         "Replacing an instrument slot that is in use asks first\n"
+        "Clear Instrument / Samples Clear - empty a slot (asks first when it is in use)\n"
         "Set Instrument (Edit tab) - give the notes in the block, or the channel, the selected instrument\n"
         "Waveform editor - drag green handles for trim start/end selection\n"
         "Apply Trim crops to selection (non-destructive source retained in memory)\n"
@@ -2050,39 +2083,129 @@ public:
 
   // Runs `proceed` right away for an empty instrument slot; for an occupied
   // one, first asks whether to replace what is there (and how many notes use it).
+  // Notes in all patterns that play instrument `slot`.
+  int countNotesUsingInstrument(int slot) {
+    const auto index = static_cast<std::uint8_t>(slot);
+    int count = 0;
+    std::lock_guard<std::mutex> lock(app.stateMutex);
+    for (std::size_t p = 0; p < app.module.patternCount(); ++p) {
+      const auto& editor = app.module.patternEditor(p);
+      for (int r = 0; r < static_cast<int>(editor.rows()); ++r) {
+        for (int c = 0; c < static_cast<int>(editor.channels()); ++c) {
+          if (editor.hasNoteAt(r, c) && editor.noteAt(r, c) >= 0 && editor.instrumentAt(r, c) == index) {
+            ++count;
+          }
+        }
+      }
+    }
+    return count;
+  }
+
+  // OK/Cancel box; runs `proceed` on OK.
+  void confirmThen(const juce::String& title, const juce::String& message, const juce::String& okText,
+                   std::function<void()> proceed) {
+    juce::AlertWindow::showOkCancelBox(
+        juce::MessageBoxIconType::QuestionIcon, title, message, okText, "Cancel", this,
+        juce::ModalCallbackFunction::create([proceed = std::move(proceed)](int result) {
+          if (result != 0) {
+            proceed();
+          }
+        }));
+  }
+
   void confirmReplaceInstrument(int slot, std::function<void()> proceed) {
     const auto index = static_cast<std::uint8_t>(slot);
     if (app.plugins.pluginForInstrument(index).empty()) {
       proceed();
       return;
     }
-    int notesUsingSlot = 0;
-    {
-      std::lock_guard<std::mutex> lock(app.stateMutex);
-      for (std::size_t p = 0; p < app.module.patternCount(); ++p) {
-        const auto& editor = app.module.patternEditor(p);
-        for (int r = 0; r < static_cast<int>(editor.rows()); ++r) {
-          for (int c = 0; c < static_cast<int>(editor.channels()); ++c) {
-            if (editor.hasNoteAt(r, c) && editor.noteAt(r, c) >= 0 && editor.instrumentAt(r, c) == index) {
-              ++notesUsingSlot;
-            }
-          }
-        }
-      }
-    }
+    const int notesUsingSlot = countNotesUsingInstrument(slot);
     juce::String message = formatInstrumentHex(slot) + " already holds " + instrumentSlotText(slot).fromFirstOccurrenceOf(" ", false, false) + ".";
     if (notesUsingSlot > 0) {
       message += "\n" + juce::String(notesUsingSlot) + " note(s) use this instrument and will play the new sound.";
     }
     message += "\n\nReplace it? (Choose an empty slot to keep it.)";
-    juce::AlertWindow::showOkCancelBox(
-        juce::MessageBoxIconType::QuestionIcon, "Replace instrument " + formatInstrumentHex(slot) + "?", message,
-        "Replace", "Cancel", this,
-        juce::ModalCallbackFunction::create([proceed = std::move(proceed)](int result) {
-          if (result != 0) {
-            proceed();
-          }
-        }));
+    confirmThen("Replace instrument " + formatInstrumentHex(slot) + "?", message, "Replace",
+                [this, slot, proceed = std::move(proceed)]() {
+                  closePluginEditorWindow(slot);  // the editor belongs to the plugin being replaced
+                  proceed();
+                });
+  }
+
+  // Empties instrument `slot` after asking: its plugin or sample link and all
+  // its per-instrument settings go; notes using it fall silent.
+  void confirmClearInstrument(int slot) {
+    const auto index = static_cast<std::uint8_t>(slot);
+    if (app.plugins.pluginForInstrument(index).empty()) {
+      pluginStatusLabel.setText(formatInstrumentHex(slot) + " is already empty", juce::dontSendNotification);
+      return;
+    }
+    const int notes = countNotesUsingInstrument(slot);
+    juce::String message = "Clear " + formatInstrumentHex(slot) + " (" +
+                           instrumentSlotText(slot).fromFirstOccurrenceOf(" ", false, false) + ")?";
+    message += notes > 0 ? "\n" + juce::String(notes) + " note(s) use it and will be silent."
+                         : juce::String("\nNo notes use it.");
+    if (app.plugins.sampleSlotForInstrument(index) >= 0) {
+      message += "\nThe sample stays in the sample bank.";
+    }
+    confirmThen("Clear instrument " + formatInstrumentHex(slot) + "?", message, "Clear", [this, slot]() {
+      closePluginEditorWindow(slot);
+      const auto u8 = static_cast<std::uint8_t>(slot);
+      app.plugins.clearInstrument(u8);
+      // The audio engine keeps its own copy of the per-instrument settings.
+      app.audio.clearInstrumentEffects(u8);
+      app.audio.clearInstrumentFilter(u8);
+      app.audio.setInstrumentPitch(u8, 0.0f);
+      app.audio.setInstrumentReverbSend(u8, 0.0f);
+      app.audio.setInstrumentDepth(u8, 0.0f);
+      pluginStatusLabel.setText("Cleared " + formatInstrumentHex(slot), juce::dontSendNotification);
+      refreshSlotSelector();
+      refreshParameterSlidersFromSlot();
+      refreshSampleSlotSelector();
+      refreshSampleSlotDetails();
+    });
+  }
+
+  // Clears the selected sample-bank slot, asking first when instruments play it.
+  void confirmClearSample(int sampleSlot) {
+    const auto doClear = [this, sampleSlot]() {
+      const bool cleared = app.plugins.clearSampleSlot(static_cast<std::uint16_t>(sampleSlot));
+      pluginStatusLabel.setText(
+          cleared ? "Cleared sample slot " + formatSampleSlotHex(sampleSlot)
+                  : "Failed clearing sample slot " + formatSampleSlotHex(sampleSlot),
+          juce::dontSendNotification);
+      refreshSlotSelector();
+      refreshSampleSlotSelector();
+      refreshSampleSlotDetails();
+      patternGrid.repaint();
+    };
+    const auto players = instrumentsPlayingSample(sampleSlot);
+    if (players.empty()) {
+      doClear();
+      return;
+    }
+    juce::String playedBy;
+    int notes = 0;
+    for (const int instrument : players) {
+      playedBy += (playedBy.isEmpty() ? "" : ", ") + formatInstrumentHex(instrument);
+      notes += countNotesUsingInstrument(instrument);
+    }
+    juce::String message = formatSampleSlotHex(sampleSlot) + " \"" +
+                           juce::String(app.plugins.sampleNameForSlot(static_cast<std::uint16_t>(sampleSlot))) +
+                           "\" is played by " + playedBy + " (" + juce::String(notes) + " note(s)).";
+    message += "\nThey will be silent until a sample is loaded into " + formatSampleSlotHex(sampleSlot) +
+               " again (they keep their settings).";
+    confirmThen("Clear sample " + formatSampleSlotHex(sampleSlot) + "?", message, "Clear", doClear);
+  }
+
+  // One tracked editor window per instrument slot.
+  void closePluginEditorWindow(int slot) {
+    const auto it = pluginEditorWindows.find(slot);
+    if (it == pluginEditorWindows.end()) {
+      return;
+    }
+    app.plugins.closePluginEditor(static_cast<std::uint8_t>(slot));
+    pluginEditorWindows.erase(it);
   }
 
   void assignSelectedPluginToSlot(int slot) {
@@ -2203,11 +2326,19 @@ public:
         return;
       }
       // Create a native floating window and attach the VST3 IPlugView to it.
-      auto* editorWindow = new juce::DocumentWindow(
-          "Plugin Editor — " + juce::String(app.plugins.pluginForInstrument(instrument)),
-          juce::Desktop::getInstance().getDefaultLookAndFeel()
-              .findColour(juce::ResizableWindow::backgroundColourId),
-          juce::DocumentWindow::allButtons);
+      closePluginEditorWindow(slot);
+      juce::Component::SafePointer<TrackerMainComponent> safeThis(this);
+      auto ownedWindow = std::make_unique<PluginEditorWindow>(
+          "Plugin Editor — " + juce::String(app.plugins.pluginForInstrument(instrument)), [safeThis, slot]() {
+            // Deleting the window from inside its own button callback is not
+            // safe; close it on the next message loop turn.
+            juce::MessageManager::callAsync([safeThis, slot]() {
+              if (safeThis != nullptr) {
+                safeThis->closePluginEditorWindow(slot);
+              }
+            });
+          });
+      auto* editorWindow = ownedWindow.get();
       editorWindow->setUsingNativeTitleBar(true);
       editorWindow->setResizable(true, false);
       editorWindow->centreWithSize(640, 480);
@@ -2227,15 +2358,14 @@ public:
           int w = 640, h = 480;
           app.plugins.getPluginEditorPreferredSize(instrument, w, h);
           editorWindow->setSize(w, h);
+          pluginEditorWindows[slot] = std::move(ownedWindow);
           pluginStatusLabel.setText("Plugin editor opened for slot " + juce::String(slot), juce::dontSendNotification);
         } else {
           app.plugins.closePluginEditor(instrument);
-          delete editorWindow;
           pluginStatusLabel.setText("Failed to attach plugin editor window", juce::dontSendNotification);
         }
       } else {
         app.plugins.closePluginEditor(instrument);
-        delete editorWindow;
         pluginStatusLabel.setText("Failed to create native editor window", juce::dontSendNotification);
       }
     };
@@ -2567,18 +2697,16 @@ public:
 
     sampleClearButton.onClick = [this]() {
       const int selectedSampleSlot = getSelectedSampleSlot();
-      if (selectedSampleSlot < 0) {
-        return;
+      if (selectedSampleSlot >= 0) {
+        confirmClearSample(selectedSampleSlot);
       }
+    };
 
-      const bool cleared = app.plugins.clearSampleSlot(static_cast<std::uint16_t>(selectedSampleSlot));
-      pluginStatusLabel.setText(
-          cleared ? "Cleared sample slot " + formatSampleSlotHex(selectedSampleSlot)
-            : "Failed clearing sample slot " + formatSampleSlotHex(selectedSampleSlot),
-          juce::dontSendNotification);
-      refreshSlotSelector();
-      refreshSampleSlotDetails();
-      patternGrid.repaint();
+    clearInstrumentButton.onClick = [this]() {
+      const int slot = getSelectedSlot();
+      if (slot >= 0) {
+        confirmClearInstrument(slot);
+      }
     };
 
     patternCompareCaptureButton.onClick = [this]() { capturePatternCompareA(); };
@@ -3177,7 +3305,12 @@ public:
     panelArea.removeFromTop(4);
     loadInstrumentFileButton.setBounds(panelArea.removeFromTop(26));
     panelArea.removeFromTop(4);
-    openPluginEditorButton.setBounds(panelArea.removeFromTop(26));
+    {
+      auto row = panelArea.removeFromTop(26);
+      openPluginEditorButton.setBounds(row.removeFromLeft(row.getWidth() / 2 - 2));
+      row.removeFromLeft(4);
+      clearInstrumentButton.setBounds(row);
+    }
 
     panelArea.removeFromTop(12);
     gainLabel.setBounds(panelArea.removeFromTop(20));
@@ -4331,7 +4464,7 @@ private:
     sampleRenameEditor.setTooltip("Edit the display name for the selected sample slot");
     sampleRenameEditor.setTextToShowWhenEmpty("Sample name", juce::Colour(0xFF6A737D));
     sampleRenameButton.setTooltip("Rename the selected sample slot");
-    sampleClearButton.setTooltip("Clear the selected sample slot");
+    sampleClearButton.setTooltip("Clear the selected sample slot (asks first if instruments play it)");
 
     sampleInstrumentLabel.setJustificationType(juce::Justification::centredLeft);
     sampleInstrumentLabel.setTooltip("Notes play instruments; these instruments play the selected sample");
@@ -6867,6 +7000,8 @@ private:
   juce::TextButton removePatternButton{"Remove Pattern"};
   juce::TextButton gridDensityButton;
   juce::TextButton setInstrumentButton{"Set Instrument"};
+  juce::TextButton clearInstrumentButton{"Clear Instrument"};
+  std::map<int, std::unique_ptr<PluginEditorWindow>> pluginEditorWindows;  // by instrument slot
   juce::Slider tempoSlider;
   juce::Label tempoLabel;
   juce::Label swingLabel;
@@ -7272,6 +7407,7 @@ void TrackerMainComponent::saveHelpToFile() {
     "Ins box (toolbar) / Instruments tab slot - instrument written into new notes\n"
     "Samples tab - sample bank; Make Instrument creates an instrument playing the sample\n"
     "Replacing an instrument slot that is in use asks first\n"
+    "Clear Instrument / Samples Clear - empty a slot (asks first when it is in use)\n"
     "Set Instrument (Edit tab) - give the notes in the block, or the channel, the selected instrument\n"
     "Waveform editor - drag green handles for trim start/end selection\n"
     "Apply Trim crops to selection (non-destructive source retained in memory)\n"
