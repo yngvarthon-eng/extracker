@@ -14,6 +14,7 @@
 
 #include "extracker/biquad_filter.hpp"
 #include "extracker/instrument_effects.hpp"
+#include "extracker/instrument_mix.hpp"
 
 namespace extracker {
 
@@ -35,7 +36,7 @@ struct PluginRenderVoice {
   BiquadState filterState;
 };
 
-static constexpr std::size_t kMaxInstrumentSlotsForFilter = 16;
+static constexpr std::size_t kMaxInstrumentSlotsForFilter = kInstrumentSlotCount;
 
 struct PluginRenderState {
   std::mutex mutex;
@@ -122,9 +123,16 @@ struct PluginPortInfo {
   std::vector<PluginControlPortMeta> controlOutMeta;
 };
 
+// Whose playback properties (root note, gain, pan, loop) a sample instrument
+// keeps when it is linked to a sample-bank slot and starts sharing its sample.
+enum class SampleLinkProperties {
+  FromSample,      // the bank sample's (interactive linking)
+  FromInstrument,  // the instrument's own, e.g. just read from a song file
+};
+
 class PluginHost {
 public:
-  static constexpr std::size_t kMaxInstrumentSlots = 16;
+  static constexpr std::size_t kMaxInstrumentSlots = kInstrumentSlotCount;
   static constexpr std::size_t kMaxSampleSlots = 257; // Slots 0..256
   static constexpr std::size_t kMaxEffectSlots = 8;
   using PluginFactory = std::function<std::unique_ptr<IInstrumentPlugin>()>;
@@ -134,6 +142,13 @@ public:
 
   void unloadAll();
   void clearInstrumentSlots();
+  // Empties every instrument slot, resets per-instrument settings (filter,
+  // effects, pitch, depth, reverb send) and restores the startup instruments
+  // (0 = builtin.sine, 1 = builtin.square). Song loaders call this so a song
+  // never inherits the previous song's instruments.
+  void resetInstrumentsToDefaults();
+  // Empties one instrument slot and resets its per-instrument settings.
+  bool clearInstrument(std::uint8_t instrument);
 
   std::string status() const;
   std::vector<std::string> discoverAvailablePlugins() const;
@@ -151,20 +166,18 @@ public:
   std::string pluginForInstrument(std::uint8_t instrument) const;
   bool triggerNoteOn(std::uint8_t instrument, int midiNote, std::uint8_t velocity, bool retrigger);
   bool triggerNoteOff(std::uint8_t instrument, int midiNote);
-  bool triggerNoteOnResolved(std::uint8_t instrument,
-                             std::uint16_t sampleSlot,
-                             int midiNote,
-                             std::uint8_t velocity,
-                             bool retrigger);
-  bool triggerNoteOffResolved(std::uint8_t instrument, std::uint16_t sampleSlot, int midiNote);
+  // Plays a sample-bank slot directly (sample list preview), independent of
+  // any instrument.
+  bool previewSampleNoteOn(std::uint16_t sampleSlot, int midiNote, std::uint8_t velocity);
+  bool previewSampleNoteOff(std::uint16_t sampleSlot, int midiNote);
   void allNotesOff();
   void setTransportContext(const PluginTransportContext& ctx);
   bool renderInterleaved(std::vector<double>& monoBuffer, std::uint32_t sampleRate);
-  // Fills one mono buffer per instrument slot (filter+effects already applied).
-  // Returns true if at least one instrument had active voices.
-  bool renderPerInstrument(
-      std::array<std::vector<double>, kMaxInstrumentSlots>& instrBuffers,
-      std::uint32_t sampleRate);
+  // Renders every assigned instrument into its buffer in `mix` (filter and
+  // effects already applied); unassigned slots are left untouched. The caller
+  // has called mix.beginBlock(frames). Returns true if at least one
+  // instrument had active voices.
+  bool renderPerInstrument(InstrumentMixBuffers& mix, std::uint32_t sampleRate);
   bool setInstrumentParameter(std::uint8_t instrument, const std::string& name, double value);
   double getInstrumentParameter(std::uint8_t instrument, const std::string& name) const;
 
@@ -212,8 +225,13 @@ public:
   std::vector<float> sampleWaveformForSlot(std::uint16_t sampleSlot, std::size_t maxPoints = 2048) const;
   bool setSampleNameForSlot(std::uint16_t sampleSlot, const std::string& name);
   std::string sampleNameForSlot(std::uint16_t sampleSlot) const;
-  bool assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument);
+  bool assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument,
+                                    SampleLinkProperties properties = SampleLinkProperties::FromSample);
   int sampleSlotForInstrument(std::uint8_t instrument) const;
+  // Lowest sample instrument (builtin.sample) linked to `sampleSlot`, or -1.
+  int instrumentForSampleSlot(std::uint16_t sampleSlot) const;
+  // Every sample instrument linked to `sampleSlot`, lowest first.
+  std::vector<int> instrumentsForSampleSlot(std::uint16_t sampleSlot) const;
   bool loadSampleToInstrument(std::uint8_t instrument, const std::string& wavPath);
   bool loadXpmInstrument(const std::string& xpmPath, std::uint8_t instrument);
   bool loadSfzInstrument(const std::string& sfzPath, std::uint8_t instrument);
@@ -233,6 +251,9 @@ public:
   bool saveSampleFromInstrument(std::uint8_t instrument, const std::string& wavPath) const;
   bool clearSampleFromInstrument(std::uint8_t instrument);
   std::string samplePathForInstrument(std::uint8_t instrument) const;
+  // Frames of sample data a builtin.sample instrument would play (0 for other
+  // plugins or an empty sample instrument). Waits for the lock.
+  std::size_t sampleFrameCountForInstrument(std::uint8_t instrument) const;
   std::size_t activeVoiceCountForInstrument(std::uint8_t instrument) const;
   double activeVoiceFrequencyHzForInstrument(std::uint8_t instrument, std::size_t voiceIndex) const;
   std::size_t noteOnEventCount() const;

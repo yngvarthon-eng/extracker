@@ -32,6 +32,8 @@ public:
   void setSearchNavigationCallback(std::function<void(bool)> callback);
   // Right-click on a channel header.
   void setChannelHeaderMenuCallback(std::function<void(int)> callback);
+  // Called with the row of a double-clicked cell.
+  void setRowDoubleClickedCallback(std::function<void(int)> callback);
   // Copy, cut, slot selection or clearing changed the clipboard history.
   void setClipboardChangedCallback(std::function<void()> callback);
   const extracker::ClipboardHistory& clipboardHistory() const { return clipboardHistory_; }
@@ -69,7 +71,6 @@ public:
 private:
   struct PendingPreviewNoteOff {
     std::uint8_t instrument = 0;
-    std::uint16_t sample = 0xFFFF;
     int midiNote = -1;
     std::uint32_t dueMs = 0;
   };
@@ -97,6 +98,11 @@ private:
   std::function<void()> focusModuleMessageCallback;
   std::function<void(bool)> searchNavigationCallback;
   std::function<void(int)> channelHeaderMenuCallback;
+  std::function<void(int)> rowDoubleClickedCallback;
+  // Cell that the last left-click filled with a default note, so the second
+  // click of a double-click can take that note out again.
+  int autoInsertedRow = -1;
+  int autoInsertedChannel = -1;
   std::uint32_t insertGateTicks = 0;
   std::uint8_t insertVelocity = 100;
   std::uint32_t previewDurationMs = 160;
@@ -117,8 +123,8 @@ private:
   bool fxCommitAutoAdvance = true;
   bool volumeInputMode = false;
   std::string volumeInputBuffer;  // up to 2 hex chars: velocity byte (00-FF, clamped to 1-127)
-  bool sampleInputMode = false;
-  std::string sampleInputBuffer;  // up to 3 hex chars: sample slot (000-0FF)
+  bool instrumentInputMode = false;
+  std::string instrumentInputBuffer;  // up to 2 hex chars: instrument (00-FF)
 
   // Cached snapshot used when the sequencer thread currently owns app.stateMutex.
   int cachedRows = 0;
@@ -140,7 +146,7 @@ private:
   void repaintCell(int row, int channel);
   bool refreshSnapshot();
   void timerCallback() override;
-  void previewPlacedNote(std::uint8_t instrument, std::uint16_t sample, int midiNote, std::uint8_t velocity);
+  void previewPlacedNote(std::uint8_t instrument, int midiNote, std::uint8_t velocity);
   void previewSelectedStepIfEnabled(bool force = false);
   void selectCell(int row, int channel, bool preserveBlock = false);
   bool commitNoteFromKeyboard(int midiNote);

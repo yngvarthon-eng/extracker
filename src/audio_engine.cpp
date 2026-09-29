@@ -2,6 +2,7 @@
 #include "extracker/reverb.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -38,6 +39,35 @@
 namespace extracker {
 
 namespace {
+
+// Pan/depth gains of one instrument buffer into the four output channels,
+// computed once per block instead of once per frame.
+struct MixGains {
+  const std::vector<double>* mono = nullptr;
+  double fl = 0.0, fr = 0.0, rl = 0.0, rr = 0.0;
+};
+
+// Fixed capacity so the audio thread never allocates.
+struct MixGainList {
+  std::array<MixGains, kInstrumentSlotCount> items;
+  std::size_t count = 0;
+  const MixGains* begin() const { return items.data(); }
+  const MixGains* end() const { return items.data() + count; }
+};
+
+MixGainList computeMixGains(const InstrumentMixBuffers& mix,
+                            const std::array<double, kInstrumentSlotCount>& pan,
+                            const std::array<double, kInstrumentSlotCount>& depth) {
+  MixGainList list;
+  for (const std::uint8_t fi : mix.active()) {
+    const double panL  = std::sqrt(1.0 - pan[fi]);
+    const double panR  = std::sqrt(pan[fi]);
+    const double front = std::sqrt(1.0 - depth[fi]);
+    const double rear  = std::sqrt(depth[fi]);
+    list.items[list.count++] = {&mix.buffer(fi), panL * front, panR * front, panL * rear, panR * rear};
+  }
+  return list;
+}
 
 struct CaptureState {
   std::mutex mutex;
@@ -166,14 +196,16 @@ private:
     const double attackStep = 1.0 / std::max<double>(config.sampleRate * 0.005, 1.0);
     const double releaseStep = 1.0 / std::max<double>(config.sampleRate * 0.060, 1.0);
 
+    // Allocated once for the lifetime of this render thread.
+    auto mixA = std::make_unique<extracker::InstrumentMixBuffers>();
+
     while (running_.load()) {
       std::shared_ptr<PluginRenderState> activeState = config.pluginRenderState != nullptr
           ? config.pluginRenderState
           : config.toneState;
 
       constexpr std::size_t kMaxInstrA = extracker::kMaxInstrumentSlotsForFilter;
-      std::array<std::vector<double>, kMaxInstrA> instrMonoA;
-      for (auto& b : instrMonoA) b.assign(config.bufferFrames, 0.0);
+      mixA->beginBlock(config.bufferFrames);
       std::array<double, kMaxInstrA> instrPanA;
       instrPanA.fill(0.5);
       std::array<double, kMaxInstrA> instrDepthA;
@@ -181,15 +213,13 @@ private:
       std::size_t totalVoicesA = 0;
 
       const bool renderedByPluginHostA = config.pluginHost != nullptr &&
-          config.pluginHost->renderPerInstrument(instrMonoA, config.sampleRate);
+          config.pluginHost->renderPerInstrument(*mixA, config.sampleRate);
 
       if (renderedByPluginHostA) {
         // Per-instrument depth from the shared render state.
         std::lock_guard<std::mutex> lock(activeState->mutex);
-        for (std::size_t fi = 0; fi < kMaxInstrA; ++fi) {
-          instrDepthA[fi] = (fi < activeState->depthOffsets.size())
-                              ? static_cast<double>(std::clamp(activeState->depthOffsets[fi], 0.0f, 1.0f))
-                              : 0.0;
+        for (const std::uint8_t fi : mixA->active()) {
+          instrDepthA[fi] = static_cast<double>(std::clamp(activeState->depthOffsets[fi], 0.0f, 1.0f));
         }
       } else {
         std::lock_guard<std::mutex> lock(activeState->mutex);
@@ -204,6 +234,7 @@ private:
           const double pitchA = (fi < activeState->pitchSemitones.size())
                                  ? static_cast<double>(activeState->pitchSemitones[fi]) : 0.0;
           const double pitchedHzA = std::max(voice.frequencyHz, 1.0) * std::pow(2.0, pitchA / 12.0);
+          std::vector<double>& voiceBufA = mixA->touch(fi);
           for (std::uint32_t i = 0; i < config.bufferFrames; ++i) {
             voice.phase += twoPi * pitchedHzA / static_cast<double>(config.sampleRate);
             if (voice.phase >= twoPi) voice.phase -= twoPi;
@@ -214,7 +245,7 @@ private:
             s *= voice.level;
             if (fi < activeState->filterParams.size() && activeState->filterParams[fi].isActive())
               s = voice.filterState.process(s, activeState->filterCoeffs[fi]);
-            instrMonoA[fi][i] += s;
+            voiceBufA[i] += s;
           }
           instrPanA[fi]   = std::clamp(voice.pan, 0.0, 1.0);
           instrDepthA[fi] = (fi < activeState->depthOffsets.size())
@@ -226,9 +257,9 @@ private:
             std::remove_if(activeState->voices.begin(), activeState->voices.end(),
                 [](const PluginRenderVoice& v){ return v.releasing && v.level <= 0.0; }),
             activeState->voices.end());
-        for (std::size_t fi = 0; fi < kMaxInstrA; ++fi) {
+        for (const std::uint8_t fi : mixA->active()) {
           if (activeState->effectParams[fi].isActive())
-            applyInstrumentEffects(instrMonoA[fi], activeState->effectParams[fi],
+            applyInstrumentEffects(mixA->touch(fi), activeState->effectParams[fi],
                                     activeState->effectState[fi], static_cast<double>(config.sampleRate));
         }
       }
@@ -247,11 +278,12 @@ private:
         if (reverbParamsA.isActive() && (totalVoicesA > 0 || renderedByPluginHostA)) {
           reverbActiveA = true;
           reverbBusA.assign(config.bufferFrames, 0.0);
-          for (std::size_t fi = 0; fi < kMaxInstrA; ++fi) {
+          for (const std::uint8_t fi : mixA->active()) {
             const float send = config.reverbState->sends[fi];
             if (send > 0.0f) {
+              const std::vector<double>& mono = mixA->buffer(fi);
               for (std::uint32_t i = 0; i < config.bufferFrames; ++i)
-                reverbBusA[i] += instrMonoA[fi][i] * static_cast<double>(send);
+                reverbBusA[i] += mono[i] * static_cast<double>(send);
             }
           }
           for (auto& s : reverbBusA) s *= normA;
@@ -268,18 +300,15 @@ private:
       const double volA = config.globalVolume
                             ? static_cast<double>(std::clamp(config.globalVolume->load(), 0.0f, 2.0f))
                             : 1.0;
+      const auto gainsA = computeMixGains(*mixA, instrPanA, instrDepthA);
       for (std::uint32_t i = 0; i < config.bufferFrames; ++i) {
         double fl = 0.0, fr = 0.0, rl = 0.0, rr = 0.0;
-        for (std::size_t fi = 0; fi < kMaxInstrA; ++fi) {
-          const double s     = instrMonoA[fi][i];
-          const double panL  = std::sqrt(1.0 - instrPanA[fi]);
-          const double panR  = std::sqrt(instrPanA[fi]);
-          const double front = std::sqrt(1.0 - instrDepthA[fi]);
-          const double rear  = std::sqrt(instrDepthA[fi]);
-          fl += s * panL * front;
-          fr += s * panR * front;
-          rl += s * panL * rear;
-          rr += s * panR * rear;
+        for (const MixGains& g : gainsA) {
+          const double s = (*g.mono)[i];
+          fl += s * g.fl;
+          fr += s * g.fr;
+          rl += s * g.rl;
+          rr += s * g.rr;
         }
         double mixedLeft  = (fl + rl * kRearGainA) * normA;
         double mixedRight = (fr + rr * kRearGainA) * normA;
@@ -346,8 +375,10 @@ static void renderFrames4ch(const AudioConfig& config,
       : config.toneState;
 
   constexpr std::size_t kMaxInstr = extracker::kMaxInstrumentSlotsForFilter;
-  std::array<std::vector<double>, kMaxInstr> instrMono;
-  for (auto& b : instrMono) b.assign(numFrames, 0.0);
+  // One set of buffers per audio thread, allocated on its first callback.
+  static thread_local auto mixStorage = std::make_unique<extracker::InstrumentMixBuffers>();
+  extracker::InstrumentMixBuffers& mix = *mixStorage;
+  mix.beginBlock(numFrames);
   std::array<double, kMaxInstr> instrPan;
   instrPan.fill(0.5);
   std::array<double, kMaxInstr> instrDepth;
@@ -357,16 +388,14 @@ static void renderFrames4ch(const AudioConfig& config,
 
   // Plugin host path: renders per-instrument so depth/pan can be applied correctly.
   const bool renderedByPluginHost = config.pluginHost != nullptr &&
-      config.pluginHost->renderPerInstrument(instrMono, config.sampleRate);
+      config.pluginHost->renderPerInstrument(mix, config.sampleRate);
 
   if (renderedByPluginHost) {
     // Per-instrument depth from the shared render state (written by setInstrumentDepth).
     // Pan stays at 0.5 (center) — plugin instruments have no per-voice pan in this path.
     std::lock_guard<std::mutex> lock(activeState->mutex);
-    for (std::size_t fi = 0; fi < kMaxInstr; ++fi) {
-      instrDepth[fi] = (fi < activeState->depthOffsets.size())
-                         ? static_cast<double>(std::clamp(activeState->depthOffsets[fi], 0.0f, 1.0f))
-                         : 0.0;
+    for (const std::uint8_t fi : mix.active()) {
+      instrDepth[fi] = static_cast<double>(std::clamp(activeState->depthOffsets[fi], 0.0f, 1.0f));
     }
   } else {
     // Built-in synthesis path: accumulate per-instrument mono, apply block effects, pan to 4ch.
@@ -383,6 +412,7 @@ static void renderFrames4ch(const AudioConfig& config,
       const double pitch = (fi < activeState->pitchSemitones.size())
                             ? static_cast<double>(activeState->pitchSemitones[fi]) : 0.0;
       const double pitchedHz = std::max(voice.frequencyHz, 1.0) * std::pow(2.0, pitch / 12.0);
+      std::vector<double>& voiceBuf = mix.touch(fi);
       for (std::uint32_t i = 0; i < numFrames; ++i) {
         voice.phase += twoPi * pitchedHz / static_cast<double>(config.sampleRate);
         if (voice.phase >= twoPi) voice.phase -= twoPi;
@@ -393,7 +423,7 @@ static void renderFrames4ch(const AudioConfig& config,
         s *= voice.level;
         if (fi < activeState->filterParams.size() && activeState->filterParams[fi].isActive())
           s = voice.filterState.process(s, activeState->filterCoeffs[fi]);
-        instrMono[fi][i] += s;
+        voiceBuf[i] += s;
       }
       instrPan[fi]   = std::clamp(voice.pan,   0.0, 1.0);
       instrDepth[fi] = (fi < activeState->depthOffsets.size())
@@ -407,9 +437,9 @@ static void renderFrames4ch(const AudioConfig& config,
         [](const PluginRenderVoice& v){ return v.releasing && v.level <= 0.0; }),
         voices.end());
 
-    for (std::size_t fi = 0; fi < kMaxInstr; ++fi) {
+    for (const std::uint8_t fi : mix.active()) {
       if (activeState->effectParams[fi].isActive())
-        applyInstrumentEffects(instrMono[fi], activeState->effectParams[fi],
+        applyInstrumentEffects(mix.touch(fi), activeState->effectParams[fi],
                                 activeState->effectState[fi], static_cast<double>(config.sampleRate));
     }
   }
@@ -433,29 +463,27 @@ static void renderFrames4ch(const AudioConfig& config,
     if (reverbParams.isActive() && (totalVoices > 0 || renderedByPluginHost)) {
       reverbActive = true;
       reverbBus.assign(numFrames, 0.0);
-      for (std::size_t fi = 0; fi < kMaxInstr; ++fi) {
+      for (const std::uint8_t fi : mix.active()) {
         const float send = config.reverbState->sends[fi];
         if (send > 0.0f) {
+          const std::vector<double>& mono = mix.buffer(fi);
           for (std::uint32_t i = 0; i < numFrames; ++i)
-            reverbBus[i] += instrMono[fi][i] * static_cast<double>(send);
+            reverbBus[i] += mono[i] * static_cast<double>(send);
         }
       }
       for (auto& s : reverbBus) s *= norm;
     }
   }
 
+  const auto gains = computeMixGains(mix, instrPan, instrDepth);
   for (std::uint32_t i = 0; i < numFrames; ++i) {
     double fl = 0.0, fr = 0.0, rl = 0.0, rr = 0.0;
-    for (std::size_t fi = 0; fi < kMaxInstr; ++fi) {
-      const double s     = instrMono[fi][i];
-      const double panL  = std::sqrt(1.0 - instrPan[fi]);
-      const double panR  = std::sqrt(instrPan[fi]);
-      const double front = std::sqrt(1.0 - instrDepth[fi]);
-      const double rear  = std::sqrt(instrDepth[fi]);
-      fl += s * panL * front;
-      fr += s * panR * front;
-      rl += s * panL * rear;
-      rr += s * panR * rear;
+    for (const MixGains& g : gains) {
+      const double s = (*g.mono)[i];
+      fl += s * g.fl;
+      fr += s * g.fr;
+      rl += s * g.rl;
+      rr += s * g.rr;
     }
     if (renderedByPluginHost) {
       flOut[i] = static_cast<float>(std::tanh(fl * kPluginSatScale));
@@ -504,8 +532,9 @@ static void renderFrames4ch(const AudioConfig& config,
   }
 }
 
-// Stereo folddown wrapper — for backends that output only 2 channels.
-// Rear channels are mixed into front at -3 dB to maintain loudness.
+#if defined(EXTRACKER_HAVE_PIPEWIRE) || defined(_WIN32)
+// Stereo folddown wrapper — for backends that output only 2 channels
+// (PipeWire, Windows). Rear channels are mixed into front at -3 dB to maintain loudness.
 static void renderFramesToStereo(const AudioConfig& config,
                                   const EnvelopeSteps& env,
                                   float* leftOut, float* rightOut,
@@ -518,6 +547,7 @@ static void renderFramesToStereo(const AudioConfig& config,
     rightOut[i] = std::clamp(rightOut[i] + rr[i] * kRearGain, -1.0f, 1.0f);
   }
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // JACK backend
@@ -1179,13 +1209,13 @@ ReverbParams AudioEngine::getReverbParams() const {
 }
 
 void AudioEngine::setInstrumentReverbSend(std::uint8_t instrument, float send) {
-  if (instrument >= 16 || !impl_->config.reverbState) return;
+  if (instrument >= extracker::kInstrumentSlotCount || !impl_->config.reverbState) return;
   std::lock_guard<std::mutex> lock(impl_->config.reverbState->mutex);
   impl_->config.reverbState->sends[instrument] = std::clamp(send, 0.0f, 1.0f);
 }
 
 float AudioEngine::getInstrumentReverbSend(std::uint8_t instrument) const {
-  if (instrument >= 16 || !impl_->config.reverbState) return 0.0f;
+  if (instrument >= extracker::kInstrumentSlotCount || !impl_->config.reverbState) return 0.0f;
   std::lock_guard<std::mutex> lock(impl_->config.reverbState->mutex);
   return impl_->config.reverbState->sends[instrument];
 }

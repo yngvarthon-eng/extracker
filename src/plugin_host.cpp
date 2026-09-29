@@ -30,6 +30,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cmath>
 #include <chrono>
@@ -540,10 +541,25 @@ protected:
   }
 };
 
+// Sample data plus the per-sample playback properties. A sample-bank slot and
+// every instrument that plays it share one SampleAsset (all access is under the
+// PluginHost mutex); each BuiltinSamplePlugin keeps its own voices.
+struct SampleAsset {
+  SampleData sample;
+  SampleData source;  // as loaded, for trim/restore
+  std::string path;
+  int rootMidiNote = 60;
+  double gain = 1.0;
+  double pan = 0.5;
+  int loopMode = 0;  // 0=none, 1=forward, 2=bidi, 3=sustain
+  std::size_t loopStart = 0;
+  std::size_t loopEnd = std::numeric_limits<std::size_t>::max();
+};
+
 class BuiltinSamplePlugin final : public extracker::IInstrumentPlugin {
 public:
   void noteOn(int midiNote, std::uint8_t velocity, bool retrigger) override {
-    if (sample_.mono.empty() || sample_.sampleRate == 0) {
+    if (a_->sample.mono.empty() || a_->sample.sampleRate == 0) {
       return;
     }
 
@@ -552,8 +568,8 @@ public:
       if (voice.midiNote == midiNote) {
         voice.active = true;
         voice.pos = retrigger ? 0.0 : voice.pos;
-        voice.level = vel * gain_;
-        voice.pitchRatio = std::pow(2.0, static_cast<double>(midiNote - rootMidiNote_) / 12.0);
+        voice.level = vel * a_->gain;
+        voice.pitchRatio = std::pow(2.0, static_cast<double>(midiNote - a_->rootMidiNote) / 12.0);
         return;
       }
     }
@@ -562,8 +578,8 @@ public:
 
     Voice voice;
     voice.midiNote = midiNote;
-    voice.level = vel * gain_;
-    voice.pitchRatio = std::pow(2.0, static_cast<double>(midiNote - rootMidiNote_) / 12.0);
+    voice.level = vel * a_->gain;
+    voice.pitchRatio = std::pow(2.0, static_cast<double>(midiNote - a_->rootMidiNote) / 12.0);
     voices_.push_back(voice);
   }
 
@@ -580,16 +596,16 @@ public:
   }
 
   void renderAdd(std::vector<double>& monoBuffer, std::uint32_t sampleRate) override {
-    if (monoBuffer.empty() || sampleRate == 0 || sample_.mono.empty()) {
+    if (monoBuffer.empty() || sampleRate == 0 || a_->sample.mono.empty()) {
       return;
     }
 
-    const double baseStep = static_cast<double>(sample_.sampleRate) / static_cast<double>(sampleRate);
+    const double baseStep = static_cast<double>(a_->sample.sampleRate) / static_cast<double>(sampleRate);
     const double releaseStep = 1.0 / std::max<double>(static_cast<double>(sampleRate) * 0.03, 1.0);
-    const std::size_t sampleSize = sample_.mono.size();
-    const std::size_t loopEndEff = (loopEnd_ != std::numeric_limits<std::size_t>::max() && loopEnd_ <= sampleSize)
-        ? loopEnd_ : sampleSize;
-    const std::size_t loopStartEff = (loopStart_ < loopEndEff) ? loopStart_ : 0;
+    const std::size_t sampleSize = a_->sample.mono.size();
+    const std::size_t loopEndEff = (a_->loopEnd != std::numeric_limits<std::size_t>::max() && a_->loopEnd <= sampleSize)
+        ? a_->loopEnd : sampleSize;
+    const std::size_t loopStartEff = (a_->loopStart < loopEndEff) ? a_->loopStart : 0;
 
     for (std::size_t frame = 0; frame < monoBuffer.size(); ++frame) {
       double mixed = 0.0;
@@ -601,12 +617,12 @@ public:
         }
 
         // Apply loop wrapping before index computation
-        if (loopMode_ != 0) {
-          if (loopMode_ == 1) {  // forward loop
+        if (a_->loopMode != 0) {
+          if (a_->loopMode == 1) {  // forward loop
             if (voice.pos >= static_cast<double>(loopEndEff)) {
               voice.pos = static_cast<double>(loopStartEff);
             }
-          } else if (loopMode_ == 2) {  // bidirectional
+          } else if (a_->loopMode == 2) {  // bidirectional
             if (voice.direction > 0.0 && voice.pos >= static_cast<double>(loopEndEff)) {
               voice.pos = static_cast<double>(loopEndEff > 0 ? loopEndEff - 1 : 0);
               voice.direction = -1.0;
@@ -614,7 +630,7 @@ public:
               voice.pos = static_cast<double>(loopStartEff);
               voice.direction = 1.0;
             }
-          } else if (loopMode_ == 3) {  // sustain loop
+          } else if (a_->loopMode == 3) {  // sustain loop
             if (!voice.releasing && voice.pos >= static_cast<double>(loopEndEff)) {
               voice.pos = static_cast<double>(loopStartEff);
             }
@@ -634,8 +650,8 @@ public:
         std::size_t nextIdx = std::min(idx + 1, sampleSize - 1);
         const double frac = voice.pos - static_cast<double>(idx);
         const double sampleValue =
-            static_cast<double>(sample_.mono[idx]) * (1.0 - frac) +
-            static_cast<double>(sample_.mono[nextIdx]) * frac;
+            static_cast<double>(a_->sample.mono[idx]) * (1.0 - frac) +
+            static_cast<double>(a_->sample.mono[nextIdx]) * frac;
 
         if (voice.releasing) {
           voice.envelope = std::max(0.0, voice.envelope - releaseStep);
@@ -668,30 +684,30 @@ public:
 
   bool setParameter(const std::string& name, double value) override {
     if (name == "gain") {
-      gain_ = std::clamp(value, 0.0, 2.0);
+      a_->gain = std::clamp(value, 0.0, 2.0);
       return true;
     }
     if (name == "sample_root") {
-      rootMidiNote_ = static_cast<int>(std::clamp(value, 0.0, 127.0));
+      a_->rootMidiNote = static_cast<int>(std::clamp(value, 0.0, 127.0));
       return true;
     }
     if (name == "pan") {
-      pan_ = std::clamp(value, 0.0, 1.0);
+      a_->pan = std::clamp(value, 0.0, 1.0);
       return true;
     }
     if (name == "loop_mode") {
-      loopMode_ = static_cast<int>(std::clamp(value, 0.0, 3.0));
+      a_->loopMode = static_cast<int>(std::clamp(value, 0.0, 3.0));
       return true;
     }
     if (name == "loop_start") {
-      loopStart_ = static_cast<std::size_t>(std::max(value, 0.0));
+      a_->loopStart = static_cast<std::size_t>(std::max(value, 0.0));
       return true;
     }
     if (name == "loop_end") {
       if (value <= 0.0) {
-        loopEnd_ = std::numeric_limits<std::size_t>::max();
+        a_->loopEnd = std::numeric_limits<std::size_t>::max();
       } else {
-        loopEnd_ = static_cast<std::size_t>(value);
+        a_->loopEnd = static_cast<std::size_t>(value);
       }
       return true;
     }
@@ -700,22 +716,22 @@ public:
 
   double getParameter(const std::string& name) const override {
     if (name == "gain") {
-      return gain_;
+      return a_->gain;
     }
     if (name == "sample_root") {
-      return static_cast<double>(rootMidiNote_);
+      return static_cast<double>(a_->rootMidiNote);
     }
     if (name == "pan") {
-      return pan_;
+      return a_->pan;
     }
     if (name == "loop_mode") {
-      return static_cast<double>(loopMode_);
+      return static_cast<double>(a_->loopMode);
     }
     if (name == "loop_start") {
-      return static_cast<double>(loopStart_);
+      return static_cast<double>(a_->loopStart);
     }
     if (name == "loop_end") {
-      return (loopEnd_ == std::numeric_limits<std::size_t>::max()) ? 0.0 : static_cast<double>(loopEnd_);
+      return (a_->loopEnd == std::numeric_limits<std::size_t>::max()) ? 0.0 : static_cast<double>(a_->loopEnd);
     }
     return 0.0;
   }
@@ -740,71 +756,71 @@ public:
     if (!loadWavFile(wavPath, loaded)) {
       return false;
     }
-    sourceSample_ = loaded;
-    sample_ = std::move(loaded);
-    samplePath_ = wavPath;
+    a_->source = loaded;
+    a_->sample = std::move(loaded);
+    a_->path = wavPath;
     voices_.clear();
     return true;
   }
 
   bool saveSample(const std::string& wavPath) const {
-    return saveWavFile(wavPath, sample_);
+    return saveWavFile(wavPath, a_->sample);
   }
 
   void clearSample() {
-    sample_ = SampleData{};
-    sourceSample_ = SampleData{};
-    samplePath_.clear();
+    a_->sample = SampleData{};
+    a_->source = SampleData{};
+    a_->path.clear();
     voices_.clear();
   }
 
   std::string samplePath() const {
-    return samplePath_;
+    return a_->path;
   }
 
   std::size_t sampleFrameCount() const {
-    return sample_.mono.size();
+    return a_->sample.mono.size();
   }
 
   std::size_t sourceFrameCount() const {
-    return sourceSample_.mono.size();
+    return a_->source.mono.size();
   }
 
   std::uint32_t sampleRateValue() const {
-    return sample_.sampleRate;
+    return a_->sample.sampleRate;
   }
 
   bool trimFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sourceSample_.mono.empty()) {
+    if (a_->source.mono.empty()) {
       return false;
     }
-    if (startFrame >= endFrameExclusive || endFrameExclusive > sourceSample_.mono.size()) {
+    if (startFrame >= endFrameExclusive || endFrameExclusive > a_->source.mono.size()) {
       return false;
     }
 
-    sample_.mono = std::vector<float>(sourceSample_.mono.begin() + startFrame,
-                                      sourceSample_.mono.begin() + endFrameExclusive);
+    a_->sample.mono = std::vector<float>(a_->source.mono.begin() + startFrame,
+                                      a_->source.mono.begin() + endFrameExclusive);
     voices_.clear();
-    return !sample_.mono.empty();
+    return !a_->sample.mono.empty();
   }
 
   bool restoreSource() {
-    if (sourceSample_.mono.empty()) {
+    if (a_->source.mono.empty()) {
       return false;
     }
-    sample_ = sourceSample_;
+    a_->sample = a_->source;
     voices_.clear();
     return true;
   }
 
   bool normalizeFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (a_->sample.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
 
     float maxAbs = 0.0f;
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
-      maxAbs = std::max(maxAbs, std::abs(sample_.mono[i]));
+      maxAbs = std::max(maxAbs, std::abs(a_->sample.mono[i]));
     }
     if (maxAbs <= 0.000001f) {
       return false;
@@ -812,55 +828,55 @@ public:
 
     const float gain = 1.0f / maxAbs;
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
-      sample_.mono[i] = std::clamp(sample_.mono[i] * gain, -1.0f, 1.0f);
+      a_->sample.mono[i] = std::clamp(a_->sample.mono[i] * gain, -1.0f, 1.0f);
     }
     return true;
   }
 
   bool fadeInFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (a_->sample.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
     const double denom = std::max<double>(static_cast<double>(endFrameExclusive - startFrame - 1), 1.0);
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
       const double t = static_cast<double>(i - startFrame) / denom;
-      sample_.mono[i] = static_cast<float>(sample_.mono[i] * t);
+      a_->sample.mono[i] = static_cast<float>(a_->sample.mono[i] * t);
     }
     return true;
   }
 
   bool fadeOutFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (a_->sample.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
     const double denom = std::max<double>(static_cast<double>(endFrameExclusive - startFrame - 1), 1.0);
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
       const double t = static_cast<double>(i - startFrame) / denom;
-      sample_.mono[i] = static_cast<float>(sample_.mono[i] * (1.0 - t));
+      a_->sample.mono[i] = static_cast<float>(a_->sample.mono[i] * (1.0 - t));
     }
     return true;
   }
 
   bool reverseFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (a_->sample.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
-    std::reverse(sample_.mono.begin() + startFrame, sample_.mono.begin() + endFrameExclusive);
+    std::reverse(a_->sample.mono.begin() + startFrame, a_->sample.mono.begin() + endFrameExclusive);
     voices_.clear();
     return true;
   }
 
   bool resampleTo(std::uint32_t newRate) {
-    if (sample_.mono.empty() || newRate < 1000 || newRate > 192000) {
+    if (a_->sample.mono.empty() || newRate < 1000 || newRate > 192000) {
       return false;
     }
-    if (newRate == sample_.sampleRate) {
+    if (newRate == a_->sample.sampleRate) {
       return false;
     }
 
-    const std::size_t oldLen = sample_.mono.size();
+    const std::size_t oldLen = a_->sample.mono.size();
     // source-frames advanced per output-frame; >1 when downsampling.
-    const double ratio = static_cast<double>(sample_.sampleRate) / static_cast<double>(newRate);
+    const double ratio = static_cast<double>(a_->sample.sampleRate) / static_cast<double>(newRate);
     const std::size_t newLen = std::max<std::size_t>(
         1, static_cast<std::size_t>(std::llround(static_cast<double>(oldLen) / ratio)));
 
@@ -891,29 +907,29 @@ public:
         if (w == 0.0) continue;
         const std::size_t idx = static_cast<std::size_t>(
             std::clamp<long>(s, 0, static_cast<long>(oldLen) - 1));
-        acc += static_cast<double>(sample_.mono[idx]) * w;
+        acc += static_cast<double>(a_->sample.mono[idx]) * w;
         wsum += w;
       }
       out[i] = (wsum != 0.0) ? static_cast<float>(std::clamp(acc / wsum, -1.0, 1.0)) : 0.0f;
     }
 
-    sample_.mono = std::move(out);
-    sample_.sampleRate = newRate;
+    a_->sample.mono = std::move(out);
+    a_->sample.sampleRate = newRate;
     voices_.clear();
     return true;
   }
 
   bool quantizeBits(int bits, std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || bits < 1 || bits > 32) {
+    if (a_->sample.mono.empty() || bits < 1 || bits > 32) {
       return false;
     }
-    if (startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
     const double levels = std::pow(2.0, bits - 1);
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
-      const double q = std::round(static_cast<double>(sample_.mono[i]) * levels) / levels;
-      sample_.mono[i] = static_cast<float>(std::clamp(q, -1.0, 1.0));
+      const double q = std::round(static_cast<double>(a_->sample.mono[i]) * levels) / levels;
+      a_->sample.mono[i] = static_cast<float>(std::clamp(q, -1.0, 1.0));
     }
     voices_.clear();
     return true;
@@ -923,16 +939,16 @@ public:
   // audio just before loopStart (equal-power crossfade), so wrapping from
   // loopEnd back to loopStart is click-free.
   bool crossfadeLoop(std::size_t lengthFrames) {
-    if (sample_.mono.empty()) {
+    if (a_->sample.mono.empty()) {
       return false;
     }
-    if (loopMode_ != 1 && loopMode_ != 3) {  // forward / sustain only
+    if (a_->loopMode != 1 && a_->loopMode != 3) {  // forward / sustain only
       return false;
     }
-    const std::size_t sampleSize = sample_.mono.size();
-    const std::size_t loopEnd = (loopEnd_ != std::numeric_limits<std::size_t>::max() && loopEnd_ <= sampleSize)
-        ? loopEnd_ : sampleSize;
-    const std::size_t loopStart = loopStart_;
+    const std::size_t sampleSize = a_->sample.mono.size();
+    const std::size_t loopEnd = (a_->loopEnd != std::numeric_limits<std::size_t>::max() && a_->loopEnd <= sampleSize)
+        ? a_->loopEnd : sampleSize;
+    const std::size_t loopStart = a_->loopStart;
     if (loopStart < 1 || loopEnd <= loopStart) {
       return false;
     }
@@ -949,25 +965,52 @@ public:
       const double gIn = std::sin(t * M_PI / 2.0);    // pre-loopStart fades in
       const std::size_t tailIdx = loopEnd - n + i;
       const std::size_t preIdx = loopStart - n + i;
-      const double mixed = static_cast<double>(sample_.mono[tailIdx]) * gOut +
-                           static_cast<double>(sample_.mono[preIdx]) * gIn;
-      sample_.mono[tailIdx] = static_cast<float>(std::clamp(mixed, -1.0, 1.0));
+      const double mixed = static_cast<double>(a_->sample.mono[tailIdx]) * gOut +
+                           static_cast<double>(a_->sample.mono[preIdx]) * gIn;
+      a_->sample.mono[tailIdx] = static_cast<float>(std::clamp(mixed, -1.0, 1.0));
     }
     voices_.clear();
     return true;
   }
 
+  // Play `other`'s sample data and sample properties (shared, not copied), so
+  // edits to the sample-bank slot reach every instrument that uses it.
+  void shareSampleWith(const BuiltinSamplePlugin& other) {
+    a_ = other.a_;
+    voices_.clear();
+  }
+
+  // Copy the playback properties (root note, gain, pan, loop) of `other`'s
+  // sample into this plugin's sample, leaving the sample data alone.
+  void copySamplePropertiesFrom(const BuiltinSamplePlugin& other) {
+    if (other.a_ == a_) {
+      return;
+    }
+    a_->rootMidiNote = other.a_->rootMidiNote;
+    a_->gain = other.a_->gain;
+    a_->pan = other.a_->pan;
+    a_->loopMode = other.a_->loopMode;
+    a_->loopStart = other.a_->loopStart;
+    a_->loopEnd = other.a_->loopEnd;
+  }
+
+  // Stop sharing: this plugin gets its own, empty sample.
+  void detachSample() {
+    a_ = std::make_shared<SampleAsset>();
+    voices_.clear();
+  }
+
   std::vector<float> waveformPreview(std::size_t maxPoints) const {
-    if (sample_.mono.empty() || maxPoints == 0) {
+    if (a_->sample.mono.empty() || maxPoints == 0) {
       return {};
     }
 
-    const std::size_t points = std::min<std::size_t>(maxPoints, sample_.mono.size());
+    const std::size_t points = std::min<std::size_t>(maxPoints, a_->sample.mono.size());
     std::vector<float> preview(points, 0.0f);
     for (std::size_t i = 0; i < points; ++i) {
-      const double pos = static_cast<double>(i) * static_cast<double>(sample_.mono.size() - 1) /
+      const double pos = static_cast<double>(i) * static_cast<double>(a_->sample.mono.size() - 1) /
                          static_cast<double>(std::max<std::size_t>(points - 1, 1));
-      preview[i] = sample_.mono[static_cast<std::size_t>(std::llround(pos))];
+      preview[i] = a_->sample.mono[static_cast<std::size_t>(std::llround(pos))];
     }
     return preview;
   }
@@ -984,16 +1027,8 @@ private:
     double direction = 1.0;  // 1.0 = forward, -1.0 = reverse (bidirectional loop)
   };
 
-  SampleData sample_;
-  SampleData sourceSample_;
+  std::shared_ptr<SampleAsset> a_ = std::make_shared<SampleAsset>();
   std::vector<Voice> voices_;
-  std::string samplePath_;
-  int rootMidiNote_ = 60;
-  double gain_ = 1.0;
-  double pan_ = 0.5;
-  int loopMode_ = 0;  // 0=none, 1=forward, 2=bidi, 3=sustain
-  std::size_t loopStart_ = 0;
-  std::size_t loopEnd_ = std::numeric_limits<std::size_t>::max();
 };
 
 #ifndef _WIN32  // LV2 is not supported on Windows
@@ -1058,6 +1093,7 @@ struct Lv2UridMapData {
 struct Lv2UridRegistry {
   std::mutex mutex;
   std::unordered_map<std::string, Lv2Urid> ids;
+  std::unordered_map<Lv2Urid, std::string> uris;  // reverse, for urid:unmap
   Lv2Urid next = 3;  // ids 1 and 2 are reserved for the two URIs below
 };
 
@@ -1081,10 +1117,31 @@ static Lv2Urid staticUridMap(void* /*handle*/, const char* uri) {
   std::lock_guard<std::mutex> lock(registry.mutex);
   auto [it, inserted] = registry.ids.emplace(std::string(view), registry.next);
   if (inserted) {
+    registry.uris.emplace(registry.next, it->first);
     registry.next += 1;
   }
   return it->second;
 }
+
+static const char* staticUridUnmap(void* /*handle*/, Lv2Urid urid) {
+  if (urid == kUridAtomSequence) {
+    return "http://lv2plug.in/ns/ext/atom#Sequence";
+  }
+  if (urid == kUridMidiEvent) {
+    return "http://lv2plug.in/ns/ext/midi#MidiEvent";
+  }
+  auto& registry = uridRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  const auto it = registry.uris.find(urid);
+  return it == registry.uris.end() ? nullptr : it->second.c_str();  // node-stable
+}
+
+struct Lv2UridUnmapData {
+  void* handle;
+  const char* (*unmap)(void* handle, Lv2Urid urid);
+};
+
+static Lv2UridUnmapData kStaticUridUnmapData{nullptr, staticUridUnmap};
 
 static Lv2UridMapData kStaticUridMapData{nullptr, staticUridMap};
 
@@ -1113,6 +1170,153 @@ struct Lv2Descriptor {
 };
 
 using Lv2DescriptorFunction = const Lv2Descriptor* (*)(std::uint32_t index);
+
+// ── Host features offered to every LV2 instance ─────────────────────────────
+// urid:map/unmap, options (sample rate, block lengths, sequence size),
+// buf-size:boundedBlockLength and worker:schedule. Plugins that list one of
+// these as lv2:requiredFeature (ZynAddSubFX, the LSP samplers, ...) refuse to
+// instantiate without it. Mirrors of the C structs in lv2/options/options.h
+// and lv2/worker/worker.h.
+
+struct Lv2OptionsOption {
+  std::uint32_t context;  // 0 = LV2_OPTIONS_INSTANCE
+  std::uint32_t subject;
+  Lv2Urid key;
+  std::uint32_t size;
+  Lv2Urid type;
+  const void* value;
+};
+
+using Lv2WorkerStatus = int;  // 0 = success, 1 = unknown error
+using Lv2WorkerRespondFunction = Lv2WorkerStatus (*)(void* handle, std::uint32_t size, const void* data);
+
+struct Lv2WorkerSchedule {
+  void* handle;
+  Lv2WorkerStatus (*scheduleWork)(void* handle, std::uint32_t size, const void* data);
+};
+
+struct Lv2WorkerInterface {
+  Lv2WorkerStatus (*work)(Lv2Handle instance, Lv2WorkerRespondFunction respond, void* handle,
+                          std::uint32_t size, const void* data);
+  Lv2WorkerStatus (*workResponse)(Lv2Handle instance, std::uint32_t size, const void* body);
+  Lv2WorkerStatus (*endRun)(Lv2Handle instance);
+};
+
+// Owns the feature list for one plugin instance; must outlive the instance.
+// The worker runs jobs synchronously: work() is called as soon as the plugin
+// schedules it (from inside run(), as jalv does when not threaded) and the
+// responses are handed back after run() returns (deliverWorkerResponses).
+class Lv2HostFeatures {
+public:
+  static constexpr std::uint32_t kMaxBlockLength = 8192;
+  static constexpr std::int32_t kSequenceSize = 4096;
+
+  // Call before instantiate(). `bundlePath` is the plugin's bundle directory.
+  const Lv2Feature* const* prepare(double sampleRate, std::uint32_t maxBlockLength) {
+    sampleRate_ = static_cast<float>(sampleRate);
+    minBlockLength_ = 1;
+    maxBlockLength_ = static_cast<std::int32_t>(std::max(maxBlockLength, kMaxBlockLength));
+    nominalBlockLength_ = static_cast<std::int32_t>(std::min(maxBlockLength, kMaxBlockLength));
+    sequenceSize_ = kSequenceSize;
+    const Lv2Urid atomInt = staticUridMap(nullptr, "http://lv2plug.in/ns/ext/atom#Int");
+    const Lv2Urid atomFloat = staticUridMap(nullptr, "http://lv2plug.in/ns/ext/atom#Float");
+    options_ = {{
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/lv2core#sampleRate"), sizeof(float), atomFloat, &sampleRate_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/extensions/parameters#sampleRate"), sizeof(float), atomFloat, &sampleRate_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/ext/buf-size#minBlockLength"), sizeof(std::int32_t), atomInt, &minBlockLength_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/ext/buf-size#maxBlockLength"), sizeof(std::int32_t), atomInt, &maxBlockLength_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/ext/buf-size#nominalBlockLength"), sizeof(std::int32_t), atomInt, &nominalBlockLength_},
+        {0, 0, staticUridMap(nullptr, "http://lv2plug.in/ns/ext/buf-size#sequenceSize"), sizeof(std::int32_t), atomInt, &sequenceSize_},
+        {0, 0, 0, 0, 0, nullptr},
+    }};
+    workerSchedule_ = {this, &Lv2HostFeatures::scheduleWork};
+    uridMap_ = {"http://lv2plug.in/ns/ext/urid#map", &kStaticUridMapData};
+    uridUnmap_ = {"http://lv2plug.in/ns/ext/urid#unmap", &kStaticUridUnmapData};
+    optionsFeature_ = {"http://lv2plug.in/ns/ext/options#options", options_.data()};
+    bounded_ = {"http://lv2plug.in/ns/ext/buf-size#boundedBlockLength", nullptr};
+    worker_ = {"http://lv2plug.in/ns/ext/worker#schedule", &workerSchedule_};
+    list_ = {&uridMap_, &uridUnmap_, &optionsFeature_, &bounded_, &worker_, nullptr};
+    return list_.data();
+  }
+
+  std::uint32_t maxBlockLength() const { return static_cast<std::uint32_t>(maxBlockLength_); }
+
+  // Call after instantiate() succeeded.
+  void attach(const Lv2Descriptor* descriptor, Lv2Handle instance) {
+    instance_ = instance;
+    workerInterface_ = nullptr;
+    if (descriptor != nullptr && descriptor->extensionData != nullptr) {
+      workerInterface_ = static_cast<const Lv2WorkerInterface*>(
+          descriptor->extensionData("http://lv2plug.in/ns/ext/worker#interface"));
+    }
+  }
+
+  void detach() {
+    instance_ = nullptr;
+    workerInterface_ = nullptr;
+    responses_.clear();
+  }
+
+  // Call after every run(): hands queued worker responses to the plugin.
+  void deliverWorkerResponses() {
+    if (workerInterface_ == nullptr || instance_ == nullptr) {
+      return;
+    }
+    if (!responses_.empty() && workerInterface_->workResponse != nullptr) {
+      std::vector<std::vector<std::uint8_t>> pending;
+      pending.swap(responses_);
+      for (const auto& response : pending) {
+        workerInterface_->workResponse(instance_, static_cast<std::uint32_t>(response.size()), response.data());
+      }
+    }
+    if (workerInterface_->endRun != nullptr) {
+      workerInterface_->endRun(instance_);
+    }
+  }
+
+private:
+  static Lv2WorkerStatus scheduleWork(void* handle, std::uint32_t size, const void* data) {
+    auto* self = static_cast<Lv2HostFeatures*>(handle);
+    if (self == nullptr || self->workerInterface_ == nullptr || self->workerInterface_->work == nullptr ||
+        self->instance_ == nullptr) {
+      return 1;
+    }
+    return self->workerInterface_->work(self->instance_, &Lv2HostFeatures::respond, self, size, data);
+  }
+
+  static Lv2WorkerStatus respond(void* handle, std::uint32_t size, const void* data) {
+    auto* self = static_cast<Lv2HostFeatures*>(handle);
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    self->responses_.emplace_back(bytes, bytes + size);
+    return 0;
+  }
+
+  float sampleRate_ = 44100.0f;
+  std::int32_t minBlockLength_ = 1;
+  std::int32_t maxBlockLength_ = static_cast<std::int32_t>(kMaxBlockLength);
+  std::int32_t nominalBlockLength_ = 512;
+  std::int32_t sequenceSize_ = kSequenceSize;
+  std::array<Lv2OptionsOption, 7> options_{};
+  Lv2WorkerSchedule workerSchedule_{};
+  Lv2Feature uridMap_{};
+  Lv2Feature uridUnmap_{};
+  Lv2Feature optionsFeature_{};
+  Lv2Feature bounded_{};
+  Lv2Feature worker_{};
+  std::array<const Lv2Feature*, 6> list_{};
+  Lv2Handle instance_ = nullptr;
+  const Lv2WorkerInterface* workerInterface_ = nullptr;
+  std::vector<std::vector<std::uint8_t>> responses_;
+};
+
+// Bundle directory of a plugin binary, with the trailing slash LV2 expects.
+static std::string lv2BundlePath(const std::filesystem::path& binaryPath) {
+  std::string dir = binaryPath.parent_path().string();
+  if (!dir.empty() && dir.back() != '/') {
+    dir += '/';
+  }
+  return dir;
+}
 
 struct Lv2DiscoveredPlugin {
   std::string uri;
@@ -1207,14 +1411,24 @@ public:
   }
 
   void renderAdd(std::vector<double>& monoBuffer, std::uint32_t sampleRate) override {
+    bool notesHeld = false;
+    bool eventsPending = false;
     {
       std::lock_guard<std::mutex> lock(eventsMutex_);
-      if (activePitches_.empty()) {
-        return;  // No note should be sounding — skip rendering entirely.
-        // Any pending note-off events remain in pendingNoteEvents_ and will be
-        // flushed on the next render cycle that follows a new note-on.
-      }
+      notesHeld = !activePitches_.empty();
+      eventsPending = !pendingNoteEvents_.empty();
     }
+    // Render while notes are held, and afterwards until the plugin has gone
+    // quiet (release envelopes, delays) -- this also delivers the note-offs
+    // right away instead of leaving the synth frozen mid-note until the next
+    // note-on. Idle instruments cost nothing.
+    if (notesHeld) {
+      tailFramesRemaining_ = static_cast<std::size_t>(sampleRate) * kMaxTailSeconds;
+      quietFrames_ = 0;
+    } else if (tailFramesRemaining_ == 0 && !eventsPending) {
+      return;
+    }
+
     bool renderedLv2 = false;
     if (sampleRate > 0) {
       renderedLv2 = renderLv2Runtime(monoBuffer, sampleRate);
@@ -1223,6 +1437,19 @@ public:
     // Guarded fallback keeps existing behavior intact when runtime bridge isn't active yet.
     if (!renderedLv2) {
       fallbackSynth_.renderAdd(monoBuffer, sampleRate);
+    }
+
+    if (!notesHeld) {
+      const std::size_t frames = monoBuffer.size();
+      tailFramesRemaining_ = frames >= tailFramesRemaining_ ? 0 : tailFramesRemaining_ - frames;
+      double peak = 0.0;
+      for (const double sample : monoBuffer) {
+        peak = std::max(peak, std::abs(sample));
+      }
+      quietFrames_ = peak < kQuietLevel ? quietFrames_ + frames : 0;
+      if (quietFrames_ >= sampleRate / 4) {  // a quarter second of silence
+        tailFramesRemaining_ = 0;
+      }
     }
   }
 
@@ -1362,6 +1589,7 @@ private:
     if (descriptor_->cleanup != nullptr) {
       descriptor_->cleanup(instance_);
     }
+    hostFeatures_.detach();
 
     instance_ = nullptr;
     runtimeActive_ = false;
@@ -1392,6 +1620,13 @@ private:
   }
 
   bool ensureRuntimeInstance(std::uint32_t sampleRate, std::size_t frameCount) {
+    // The plugin was promised blocks of at most maxBlockLength frames.
+    if (runtimeActive_ && frameCount > hostFeatures_.maxBlockLength()) {
+      shutdownRuntimeInstance();
+    }
+    if (instantiateFailed_) {
+      return false;
+    }
     if (runtimeActive_) {
       if (audioInputBuffer_.size() != frameCount) {
         audioInputBuffer_.assign(frameCount, 0.0f);
@@ -1411,12 +1646,16 @@ private:
       return false;
     }
 
-    Lv2Feature uridMapFeature{"http://lv2plug.in/ns/ext/urid#map", &kStaticUridMapData};
-    const Lv2Feature* features[] = {&uridMapFeature, nullptr};
-    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), nullptr, features);
+    const std::string bundlePath = lv2BundlePath(binaryPath_);
+    const Lv2Feature* const* features =
+        hostFeatures_.prepare(static_cast<double>(sampleRate), static_cast<std::uint32_t>(frameCount));
+    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), bundlePath.c_str(), features);
     if (instance_ == nullptr) {
+      instantiateFailed_ = true;
+      std::fprintf(stderr, "[lv2] %s failed to start; playing a built-in tone instead\n", uri_.c_str());
       return false;
     }
+    hostFeatures_.attach(descriptor_, instance_);
 
     audioInputBuffer_.assign(frameCount, 0.0f);
     audioOutputBuffer_.assign(frameCount, 0.0f);
@@ -1514,6 +1753,7 @@ private:
     }
 
     descriptor_->run(instance_, static_cast<std::uint32_t>(monoBuffer.size()));
+    hostFeatures_.deliverWorkerResponses();
 
     const bool hasStereo = audioOutputPort2_ >= 0 && audioOutputBufferR_.size() == monoBuffer.size();
     const double scale   = hasStereo ? 0.5 : 1.0;
@@ -1659,6 +1899,12 @@ private:
   std::mutex eventsMutex_;
   bool loaded_;
   bool runtimeActive_ = false;
+  bool instantiateFailed_ = false;  // don't retry every block; warned once
+  static constexpr std::size_t kMaxTailSeconds = 10;
+  static constexpr double kQuietLevel = 1e-4;
+  std::size_t tailFramesRemaining_ = 0;  // frames still rendered after the last note-off
+  std::size_t quietFrames_ = 0;
+  Lv2HostFeatures hostFeatures_;  // must outlive instance_
 };
 
 // ---------------------------------------------------------------------------
@@ -2296,6 +2542,17 @@ public:
   double activeVoiceFrequencyHz(std::size_t /*idx*/) const override { return 0.0; }
 };
 
+// User instrument library folders shared by the sfz/sf2/s3i scan adapters
+// (only used when the adapter's *_PATH env var is unset).
+static void appendUserInstrumentRoots(std::vector<std::string>& searchPaths,
+                                      const std::string& home) {
+  for (const char* sub : {"/Musikk/musicworks/instruments", "/Musikk/instruments",
+                          "/Music/musicworks/instruments", "/Music/instruments",
+                          "/Music/musikk/instruments", "/musikk/instruments"}) {
+    searchPaths.push_back(home + sub);
+  }
+}
+
 // ── SfzScanAdapter (built-in, no sfizz) ────────────────────────────────────
 class BuiltinSfzScanAdapter final : public extracker::IExternalPluginAdapter {
   std::unordered_set<std::string> registered_;
@@ -2322,10 +2579,7 @@ public:
         const std::string h(home);
         searchPaths.push_back(h + "/.local/share/sounds");
         searchPaths.push_back(h + "/.local/share/sfizz");
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
       }
     }
 
@@ -3130,6 +3384,7 @@ public:
     }
 
     descriptor_->run(instance_, static_cast<std::uint32_t>(monoBuffer.size()));
+    hostFeatures_.deliverWorkerResponses();
 
     for (std::size_t i = 0; i < monoBuffer.size(); ++i) {
       const double sample = static_cast<double>(audioOutputBuffer_[i]);
@@ -3194,11 +3449,19 @@ private:
     if (descriptor_->cleanup != nullptr) {
       descriptor_->cleanup(instance_);
     }
+    hostFeatures_.detach();
     instance_ = nullptr;
     runtimeActive_ = false;
   }
 
   bool ensureRuntimeInstance(std::uint32_t sampleRate, std::size_t frameCount) {
+    // The plugin was promised blocks of at most maxBlockLength frames.
+    if (runtimeActive_ && frameCount > hostFeatures_.maxBlockLength()) {
+      shutdownRuntimeInstance();
+    }
+    if (instantiateFailed_) {
+      return false;
+    }
     if (runtimeActive_) {
       audioInputBuffer_.resize(frameCount, 0.0f);
       audioOutputBuffer_.resize(frameCount, 0.0f);
@@ -3209,12 +3472,16 @@ private:
         descriptor_->connectPort == nullptr) {
       return false;
     }
-    Lv2Feature uridMapFeature{"http://lv2plug.in/ns/ext/urid#map", &kStaticUridMapData};
-    const Lv2Feature* features[] = {&uridMapFeature, nullptr};
-    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), nullptr, features);
+    const std::string bundlePath = lv2BundlePath(binaryPath_);
+    const Lv2Feature* const* features =
+        hostFeatures_.prepare(static_cast<double>(sampleRate), static_cast<std::uint32_t>(frameCount));
+    instance_ = descriptor_->instantiate(descriptor_, static_cast<double>(sampleRate), bundlePath.c_str(), features);
     if (instance_ == nullptr) {
+      instantiateFailed_ = true;
+      std::fprintf(stderr, "[lv2] effect %s failed to start; passing audio through\n", uri_.c_str());
       return false;
     }
+    hostFeatures_.attach(descriptor_, instance_);
     audioInputBuffer_.assign(frameCount, 0.0f);
     audioOutputBuffer_.assign(frameCount, 0.0f);
     if (controlInputValues_.size() < controlInputPorts_.size()) {
@@ -3292,6 +3559,8 @@ private:
   std::vector<float> controlOutputValues_;
   bool loaded_;
   bool runtimeActive_;
+  bool instantiateFailed_ = false;  // don't retry every block; warned once
+  Lv2HostFeatures hostFeatures_;  // must outlive instance_
 };
 
 class Lv2ManifestAdapter final : public extracker::IExternalPluginAdapter {
@@ -3458,6 +3727,122 @@ private:
     return bundleDirectory / rawValue;
   }
 
+  // Minimal Turtle subject tracking for the line-based parsers below.  Many
+  // bundles (ZynAddSubFX, LSP) put the subject on its own line and
+  // "a lv2:Plugin" on the next, and LSP names subjects with a prefix
+  // ("lsp:compressor_mono") instead of a full <IRI>.
+  using TurtlePrefixes = std::unordered_map<std::string, std::string>;
+
+  // Records "@prefix p: <iri> ." lines; returns true if the line was one.
+  static bool parseTurtlePrefix(const std::string& line, TurtlePrefixes& prefixes) {
+    const std::size_t at = line.find_first_not_of(" \t");
+    if (at == std::string::npos || line.compare(at, 7, "@prefix") != 0) {
+      return false;
+    }
+    std::istringstream parse(line.substr(at + 7));
+    std::string name;
+    parse >> name;
+    if (!name.empty() && name.back() == ':') {
+      name.pop_back();
+      prefixes[name] = firstAngleToken(line);
+    }
+    return true;
+  }
+
+  // The IRI a subject token ("<iri>" or "prefix:local") names, or "".
+  static std::string expandTurtleName(const std::string& token, const TurtlePrefixes& prefixes) {
+    if (token.size() > 2 && token.front() == '<') {
+      const std::size_t end = token.find('>');
+      return end == std::string::npos ? "" : token.substr(1, end - 1);
+    }
+    const std::size_t colon = token.find(':');
+    if (colon == std::string::npos) {
+      return "";
+    }
+    const auto it = prefixes.find(token.substr(0, colon));
+    return it == prefixes.end() ? "" : it->second + token.substr(colon + 1);
+  }
+
+  // The last significant character of a line, ignoring comments and anything
+  // inside <IRIs> or "strings" (both may contain '#' or '.'); '\0' if none.
+  static char lastTurtleChar(const std::string& line) {
+    char last = '\0';
+    bool inIri = false;
+    bool inString = false;
+    for (std::size_t i = 0; i < line.size(); ++i) {
+      const char c = line[i];
+      if (inString) {
+        if (c == '\\') {
+          ++i;
+        } else if (c == '"') {
+          inString = false;
+          last = c;
+        }
+      } else if (inIri) {
+        if (c == '>') {
+          inIri = false;
+          last = c;
+        }
+      } else if (c == '#') {
+        break;
+      } else if (c == '"') {
+        inString = true;
+      } else if (c == '<') {
+        inIri = true;
+      } else if (!std::isspace(static_cast<unsigned char>(c))) {
+        last = c;
+      }
+    }
+    return last;
+  }
+
+  // Tracks whether the previous Turtle statement was closed with '.', i.e.
+  // whether the next line can start a new statement. Call after each line.
+  static void updateStatementEnd(const std::string& line, bool& statementEnded) {
+    const char last = lastTurtleChar(line);
+    if (last != '\0') {
+      statementEnded = (last == '.');
+    }
+  }
+
+  // A statement's subject starts at column 0 on the first line after the
+  // previous statement ended with '.'; other lines continue the current
+  // statement even when unindented (x42 matrixmixer writes "lv2:port [" at
+  // column 0).
+  static std::string turtleSubjectOnLine(const std::string& line, const TurtlePrefixes& prefixes,
+                                         bool statementEnded) {
+    if (!statementEnded || line.empty() || std::isspace(static_cast<unsigned char>(line[0])) ||
+        line[0] == '@' || line[0] == '#' || line[0] == '[') {
+      return "";
+    }
+    std::istringstream parse(line);
+    std::string token;
+    parse >> token;
+    return expandTurtleName(token, prefixes);
+  }
+
+  // True for "a lv2:Plugin"-style lines, but not class definitions such as
+  // midifilter.lv2's "lv2:MIDIPlugin ... rdfs:subClassOf lv2:Plugin".
+  static bool declaresLv2Plugin(const std::string& line) {
+    return line.find("lv2:Plugin") != std::string::npos &&
+           line.find("subClassOf") == std::string::npos;
+  }
+
+  // URI of the plugin declared by a line mentioning lv2:Plugin: the subject
+  // on that line, else a leading <iri>, else the last subject seen.
+  static std::string pluginUriForLine(const std::string& line,
+                                      const std::string& subjectOnLine,
+                                      const std::string& lastSubject) {
+    if (!subjectOnLine.empty()) {
+      return subjectOnLine;
+    }
+    const std::size_t first = line.find_first_not_of(" \t");
+    if (first != std::string::npos && line[first] == '<') {
+      return firstAngleToken(line);
+    }
+    return lastSubject;
+  }
+
   static std::string firstAngleToken(const std::string& line) {
     auto start = line.find('<');
     auto end = line.find('>', start == std::string::npos ? 0 : start + 1);
@@ -3606,6 +3991,9 @@ private:
 
       std::string currentUri;
       bool inPortBlock = false;
+      // Bracket depth inside the current port block: 1 at the port's own
+      // level, deeper inside nested units:unit / lv2:scalePoint blocks.
+      int portDepth = 0;
       int portIndex = -1;
       bool isInput = false;
       bool isOutput = false;
@@ -3618,10 +4006,30 @@ private:
       std::optional<float> portMaxVal;
       std::optional<float> portDefaultVal;
 
+      TurtlePrefixes prefixes;
+      std::string lastSubject;
+      bool statementEnded = true;
       std::string line;
       while (std::getline(ttl, line)) {
-        if (line.find("lv2:Plugin") != std::string::npos) {
-          std::string uri = firstAngleToken(line);
+        if (parseTurtlePrefix(line, prefixes)) {
+          continue;
+        }
+        const bool canStartStatement = statementEnded;
+        updateStatementEnd(line, statementEnded);
+        const std::string subject = turtleSubjectOnLine(line, prefixes, canStartStatement);
+        if (!subject.empty()) {
+          lastSubject = subject;
+          // A new statement starts. Its ports belong to a plugin only when its
+          // subject is a plugin the manifest declared, whatever class this
+          // file types it with (lsp:sampler_mono is only "a
+          // lv2:InstrumentPlugin"); other subjects (port groups, UIs, ...)
+          // own no ports.
+          const bool isKnownPlugin = std::any_of(plugins.begin(), plugins.end(),
+              [&subject](const Lv2DiscoveredPlugin& plugin) { return plugin.uri == subject; });
+          currentUri = isKnownPlugin ? subject : std::string();
+        }
+        if (declaresLv2Plugin(line)) {
+          std::string uri = pluginUriForLine(line, subject, lastSubject);
           if (!uri.empty()) {
             currentUri = uri;
           }
@@ -3642,8 +4050,11 @@ private:
                  l.find("atom:AtomPort") != std::string::npos;
         };
 
+        std::size_t bracketScanFrom = 0;
         if (!inPortBlock && !currentUri.empty() && hasPortBlockStart) {
           inPortBlock = true;
+          portDepth = 0;
+          bracketScanFrom = line.find('[');
           portIndex = parsePortIndexValue(line);
           isInput = (line.find("lv2:InputPort") != std::string::npos);
           isOutput = (line.find("lv2:OutputPort") != std::string::npos);
@@ -3655,7 +4066,7 @@ private:
           portMinVal = parseFloatAfterKey(line, "lv2:minimum");
           portMaxVal = parseFloatAfterKey(line, "lv2:maximum");
           portDefaultVal = parseFloatAfterKey(line, "lv2:default");
-        } else if (inPortBlock) {
+        } else if (inPortBlock && portDepth == 1) {
           int parsedIndex = parsePortIndexValue(line);
           if (parsedIndex >= 0) {
             portIndex = parsedIndex;
@@ -3687,41 +4098,52 @@ private:
 
         }
 
-        // Close the current port block when this line contains ].
-        // Runs after both the if(!inPortBlock) and else-if(inPortBlock) branches,
-        // so single-line [ ... ] ports flush correctly (the if branch sets inPortBlock=true,
-        // then this check immediately flushes it on the same line).
-        if (inPortBlock && line.find(']') != std::string::npos) {
-          applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, isControl, isEvent, portSymbol, portLabel, portMinVal, portMaxVal, portDefaultVal, plugins);
-          inPortBlock = false;
-          portIndex = -1;
-          isInput = false;
-          isOutput = false;
-          isAudio = false;
-          isControl = false;
-          isEvent = false;
-          portSymbol.clear();
-          portLabel.clear();
-          portMinVal = std::nullopt;
-          portMaxVal = std::nullopt;
-          portDefaultVal = std::nullopt;
-          // Handle Turtle "] , [": next port block starts on same line after the ]
-          const std::size_t closeBracket = line.find(']');
-          const std::size_t nextOpen = line.find('[', closeBracket + 1);
-          if (nextOpen != std::string::npos && !currentUri.empty()) {
-            inPortBlock = true;
-            const std::string remainder = line.substr(nextOpen + 1);
-            portIndex = parsePortIndexValue(remainder);
-            isInput  = remainder.find("lv2:InputPort")  != std::string::npos;
-            isOutput = remainder.find("lv2:OutputPort") != std::string::npos;
-            isAudio  = remainder.find("lv2:AudioPort")  != std::string::npos;
-            isControl = remainder.find("lv2:ControlPort") != std::string::npos;
-            isEvent = lineIsEventPort(remainder);
-            portSymbol = parseQuotedStringAfterKey(remainder, "lv2:symbol");
-            portLabel  = parseQuotedStringAfterKey(remainder, "rdfs:label");
-            portMinVal     = parseFloatAfterKey(remainder, "lv2:minimum");
-            portMaxVal     = parseFloatAfterKey(remainder, "lv2:maximum");
-            portDefaultVal = parseFloatAfterKey(remainder, "lv2:default");
+        // Track [ ] depth (ignoring quoted strings) and flush the port when
+        // its own block closes, so nested blocks don't end it early.  Handles
+        // single-line "[ ... ]" ports and Turtle "] , [" continuations.
+        if (inPortBlock) {
+          bool inQuote = false;
+          for (std::size_t i = bracketScanFrom; i < line.size(); ++i) {
+            const char c = line[i];
+            if (c == '"') {
+              inQuote = !inQuote;
+            } else if (inQuote) {
+              continue;
+            } else if (c == '[') {
+              ++portDepth;
+            } else if (c == ']' && --portDepth == 0) {
+              applyParsedPortBlock(currentUri, portIndex, isInput, isOutput, isAudio, isControl, isEvent, portSymbol, portLabel, portMinVal, portMaxVal, portDefaultVal, plugins);
+              inPortBlock = false;
+              portIndex = -1;
+              isInput = false;
+              isOutput = false;
+              isAudio = false;
+              isControl = false;
+              isEvent = false;
+              portSymbol.clear();
+              portLabel.clear();
+              portMinVal = std::nullopt;
+              portMaxVal = std::nullopt;
+              portDefaultVal = std::nullopt;
+              const std::size_t nextOpen = line.find('[', i + 1);
+              if (nextOpen == std::string::npos || currentUri.empty()) {
+                break;
+              }
+              inPortBlock = true;
+              const std::string remainder = line.substr(nextOpen + 1);
+              portIndex = parsePortIndexValue(remainder);
+              isInput  = remainder.find("lv2:InputPort")  != std::string::npos;
+              isOutput = remainder.find("lv2:OutputPort") != std::string::npos;
+              isAudio  = remainder.find("lv2:AudioPort")  != std::string::npos;
+              isControl = remainder.find("lv2:ControlPort") != std::string::npos;
+              isEvent = lineIsEventPort(remainder);
+              portSymbol = parseQuotedStringAfterKey(remainder, "lv2:symbol");
+              portLabel  = parseQuotedStringAfterKey(remainder, "rdfs:label");
+              portMinVal     = parseFloatAfterKey(remainder, "lv2:minimum");
+              portMaxVal     = parseFloatAfterKey(remainder, "lv2:maximum");
+              portDefaultVal = parseFloatAfterKey(remainder, "lv2:default");
+              i = nextOpen - 1;  // the loop's ++i lands on '[' and counts it
+            }
           }
         }
       }
@@ -3766,11 +4188,23 @@ private:
           continue;
         }
 
+        TurtlePrefixes prefixes;
+        std::string lastSubject;
+        bool statementEnded = true;
         std::string currentUri;
         std::string line;
         while (std::getline(manifest, line)) {
-          if (line.find("lv2:Plugin") != std::string::npos || line.find("LV2_PLUGIN") != std::string::npos) {
-            const std::string uri = firstAngleToken(line);
+          if (parseTurtlePrefix(line, prefixes)) {
+            continue;
+          }
+          const bool canStartStatement = statementEnded;
+          updateStatementEnd(line, statementEnded);
+          const std::string subject = turtleSubjectOnLine(line, prefixes, canStartStatement);
+          if (!subject.empty()) {
+            lastSubject = subject;
+          }
+          if (declaresLv2Plugin(line) || line.find("LV2_PLUGIN") != std::string::npos) {
+            const std::string uri = pluginUriForLine(line, subject, lastSubject);
             if (!uri.empty()) {
               currentUri = uri;
               if (dedup.insert(uri).second) {
@@ -5191,11 +5625,7 @@ public:
         const std::string h(home);
         searchPaths.push_back(h + "/.local/share/sounds/sf2");
         searchPaths.push_back(h + "/.local/share/soundfonts");
-        // Common user instrument library locations
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
         searchPaths.push_back(h + "/Nedlastinger");
         searchPaths.push_back(h + "/Downloads");
         searchPaths.push_back(h + "/instruments");
@@ -5363,10 +5793,7 @@ public:
         const std::string h(home);
         searchPaths.push_back(h + "/.local/share/sounds");
         searchPaths.push_back(h + "/.local/share/sfizz");
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
       }
     }
 
@@ -5418,10 +5845,7 @@ public:
       const char* home = std::getenv("HOME");
       if (home) {
         const std::string h(home);
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
         searchPaths.push_back(h + "/instruments");
         searchPaths.push_back(h + "/.local/share/instruments");
       }
@@ -5497,10 +5921,7 @@ public:
       const char* home = std::getenv("HOME");
       if (home) {
         const std::string h(home);
-        searchPaths.push_back(h + "/Musikk/musicworks/instruments");
-        searchPaths.push_back(h + "/Musikk/instruments");
-        searchPaths.push_back(h + "/Music/musicworks/instruments");
-        searchPaths.push_back(h + "/Music/instruments");
+        appendUserInstrumentRoots(searchPaths, h);
         searchPaths.push_back(h + "/instruments");
         searchPaths.push_back(h + "/.local/share/instruments");
       }
@@ -5591,6 +6012,39 @@ void PluginHost::clearInstrumentSlots() {
   std::lock_guard<std::timed_mutex> lock(mutex_);
   for (auto& p : instrumentPlugins_) p.reset();
   instrumentSlots_.fill({});
+  instrumentSampleSlots_.fill(-1);
+}
+
+void PluginHost::resetInstrumentsToDefaults() {
+  {
+    std::lock_guard<std::timed_mutex> lock(mutex_);
+    for (auto& p : instrumentPlugins_) p.reset();
+    instrumentSlots_.fill({});
+    instrumentSampleSlots_.fill(-1);
+    for (auto& filter : instrumentFilters_) filter = BiquadFilter{};
+    for (auto& effects : instrumentEffects_) effects = InstrumentEffectSlot{};
+    pitchOffsets_.fill(0.0f);
+    reverbSends_.fill(0.0f);
+    depthOffsets_.fill(0.0f);
+  }
+  assignInstrument(0, "builtin.sine");
+  assignInstrument(1, "builtin.square");
+}
+
+bool PluginHost::clearInstrument(std::uint8_t instrument) {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  if (!isValidInstrument(instrument)) {
+    return false;
+  }
+  instrumentPlugins_[instrument].reset();
+  instrumentSlots_[instrument].clear();
+  instrumentSampleSlots_[instrument] = -1;
+  instrumentFilters_[instrument] = BiquadFilter{};
+  instrumentEffects_[instrument] = InstrumentEffectSlot{};
+  pitchOffsets_[instrument] = 0.0f;
+  reverbSends_[instrument] = 0.0f;
+  depthOffsets_[instrument] = 0.0f;
+  return true;
 }
 
 void PluginHost::unloadAll() {
@@ -5760,6 +6214,12 @@ bool PluginHost::assignInstrument(std::uint8_t instrument, const std::string& pl
   instrumentPlugins_[instrument] = std::move(plugin);
   if (pluginId != "builtin.sample") {
     instrumentSampleSlots_[instrument] = -1;
+  } else if (const int linked = instrumentSampleSlots_[instrument]; linked >= 0) {
+    auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get());
+    auto* bankPlugin = asSamplePlugin(sampleSlotPlugins_[static_cast<std::size_t>(linked)].get());
+    if (samplePlugin && bankPlugin) {
+      samplePlugin->shareSampleWith(*bankPlugin);
+    }
   }
   return true;
 }
@@ -5769,20 +6229,13 @@ bool PluginHost::hasInstrumentAssignment(std::uint8_t instrument) const {
   if (!isValidInstrument(instrument)) {
     return false;
   }
-  return !instrumentSlots_[instrument].empty() ||
-         (static_cast<std::size_t>(instrument) < sampleSlotPaths_.size() &&
-          !sampleSlotPaths_[instrument].empty());
+  return !instrumentSlots_[instrument].empty();
 }
 
 std::string PluginHost::pluginForInstrument(std::uint8_t instrument) const {
   std::lock_guard<std::timed_mutex> lock(mutex_);
   if (!isValidInstrument(instrument)) {
     return "";
-  }
-  if (instrumentSlots_[instrument].empty() &&
-      static_cast<std::size_t>(instrument) < sampleSlotPaths_.size() &&
-      !sampleSlotPaths_[instrument].empty()) {
-    return "builtin.sample";
   }
   return instrumentSlots_[instrument];
 }
@@ -5798,34 +6251,19 @@ bool PluginHost::isValidSampleSlot(std::uint16_t sampleSlot) const {
 bool PluginHost::triggerNoteOn(std::uint8_t instrument, int midiNote, std::uint8_t velocity, bool retrigger) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
 
-  if (!isValidInstrument(instrument)) {
+  // A note plays its instrument and nothing else: there is no per-note sample
+  // override and no fallback from an empty instrument slot to the sample-bank
+  // slot with the same number (songs relying on either are converted on load,
+  // see migrateSampleReferences).
+  if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return false;
   }
-
-  if (!instrumentSlots_[instrument].empty() && instrumentPlugins_[instrument]) {
-    auto* sp = asSamplePlugin(instrumentPlugins_[instrument].get());
-    if (sp && sp->sampleFrameCount() == 0) {
-      const int mapped = instrumentSampleSlots_[instrument];
-      const std::uint16_t slot = (mapped >= 0) ? static_cast<std::uint16_t>(mapped)
-                                               : static_cast<std::uint16_t>(instrument);
-      if (isValidSampleSlot(slot) && !sampleSlotPaths_[slot].empty() && sampleSlotPlugins_[slot]) {
-        sampleSlotPlugins_[slot]->noteOn(midiNote, velocity, retrigger);
-        noteOnEventCount_ += 1;
-        return true;
-      }
-    }
-    instrumentPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
-    noteOnEventCount_ += 1;
-    return true;
+  // Apply per-instrument pitch offset (rounded to nearest semitone for MIDI)
+  const int offset = static_cast<int>(std::round(pitchOffsets_[instrument]));
+  if (offset != 0) {
+    midiNote = std::clamp(midiNote + offset, 0, 127);
   }
-
-  if (static_cast<std::size_t>(instrument) >= sampleSlotPlugins_.size() ||
-      sampleSlotPaths_[instrument].empty() ||
-      !sampleSlotPlugins_[instrument]) {
-    return false;
-  }
-
-  sampleSlotPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
+  instrumentPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
   noteOnEventCount_ += 1;
   return true;
 }
@@ -5833,158 +6271,62 @@ bool PluginHost::triggerNoteOn(std::uint8_t instrument, int midiNote, std::uint8
 bool PluginHost::triggerNoteOff(std::uint8_t instrument, int midiNote) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
 
-  if (!isValidInstrument(instrument)) {
+  if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return false;
   }
-
-  if (!instrumentSlots_[instrument].empty() && instrumentPlugins_[instrument]) {
-    auto* sp = asSamplePlugin(instrumentPlugins_[instrument].get());
-    if (sp && sp->sampleFrameCount() == 0) {
-      const int mapped = instrumentSampleSlots_[instrument];
-      const std::uint16_t slot = (mapped >= 0) ? static_cast<std::uint16_t>(mapped)
-                                               : static_cast<std::uint16_t>(instrument);
-      if (isValidSampleSlot(slot) && !sampleSlotPaths_[slot].empty() && sampleSlotPlugins_[slot]) {
-        sampleSlotPlugins_[slot]->noteOff(midiNote);
-        noteOffEventCount_ += 1;
-        return true;
-      }
-    }
-    instrumentPlugins_[instrument]->noteOff(midiNote);
-    noteOffEventCount_ += 1;
-    return true;
+  const int offset = static_cast<int>(std::round(pitchOffsets_[instrument]));
+  if (offset != 0) {
+    midiNote = std::clamp(midiNote + offset, 0, 127);
   }
-
-  if (static_cast<std::size_t>(instrument) >= sampleSlotPlugins_.size() ||
-      sampleSlotPaths_[instrument].empty() ||
-      !sampleSlotPlugins_[instrument]) {
-    return false;
-  }
-
-  sampleSlotPlugins_[instrument]->noteOff(midiNote);
-
+  instrumentPlugins_[instrument]->noteOff(midiNote);
   noteOffEventCount_ += 1;
   return true;
 }
 
-bool PluginHost::triggerNoteOnResolved(std::uint8_t instrument,
-                                       std::uint16_t sampleSlot,
-                                       int midiNote,
-                                       std::uint8_t velocity,
-                                       bool retrigger) {
+bool PluginHost::previewSampleNoteOn(std::uint16_t sampleSlot, int midiNote, std::uint8_t velocity) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
-  // Apply per-instrument pitch offset (rounded to nearest semitone for MIDI)
-  if (instrument < kMaxInstrumentSlotsForFilter) {
-    const int offset = static_cast<int>(std::round(pitchOffsets_[instrument]));
-    if (offset != 0)
-      midiNote = std::clamp(midiNote + offset, 0, 127);
-  }
-
-  // If a pattern step explicitly carries a sample slot, that sample has priority over instrument plugins.
-  if (sampleSlot != 0xFFFF &&
-      isValidSampleSlot(sampleSlot) &&
-      !sampleSlotPaths_[sampleSlot].empty() &&
-      sampleSlotPlugins_[sampleSlot]) {
-    sampleSlotPlugins_[sampleSlot]->noteOn(midiNote, velocity, retrigger);
-    noteOnEventCount_ += 1;
-    return true;
-  }
-
-  // Legacy compatibility: allow instrument column values beyond instrument slots
-  // to address sample slots when no explicit sample field is present.
-  if (!isValidInstrument(instrument)) {
-    const std::uint16_t legacySampleSlot = static_cast<std::uint16_t>(instrument);
-    if (isValidSampleSlot(legacySampleSlot) &&
-        !sampleSlotPaths_[legacySampleSlot].empty() &&
-        sampleSlotPlugins_[legacySampleSlot]) {
-      sampleSlotPlugins_[legacySampleSlot]->noteOn(midiNote, velocity, retrigger);
-      noteOnEventCount_ += 1;
-      return true;
-    }
+  if (!isValidSampleSlot(sampleSlot) || sampleSlotPaths_[sampleSlot].empty() || !sampleSlotPlugins_[sampleSlot]) {
     return false;
   }
-
-  if (!instrumentSlots_[instrument].empty() && instrumentPlugins_[instrument]) {
-    // If this is a builtin.sample with no data (e.g. loaded from a legacy song without
-    // INSTR_SAMPLE_SLOT), fall back to the sample slot — prefer the mapped slot, otherwise
-    // treat the instrument index as the sample slot index.
-    auto* sp = asSamplePlugin(instrumentPlugins_[instrument].get());
-    if (sp && sp->sampleFrameCount() == 0) {
-      const int mapped = instrumentSampleSlots_[instrument];
-      const std::uint16_t slot = (mapped >= 0) ? static_cast<std::uint16_t>(mapped)
-                                               : static_cast<std::uint16_t>(instrument);
-      if (isValidSampleSlot(slot) && !sampleSlotPaths_[slot].empty() && sampleSlotPlugins_[slot]) {
-        sampleSlotPlugins_[slot]->noteOn(midiNote, velocity, retrigger);
-        noteOnEventCount_ += 1;
-        return true;
-      }
-    }
-    instrumentPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
-    noteOnEventCount_ += 1;
-    return true;
-  }
-
-  if (static_cast<std::size_t>(instrument) >= sampleSlotPlugins_.size() ||
-      sampleSlotPaths_[instrument].empty() ||
-      !sampleSlotPlugins_[instrument]) {
-    return false;
-  }
-
-  sampleSlotPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
+  sampleSlotPlugins_[sampleSlot]->noteOn(midiNote, velocity, true);
   noteOnEventCount_ += 1;
   return true;
 }
 
-bool PluginHost::triggerNoteOffResolved(std::uint8_t instrument, std::uint16_t sampleSlot, int midiNote) {
+bool PluginHost::previewSampleNoteOff(std::uint16_t sampleSlot, int midiNote) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
-
-  if (sampleSlot != 0xFFFF &&
-      isValidSampleSlot(sampleSlot) &&
-      !sampleSlotPaths_[sampleSlot].empty() &&
-      sampleSlotPlugins_[sampleSlot]) {
-    sampleSlotPlugins_[sampleSlot]->noteOff(midiNote);
-    noteOffEventCount_ += 1;
-    return true;
-  }
-
-  if (!isValidInstrument(instrument)) {
-    const std::uint16_t legacySampleSlot = static_cast<std::uint16_t>(instrument);
-    if (isValidSampleSlot(legacySampleSlot) &&
-        !sampleSlotPaths_[legacySampleSlot].empty() &&
-        sampleSlotPlugins_[legacySampleSlot]) {
-      sampleSlotPlugins_[legacySampleSlot]->noteOff(midiNote);
-      noteOffEventCount_ += 1;
-      return true;
-    }
+  if (!isValidSampleSlot(sampleSlot) || !sampleSlotPlugins_[sampleSlot]) {
     return false;
   }
-
-  if (!instrumentSlots_[instrument].empty() && instrumentPlugins_[instrument]) {
-    auto* sp = asSamplePlugin(instrumentPlugins_[instrument].get());
-    if (sp && sp->sampleFrameCount() == 0) {
-      const int mapped = instrumentSampleSlots_[instrument];
-      const std::uint16_t slot = (mapped >= 0) ? static_cast<std::uint16_t>(mapped)
-                                               : static_cast<std::uint16_t>(instrument);
-      if (isValidSampleSlot(slot) && !sampleSlotPaths_[slot].empty() && sampleSlotPlugins_[slot]) {
-        sampleSlotPlugins_[slot]->noteOff(midiNote);
-        noteOffEventCount_ += 1;
-        return true;
-      }
-    }
-    instrumentPlugins_[instrument]->noteOff(midiNote);
-    noteOffEventCount_ += 1;
-    return true;
-  }
-
-  if (static_cast<std::size_t>(instrument) >= sampleSlotPlugins_.size() ||
-      sampleSlotPaths_[instrument].empty() ||
-      !sampleSlotPlugins_[instrument]) {
-    return false;
-  }
-
-  sampleSlotPlugins_[instrument]->noteOff(midiNote);
+  sampleSlotPlugins_[sampleSlot]->noteOff(midiNote);
   noteOffEventCount_ += 1;
   return true;
 }
+
+std::vector<int> PluginHost::instrumentsForSampleSlot(std::uint16_t sampleSlot) const {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  std::vector<int> result;
+  for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
+    if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot) &&
+        instrumentSlots_[instrument] == "builtin.sample") {
+      result.push_back(static_cast<int>(instrument));
+    }
+  }
+  return result;
+}
+
+int PluginHost::instrumentForSampleSlot(std::uint16_t sampleSlot) const {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
+    if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot) &&
+        instrumentSlots_[instrument] == "builtin.sample") {
+      return static_cast<int>(instrument);
+    }
+  }
+  return -1;
+}
+
+
 
 void PluginHost::allNotesOff() {
   std::lock_guard<std::timed_mutex> lock(mutex_);
@@ -6055,29 +6397,23 @@ bool PluginHost::renderInterleaved(std::vector<double>& monoBuffer, std::uint32_
   return anyRendered;
 }
 
-bool PluginHost::renderPerInstrument(
-    std::array<std::vector<double>, kMaxInstrumentSlots>& instrBuffers,
-    std::uint32_t sampleRate) {
+bool PluginHost::renderPerInstrument(InstrumentMixBuffers& mix, std::uint32_t sampleRate) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
 
-  if (sampleRate == 0) return false;
-  const std::size_t n = instrBuffers[0].size();
-  if (n == 0) return false;
-
-  for (auto& b : instrBuffers) { b.assign(n, 0.0); }
+  if (sampleRate == 0 || mix.frames() == 0) return false;
+  const std::size_t n = mix.frames();
 
   bool anyRendered = false;
 
   for (std::size_t i = 0; i < instrumentPlugins_.size(); ++i) {
     if (!instrumentPlugins_[i]) continue;
+    std::vector<double>& buffer = mix.touch(i);
     instrumentPlugins_[i]->setTransportContext(transportCtx_, projectTimeSamples_);
-    instrumentPlugins_[i]->renderAdd(instrBuffers[i], sampleRate);
-    const bool hasFilter  = i < instrumentFilters_.size() && instrumentFilters_[i].isActive();
-    const bool hasEffects = i < instrumentEffects_.size() && instrumentEffects_[i].params.isActive();
-    if (hasFilter)
-      instrumentFilters_[i].apply(instrBuffers[i], static_cast<double>(sampleRate));
-    if (hasEffects)
-      applyInstrumentEffects(instrBuffers[i], instrumentEffects_[i].params,
+    instrumentPlugins_[i]->renderAdd(buffer, sampleRate);
+    if (instrumentFilters_[i].isActive())
+      instrumentFilters_[i].apply(buffer, static_cast<double>(sampleRate));
+    if (instrumentEffects_[i].params.isActive())
+      applyInstrumentEffects(buffer, instrumentEffects_[i].params,
                              instrumentEffects_[i].state, static_cast<double>(sampleRate));
     anyRendered = anyRendered || instrumentPlugins_[i]->activeVoiceCount() > 0;
   }
@@ -6085,18 +6421,16 @@ bool PluginHost::renderPerInstrument(
   // Route each sample-slot plugin to the instrument it's assigned to.
   for (std::size_t slot = 0; slot < sampleSlotPlugins_.size(); ++slot) {
     if (!sampleSlotPlugins_[slot] || sampleSlotPaths_[slot].empty()) continue;
-    int assignedInstr = -1;
+    if (sampleSlotPlugins_[slot]->activeVoiceCount() == 0) continue;
+    std::size_t dest = 0;
     for (std::size_t instr = 0; instr < instrumentSampleSlots_.size(); ++instr) {
       if (instrumentSampleSlots_[instr] == static_cast<int>(slot)) {
-        assignedInstr = static_cast<int>(instr);
+        dest = instr;
         break;
       }
     }
-    auto& dest = (assignedInstr >= 0 && assignedInstr < static_cast<int>(instrBuffers.size()))
-                   ? instrBuffers[static_cast<std::size_t>(assignedInstr)]
-                   : instrBuffers[0];
-    sampleSlotPlugins_[slot]->renderAdd(dest, sampleRate);
-    anyRendered = anyRendered || sampleSlotPlugins_[slot]->activeVoiceCount() > 0;
+    sampleSlotPlugins_[slot]->renderAdd(mix.touch(dest), sampleRate);
+    anyRendered = true;
   }
 
   if (transportCtx_.isPlaying) {
@@ -6182,11 +6516,12 @@ float PluginHost::getInstrumentDepth(std::uint8_t instrument) const {
   return depthOffsets_[instrument];
 }
 
+// The parameter accessors are called from the CLI, the GUI message thread and
+// song save/load, never from the audio thread, so they wait for the render
+// lock (at most one audio block). With try_to_lock they used to fail whenever
+// a block was rendering: edits were dropped and saved songs lost parameters.
 bool PluginHost::setInstrumentParameter(std::uint8_t instrument, const std::string& name, double value) {
-  std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
-  if (!lock.owns_lock()) {
-    return false;
-  }
+  std::lock_guard<std::timed_mutex> lock(mutex_);
   if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return false;
   }
@@ -6194,10 +6529,7 @@ bool PluginHost::setInstrumentParameter(std::uint8_t instrument, const std::stri
 }
 
 double PluginHost::getInstrumentParameter(std::uint8_t instrument, const std::string& name) const {
-  std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
-  if (!lock.owns_lock()) {
-    return 0.0;
-  }
+  std::lock_guard<std::timed_mutex> lock(mutex_);
   if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return 0.0;
   }
@@ -6205,8 +6537,8 @@ double PluginHost::getInstrumentParameter(std::uint8_t instrument, const std::st
 }
 
 std::vector<std::string> PluginHost::listInstrumentParameters(std::uint8_t instrument) const {
-  std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
-  if (!lock.owns_lock() || !isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return {};
   }
   return instrumentPlugins_[instrument]->listParameters();
@@ -6313,6 +6645,15 @@ bool PluginHost::loadSampleToSlot(std::uint16_t sampleSlot, const std::string& w
   }
 
   sampleSlotPaths_[sampleSlot] = wavPath;
+  // Instruments still linked to this slot (e.g. after it was unloaded) play
+  // the new sample.
+  for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
+    if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot)) {
+      if (auto* instrumentPlugin = asSamplePlugin(instrumentPlugins_[instrument].get())) {
+        instrumentPlugin->shareSampleWith(*samplePlugin);
+      }
+    }
+  }
   return true;
 }
 
@@ -6349,7 +6690,11 @@ bool PluginHost::clearSampleSlot(std::uint16_t sampleSlot) {
   sampleSlotPlugins_[sampleSlot].reset();
   for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
     if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot)) {
-      instrumentSampleSlots_[instrument] = -1;
+      // Instruments that played this sample stay linked to the bank slot but
+      // fall silent; loading a sample into the slot again brings them back.
+      if (auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get())) {
+        samplePlugin->detachSample();
+      }
     }
   }
   return true;
@@ -6549,7 +6894,8 @@ std::string PluginHost::sampleNameForSlot(std::uint16_t sampleSlot) const {
   return sampleSlotNames_[sampleSlot];
 }
 
-bool PluginHost::assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument) {
+bool PluginHost::assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument,
+                                              SampleLinkProperties properties) {
   std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
   if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot) || !isValidInstrument(instrument)) {
     return false;
@@ -6575,8 +6921,20 @@ bool PluginHost::assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uin
   }
 
   auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get());
-  if (!samplePlugin || !samplePlugin->loadSample(sourcePath)) {
+  auto* bankPlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin || !bankPlugin) {
     return false;
+  }
+  if (properties == SampleLinkProperties::FromInstrument) {
+    // Song files store a sample instrument's root/gain/loop as INSTRUMENT_PARAM
+    // lines ahead of the link; keep them once the instrument plays the bank's
+    // shared sample.
+    BuiltinSamplePlugin saved;
+    saved.copySamplePropertiesFrom(*samplePlugin);
+    samplePlugin->shareSampleWith(*bankPlugin);
+    samplePlugin->copySamplePropertiesFrom(saved);
+  } else {
+    samplePlugin->shareSampleWith(*bankPlugin);
   }
 
   instrumentSampleSlots_[instrument] = static_cast<int>(sampleSlot);
@@ -6614,6 +6972,9 @@ bool PluginHost::loadSampleToInstrument(std::uint8_t instrument, const std::stri
   auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get());
   if (!samplePlugin) {
     return false;
+  }
+  if (instrumentSampleSlots_[instrument] >= 0) {
+    samplePlugin->detachSample();  // don't overwrite the shared bank sample
   }
   const bool loaded = samplePlugin->loadSample(wavPath);
   if (loaded) {
@@ -6873,9 +7234,22 @@ bool PluginHost::clearSampleFromInstrument(std::uint8_t instrument) {
   if (!samplePlugin) {
     return false;
   }
-  samplePlugin->clearSample();
+  if (instrumentSampleSlots_[instrument] >= 0) {
+    samplePlugin->detachSample();  // leave the shared bank sample alone
+  } else {
+    samplePlugin->clearSample();
+  }
   instrumentSampleSlots_[instrument] = -1;
   return true;
+}
+
+std::size_t PluginHost::sampleFrameCountForInstrument(std::uint8_t instrument) const {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  if (!isValidInstrument(instrument)) {
+    return 0;
+  }
+  const auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get());
+  return samplePlugin ? samplePlugin->sampleFrameCount() : 0;
 }
 
 std::string PluginHost::samplePathForInstrument(std::uint8_t instrument) const {
@@ -6910,9 +7284,6 @@ std::size_t PluginHost::activeVoiceCountForInstrument(std::uint8_t instrument) c
   if (instrumentPlugins_[instrument]) {
     return instrumentPlugins_[instrument]->activeVoiceCount();
   }
-  if (static_cast<std::size_t>(instrument) < sampleSlotPlugins_.size() && sampleSlotPlugins_[instrument]) {
-    return sampleSlotPlugins_[instrument]->activeVoiceCount();
-  }
   return 0;
 }
 
@@ -6926,9 +7297,6 @@ double PluginHost::activeVoiceFrequencyHzForInstrument(std::uint8_t instrument, 
   }
   if (instrumentPlugins_[instrument]) {
     return instrumentPlugins_[instrument]->activeVoiceFrequencyHz(voiceIndex);
-  }
-  if (static_cast<std::size_t>(instrument) < sampleSlotPlugins_.size() && sampleSlotPlugins_[instrument]) {
-    return sampleSlotPlugins_[instrument]->activeVoiceFrequencyHz(voiceIndex);
   }
   return 0.0;
 }

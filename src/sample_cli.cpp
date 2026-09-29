@@ -1,7 +1,9 @@
 #include "extracker/sample_cli.hpp"
 
 #include "extracker/cli_parse_utils.hpp"
+#include "extracker/instrument_cli.hpp"
 #include "extracker/sample_editor_utils.hpp"
+#include "extracker/sample_instrument_migration.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -24,6 +26,19 @@ bool tryParseSampleSlot(const std::string& token, int& outSlot) {
   }
   outSlot = static_cast<int>(value);
   return true;
+}
+
+// " (instrument 3)", " (instruments 3, 7)" or " (no instrument)".
+std::string instrumentsSuffix(PluginHost& plugins, int sampleSlot) {
+  const auto instruments = instrumentsPlayingSample(plugins, sampleSlot);
+  if (instruments.empty()) {
+    return " (no instrument)";
+  }
+  std::string text = instruments.size() == 1 ? " (instrument " : " (instruments ";
+  for (std::size_t i = 0; i < instruments.size(); ++i) {
+    text += (i ? ", " : "") + std::to_string(instruments[i]);
+  }
+  return text + ")";
 }
 
 }  // namespace
@@ -56,6 +71,16 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
     plugins.setSampleNameForSlot(static_cast<std::uint16_t>(slot), name);
 
     std::cout << "Sample slot " << slot << " \"" << name << "\": " << wavPath << "\n";
+    // Notes play instruments, so a loaded sample gets its sample instrument:
+    // the one already linked to this slot, else the same number if that
+    // instrument slot has no plugin, else the lowest free slot.
+    const int instrument = ensureSampleInstrument(plugins, static_cast<std::uint16_t>(slot),
+                                                  InstrumentUseMap{}, slot);
+    if (instrument >= 0) {
+      std::cout << "Instrument " << instrument << " plays sample slot " << slot << "\n";
+    } else {
+      std::cout << "No free instrument slot for sample slot " << slot << "\n";
+    }
     return;
   }
 
@@ -77,6 +102,10 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
       std::cout << "Unloaded sample slot " << slot << " (\"" << oldName << "\")\n";
     } else {
       std::cout << "Unloaded sample slot " << slot << "\n";
+    }
+    for (const int instrument : instrumentsPlayingSample(plugins, slot)) {
+      std::cout << "Instrument " << instrument << " is silent until sample slot " << slot
+                << " is loaded again\n";
     }
     return;
   }
@@ -118,15 +147,11 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
       return;
     }
 
-    if (slot > 255) {
-      std::cout << "Sample preview currently supports slots 0-255\n";
-      return;
-    }
     if (plugins.samplePathForSlot(static_cast<std::uint16_t>(slot)).empty()) {
       std::cout << "Sample slot " << slot << " is empty\n";
       return;
     }
-    if (!plugins.triggerNoteOn(static_cast<std::uint8_t>(slot), note, 127, true)) {
+    if (!plugins.previewSampleNoteOn(static_cast<std::uint16_t>(slot), note, 127)) {
       std::cout << "Failed to preview sample slot " << slot << "\n";
       return;
     }
@@ -148,11 +173,7 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
       return;
     }
 
-    if (slot > 255) {
-      std::cout << "Sample preview currently supports slots 0-255\n";
-      return;
-    }
-    if (!plugins.triggerNoteOff(static_cast<std::uint8_t>(slot), note)) {
+    if (!plugins.previewSampleNoteOff(static_cast<std::uint16_t>(slot), note)) {
       std::cout << "Failed to stop sample slot " << slot << "\n";
       return;
     }
@@ -176,7 +197,8 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
       if (path.empty()) {
         std::cout << "Sample slot " << slot << ": empty\n";
       } else {
-        std::cout << "Sample slot " << slot << ": \"" << name << "\" -> " << path << "\n";
+        std::cout << "Sample slot " << slot << ": \"" << name << "\" -> " << path
+                  << instrumentsSuffix(plugins, slot) << "\n";
       }
       return;
     }
@@ -188,7 +210,8 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
       const std::string path = plugins.samplePathForSlot(static_cast<std::uint16_t>(i));
       if (!path.empty()) {
         const std::string name = plugins.sampleNameForSlot(static_cast<std::uint16_t>(i));
-        std::cout << "  [" << i << "] \"" << name << "\" -> " << path << "\n";
+        std::cout << "  [" << i << "] \"" << name << "\" -> " << path
+                  << instrumentsSuffix(plugins, static_cast<int>(i)) << "\n";
         hasAny = true;
       }
     }
@@ -204,7 +227,8 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
   }
 
   std::cout << "Usage: sample <load|unload|rename|play|stop|list|status|edit> ...\n";
-  std::cout << "  sample load <slot> <name> <wav-file>   load a WAV, give it a name\n";
+  std::cout << "Samples live in the sample bank; notes play them through sample instruments.\n";
+  std::cout << "  sample load <slot> <name> <wav-file>   load a WAV, give it a name, create its instrument\n";
   std::cout << "  sample unload <slot>                   unload a sample slot\n";
   std::cout << "  sample rename <slot> <name>            rename a loaded sample\n";
   std::cout << "  sample play <slot> [note]              preview a loaded sample slot\n";

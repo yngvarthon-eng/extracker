@@ -638,9 +638,7 @@ int main() {
     audio.setReverbParams(extracker::ReverbParams{});
     channelHistory.clear();
 
-    for (std::size_t instrument = 0; instrument < extracker::PluginHost::kMaxInstrumentSlots; ++instrument) {
-      plugins.clearSampleFromInstrument(static_cast<std::uint8_t>(instrument));
-    }
+    plugins.resetInstrumentsToDefaults();
     for (std::size_t sampleSlot = 0; sampleSlot < extracker::PluginHost::kMaxSampleSlots; ++sampleSlot) {
       plugins.clearSampleSlot(static_cast<std::uint16_t>(sampleSlot));
     }
@@ -930,7 +928,8 @@ int main() {
           if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots) &&
               sampleSlot >= 0 && sampleSlot < static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
             plugins.assignSampleSlotToInstrument(static_cast<std::uint16_t>(sampleSlot),
-                                                 static_cast<std::uint8_t>(instrSlot));
+                                                 static_cast<std::uint8_t>(instrSlot),
+                                                 extracker::SampleLinkProperties::FromInstrument);
           }
         } else if (tailToken == "INSTRUMENT_PARAM") {
           int instrSlot = -1;

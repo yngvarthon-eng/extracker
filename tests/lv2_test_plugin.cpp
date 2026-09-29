@@ -166,11 +166,146 @@ const Lv2Descriptor kDescriptor = {
     cleanup,
     extensionData};
 
+// ── urn:extracker:test:features ─────────────────────────────────────────────
+// Like a real plugin that lists options, urid:map and worker:schedule as
+// required features (ZynAddSubFX): instantiate() fails without them or without
+// a bundle path. On the first run() it schedules one job on the host's worker;
+// the output is 0.5 once the job's response has come back, 0.1 before.
+
+using Lv2Urid = std::uint32_t;
+
+struct Lv2UridMap {
+  void* handle;
+  Lv2Urid (*map)(void* handle, const char* uri);
+};
+
+struct Lv2OptionsOption {
+  std::uint32_t context;
+  std::uint32_t subject;
+  Lv2Urid key;
+  std::uint32_t size;
+  Lv2Urid type;
+  const void* value;
+};
+
+using WorkerStatus = int;
+using WorkerRespond = WorkerStatus (*)(void* handle, std::uint32_t size, const void* data);
+
+struct Lv2WorkerSchedule {
+  void* handle;
+  WorkerStatus (*scheduleWork)(void* handle, std::uint32_t size, const void* data);
+};
+
+struct Lv2WorkerInterface {
+  WorkerStatus (*work)(Lv2Handle, WorkerRespond, void*, std::uint32_t, const void*);
+  WorkerStatus (*workResponse)(Lv2Handle, std::uint32_t, const void*);
+  WorkerStatus (*endRun)(Lv2Handle);
+};
+
+struct FeaturesState {
+  float* out = nullptr;
+  const Lv2WorkerSchedule* schedule = nullptr;
+  bool scheduled = false;
+  bool responded = false;
+};
+
+const void* findFeature(const Lv2Feature* const* features, const char* uri) {
+  for (; features != nullptr && *features != nullptr; ++features) {
+    if (std::strcmp((*features)->uri, uri) == 0) {
+      return (*features)->data;
+    }
+  }
+  return nullptr;
+}
+
+Lv2Handle featuresInstantiate(const Lv2Descriptor*, double, const char* bundlePath,
+                              const Lv2Feature* const* features) {
+  const auto* map = static_cast<const Lv2UridMap*>(findFeature(features, "http://lv2plug.in/ns/ext/urid#map"));
+  const auto* options =
+      static_cast<const Lv2OptionsOption*>(findFeature(features, "http://lv2plug.in/ns/ext/options#options"));
+  const auto* schedule =
+      static_cast<const Lv2WorkerSchedule*>(findFeature(features, "http://lv2plug.in/ns/ext/worker#schedule"));
+  if (map == nullptr || options == nullptr || schedule == nullptr || bundlePath == nullptr ||
+      bundlePath[0] == '\0') {
+    return nullptr;
+  }
+  const Lv2Urid sampleRateKey = map->map(map->handle, "http://lv2plug.in/ns/extensions/parameters#sampleRate");
+  const Lv2Urid maxBlockKey = map->map(map->handle, "http://lv2plug.in/ns/ext/buf-size#maxBlockLength");
+  bool hasSampleRate = false;
+  bool hasMaxBlock = false;
+  for (const auto* option = options; option->key != 0; ++option) {
+    hasSampleRate = hasSampleRate || (option->key == sampleRateKey && *static_cast<const float*>(option->value) > 0.0f);
+    hasMaxBlock = hasMaxBlock || (option->key == maxBlockKey && *static_cast<const std::int32_t*>(option->value) > 0);
+  }
+  if (!hasSampleRate || !hasMaxBlock) {
+    return nullptr;
+  }
+  auto* state = new FeaturesState();
+  state->schedule = schedule;
+  return state;
+}
+
+void featuresConnectPort(Lv2Handle instance, std::uint32_t port, void* data) {
+  if (port == 0) {
+    static_cast<FeaturesState*>(instance)->out = static_cast<float*>(data);
+  }
+}
+
+void featuresRun(Lv2Handle instance, std::uint32_t sampleCount) {
+  auto* state = static_cast<FeaturesState*>(instance);
+  if (!state->scheduled) {
+    state->scheduled = true;
+    const char job[] = "ping";
+    state->schedule->scheduleWork(state->schedule->handle, sizeof(job), job);
+  }
+  for (std::uint32_t i = 0; state->out != nullptr && i < sampleCount; ++i) {
+    state->out[i] = state->responded ? 0.5f : 0.1f;
+  }
+}
+
+WorkerStatus featuresWork(Lv2Handle, WorkerRespond respond, void* handle, std::uint32_t size, const void* data) {
+  if (size == 5 && std::memcmp(data, "ping", 5) == 0) {
+    const char reply[] = "pong";
+    return respond(handle, sizeof(reply), reply);
+  }
+  return 1;
+}
+
+WorkerStatus featuresWorkResponse(Lv2Handle instance, std::uint32_t size, const void* body) {
+  if (size == 5 && std::memcmp(body, "pong", 5) == 0) {
+    static_cast<FeaturesState*>(instance)->responded = true;
+  }
+  return 0;
+}
+
+const Lv2WorkerInterface kFeaturesWorker = {featuresWork, featuresWorkResponse, nullptr};
+
+const void* featuresExtensionData(const char* uri) {
+  return std::strcmp(uri, "http://lv2plug.in/ns/ext/worker#interface") == 0 ? &kFeaturesWorker : nullptr;
+}
+
+void featuresCleanup(Lv2Handle instance) {
+  delete static_cast<FeaturesState*>(instance);
+}
+
+const Lv2Descriptor kFeaturesDescriptor = {
+    "urn:extracker:test:features",
+    featuresInstantiate,
+    featuresConnectPort,
+    activate,
+    featuresRun,
+    deactivate,
+    featuresCleanup,
+    featuresExtensionData};
+
 }  // namespace
 
 extern "C" const Lv2Descriptor* lv2_descriptor(std::uint32_t index) {
   if (index == 0) {
     return &kDescriptor;
+  }
+  if (index == 1) {
+    return &kFeaturesDescriptor;
   }
   return nullptr;
 }

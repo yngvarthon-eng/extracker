@@ -30,11 +30,11 @@ void handleReverbCommand(AudioEngine& audio, PluginHost& plugins, std::istringst
                   << " wet=" << p.wet << " width=" << p.width << '\n';
 
     } else if (sub == "send") {
-        // reverb send <instr 0-15> <send 0-255>
+        // reverb send <instr 0-255> <send 0-255>
         int instr = -1, send = -1;
         if (!(input >> instr >> send)
             || instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: reverb send <instr 0-15> <send 0-255>\n";
+            std::cout << "Usage: reverb send <instr 0-255> <send 0-255>\n";
             return;
         }
         const float s = norm8(send);
@@ -48,7 +48,8 @@ void handleReverbCommand(AudioEngine& audio, PluginHost& plugins, std::istringst
         std::cout << "Reverb: room=" << p.roomSize << " damp=" << p.damping
                   << " wet=" << p.wet << " width=" << p.width << '\n';
         bool anySend = false;
-        for (std::uint8_t i = 0; i < static_cast<std::uint8_t>(PluginHost::kMaxInstrumentSlots); ++i) {
+        for (std::size_t slot = 0; slot < PluginHost::kMaxInstrumentSlots; ++slot) {
+            const auto i = static_cast<std::uint8_t>(slot);
             const float s = audio.getInstrumentReverbSend(i);
             if (s > 0.0f) {
                 std::cout << "  Instr " << static_cast<int>(i) << " send=" << s << '\n';
@@ -59,14 +60,14 @@ void handleReverbCommand(AudioEngine& audio, PluginHost& plugins, std::istringst
 
     } else if (sub == "clear") {
         audio.clearReverb();
-        for (std::uint8_t i = 0; i < static_cast<std::uint8_t>(PluginHost::kMaxInstrumentSlots); ++i)
-            plugins.setInstrumentReverbSend(i, 0.0f);
+        for (std::size_t slot = 0; slot < PluginHost::kMaxInstrumentSlots; ++slot)
+            plugins.setInstrumentReverbSend(static_cast<std::uint8_t>(slot), 0.0f);
         std::cout << "Reverb cleared\n";
 
     } else {
         std::cout << "Usage: reverb <set|send|get|clear>\n"
                   << "  reverb set  <room 0-255> <damp 0-255> <wet 0-255> [width 0-255]\n"
-                  << "  reverb send <instr 0-15> <send 0-255>\n"
+                  << "  reverb send <instr 0-255> <send 0-255>\n"
                   << "  reverb get\n"
                   << "  reverb clear\n";
     }

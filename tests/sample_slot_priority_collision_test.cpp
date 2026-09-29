@@ -1,3 +1,7 @@
+// A note whose sample column named a loaded sample, on an instrument slot that
+// holds a plugin: the sample used to override the plugin. After converting the
+// song, the note plays a sample instrument for that sample (the sample still
+// wins, as before) and the plugin instrument is left alone.
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -5,8 +9,10 @@
 #include <iostream>
 
 #include "extracker/audio_engine.hpp"
+#include "extracker/module.hpp"
 #include "extracker/pattern_editor.hpp"
 #include "extracker/plugin_host.hpp"
+#include "extracker/sample_instrument_migration.hpp"
 #include "extracker/sequencer.hpp"
 #include "extracker/transport.hpp"
 
@@ -69,12 +75,6 @@ int main() {
   }
 
   extracker::PluginHost plugins;
-  if (!plugins.loadPlugin("builtin.sine")) {
-    std::filesystem::remove(wavPath);
-    std::cerr << "Failed to load builtin.sine" << '\n';
-    return 1;
-  }
-
   if (!plugins.assignInstrument(0, "builtin.sine")) {
     std::filesystem::remove(wavPath);
     std::cerr << "Failed to assign instrument 0 to builtin.sine" << '\n';
@@ -87,9 +87,32 @@ int main() {
     return 1;
   }
 
-  extracker::PatternEditor pattern(4, 1);
+  extracker::Module module;
+  module.reset(4, 1, 1);
+  extracker::PatternEditor& pattern = module.currentEditor();
   pattern.insertNote(0, 0, 60, 0, 0, 100, true);
   pattern.setSample(0, 0, 0);
+
+  const auto report = extracker::migrateSampleReferences(module, plugins);
+  std::filesystem::remove(wavPath);
+
+  const std::uint8_t converted = pattern.instrumentAt(0, 0);
+  if (converted == 0 || pattern.sampleAt(0, 0) != 0xFFFF) {
+    std::cerr << "Note was not moved to a sample instrument (instrument=" << static_cast<int>(converted)
+              << " sample=" << pattern.sampleAt(0, 0) << ")" << '\n';
+    return 1;
+  }
+  if (plugins.pluginForInstrument(0) != "builtin.sine" ||
+      plugins.pluginForInstrument(converted) != "builtin.sample" ||
+      plugins.sampleSlotForInstrument(converted) != 0) {
+    std::cerr << "Expected sine left on instrument 0 and instrument " << static_cast<int>(converted)
+              << " linked to sample 0" << '\n';
+    return 1;
+  }
+  if (report.notesRemapped != 1 || report.summary().empty()) {
+    std::cerr << "Conversion report is wrong: " << report.summary() << '\n';
+    return 1;
+  }
 
   extracker::Transport transport;
   transport.setPatternRows(4);
@@ -97,24 +120,14 @@ int main() {
 
   extracker::AudioEngine audio;
   extracker::Sequencer sequencer;
-
   sequencer.update(pattern, transport, audio, plugins);
 
-  const std::size_t instrumentVoices = plugins.activeVoiceCountForInstrument(0);
-  const std::size_t totalVoices = plugins.activeRenderVoiceCount();
-
-  std::filesystem::remove(wavPath);
-
-  // If instrument slot 0 (sine) incorrectly wins, instrumentVoices will be > 0.
-  // Correct behavior: explicit sample slot 0 should be used instead.
-  if (instrumentVoices != 0) {
-    std::cerr << "Instrument plugin shadowed explicit sample slot (instrument voices = "
-              << instrumentVoices << ")" << '\n';
+  if (plugins.activeVoiceCountForInstrument(0) != 0) {
+    std::cerr << "The sine instrument played instead of the sample" << '\n';
     return 1;
   }
-
-  if (totalVoices == 0) {
-    std::cerr << "Expected an active voice from sample slot playback" << '\n';
+  if (plugins.activeVoiceCountForInstrument(converted) == 0) {
+    std::cerr << "Expected the sample instrument to play" << '\n';
     return 1;
   }
 

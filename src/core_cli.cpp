@@ -1,6 +1,7 @@
 #include "extracker/core_cli.hpp"
 
 #include "extracker/cli_parse_utils.hpp"
+#include "extracker/sample_instrument_migration.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -528,9 +529,13 @@ bool handleCoreCommand(const std::string& command,
       std::lock_guard<std::mutex> lock(stateMutex);
       std::string resolvedPath = normalizeModulePath(path);
       if (loadPatternFromFile(resolvedPath)) {
+        const auto conversion = migrateSampleReferences(module, plugins);
         sequencer.reset();
         audio.allNotesOff();
         std::cout << "Module loaded from " << resolvedPath << '\n';
+        if (const std::string summary = conversion.summary(); !summary.empty()) {
+          std::cout << summary << '\n';
+        }
       } else {
         std::cout << "Failed to load module from " << resolvedPath << '\n';
       }
