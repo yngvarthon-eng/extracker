@@ -6619,9 +6619,8 @@ private:
     const int rows = static_cast<int>(editor.rows());
     const int channels = static_cast<int>(editor.channels());
     const int channel = std::clamp(selectedStepChannel >= 0 ? selectedStepChannel : 0, 0, std::max(0, channels - 1));
-    const int instrument = (channel >= 0 && static_cast<std::size_t>(channel) < app.channels.count())
-        ? static_cast<int>(app.channels.instrument(static_cast<std::size_t>(channel)))
-        : 0;
+    // Like note entry, the macro writes the selected instrument.
+    const int instrument = std::clamp(app.selectedInstrument, 0, 255);
     const int velocity = std::clamp(static_cast<int>(std::lround(stepVelocitySlider.getValue())), 1, 127);
     const auto gateTicks = static_cast<std::uint32_t>(std::max(0, static_cast<int>(std::lround(stepGateSlider.getValue()))));
 

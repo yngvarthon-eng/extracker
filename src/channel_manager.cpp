@@ -185,7 +185,7 @@ bool applyChannelFileToken(std::istream& in, const std::string& token, ChannelMa
   if (token == "CHANNEL_INSTRUMENTS") {
     int slot = 0;
     for (std::size_t ch = 0; values >> slot; ++ch) {
-      channels.setInstrument(ch, static_cast<std::uint8_t>(std::clamp(slot, 0, 15)));
+      channels.setInstrument(ch, static_cast<std::uint8_t>(std::clamp(slot, 0, 255)));
     }
   } else if (token == "CHANNEL_MUTED") {
     int muted = 0;
