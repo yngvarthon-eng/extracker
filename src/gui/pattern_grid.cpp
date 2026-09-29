@@ -351,31 +351,9 @@ void PatternGrid::drawHeaders(juce::Graphics& g) {
     int x = labelWidth + ch * cellWidth;
     int y = channelInfoBandY;
 
-    // Instrument
-    std::string infoText;
-    if (static_cast<std::size_t>(ch) < app.channels.count()) {
-      infoText = "I:" + toUpperHex(app.channels.instrument(static_cast<std::size_t>(ch)), 2);
-    } else {
-      infoText = "I:--";
-    }
-
-    // Pan
-    std::uint8_t pan = app.sequencer.panByChannel(static_cast<std::size_t>(ch));
-    if (pan < 0x50) {
-      infoText += " L";
-    } else if (pan > 0xB0) {
-      infoText += " R";
-    } else {
-      infoText += " C";
-    }
-
-    // Voice count
-    int voiceCount = 0;
-    if (static_cast<std::size_t>(ch) < app.channels.count()) {
-      voiceCount = static_cast<int>(app.plugins.activeVoiceCountForInstrument(
-          app.channels.instrument(static_cast<std::size_t>(ch))));
-    }
-    infoText += " " + std::to_string(std::min(voiceCount, 9)) + "v";
+    // Channel pan (notes carry their own instrument, so none is shown here)
+    const std::uint8_t pan = app.sequencer.panByChannel(static_cast<std::size_t>(ch));
+    const std::string infoText = pan < 0x50 ? "Pan L" : (pan > 0xB0 ? "Pan R" : "Pan C");
 
     g.drawText(juce::String(infoText), x + 1, y + 1, cellWidth - 2, channelInfoBandHeight - 2,
                juce::Justification::centred);
@@ -1826,6 +1804,41 @@ bool PatternGrid::transposeSelection(int semitoneDelta) {
   refreshSnapshot();
   repaint();
   return true;
+}
+
+int PatternGrid::setInstrumentOnSelection(std::uint8_t instrument) {
+  if (selectedRow < 0 || selectedChannel < 0) {
+    return 0;
+  }
+
+  // The marked block, or the whole selected channel when nothing is marked.
+  int minRow = 0;
+  int maxRow = static_cast<int>(app.module.currentEditor().rows()) - 1;
+  int minChannel = selectedChannel;
+  int maxChannel = selectedChannel;
+  if (hasBlockSelection()) {
+    getBlockBounds(minRow, maxRow, minChannel, maxChannel);
+  }
+
+  std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    return -1;
+  }
+  auto& editor = app.module.currentEditor();
+  int changed = 0;
+  for (int row = minRow; row <= maxRow; ++row) {
+    for (int channel = minChannel; channel <= maxChannel; ++channel) {
+      if (editor.hasNoteAt(row, channel) && editor.noteAt(row, channel) >= 0 &&
+          editor.instrumentAt(row, channel) != instrument) {
+        editor.setInstrument(row, channel, instrument);
+        ++changed;
+      }
+    }
+  }
+  lock.unlock();
+  refreshSnapshot();
+  repaint();
+  return changed;
 }
 
 bool PatternGrid::hasBlockSelection() const {

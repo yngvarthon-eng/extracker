@@ -73,7 +73,6 @@ int main() {
     source.setVolume(1, 0.5f);
     source.setName(2, "Lead \"Hot\" Synth");
     source.setSoloed(1, true);
-    source.setInstrument(2, 200);  // instrument slots go up to 255
     extracker::BiquadParams bandPass;
     bandPass.type = extracker::BiquadType::BandPass;
     bandPass.cutoffNorm = 128.0f / 255.0f;
@@ -94,7 +93,7 @@ int main() {
     check(loaded.volume(1) == 0.5f, "volume round trip");
     check(loaded.name(2) == "Lead \"Hot\" Synth" && loaded.name(0).empty(), "name round trip");
     check(!loaded.anySoloed(), "solo is not persisted");
-    check(loaded.instrument(2) == 200, "instrument above 15 round trips");
+    check(out.str().find("CHANNEL_INSTRUMENTS") == std::string::npos, "channel instruments are no longer written");
     check(out.str().find("CHANNEL_FILTERS 0 255 0 3 128 40 0 255 0\n") != std::string::npos,
           "filters written as type/cutoff/resonance triples");
     check(loaded.filter(1).type == extracker::BiquadType::BandPass &&

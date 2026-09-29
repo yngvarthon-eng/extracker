@@ -804,7 +804,6 @@ public:
         playModePatternButton("Pattern"),
         playModeSongButton("Song"),
         loopButton("Loop: Off"),
-        applyChannelMapButton("Apply Channel Map"),
         patternGrid(appIn) {
     addAndMakeVisible(playButton);
     addAndMakeVisible(stopButton);
@@ -1031,7 +1030,7 @@ public:
     addAndMakeVisible(filterResonanceLabel);
     addAndMakeVisible(filterResonanceSlider);
     addAndMakeVisible(slotActivityTitle);
-    addAndMakeVisible(applyChannelMapButton);
+    addAndMakeVisible(setInstrumentButton);
     addAndMakeVisible(patternViewport);
     addAndMakeVisible(patternRowSlider);
     addAndMakeVisible(mixerViewport);
@@ -1121,21 +1120,14 @@ public:
     reparentToPage(*songPage, moduleMessageStateLabel);
     reparentToPage(*songPage, moduleMessageApplyButton);
     reparentToPage(*songPage, channelPanelTitle);
-    reparentToPage(*songPage, applyChannelMapButton);
     for (auto& label : channelLabels) {
       reparentToPage(*songPage, *label);
-    }
-    for (auto& selector : channelInstrumentSelectors) {
-      reparentToPage(*songPage, *selector);
     }
     for (auto& toggle : channelMuteToggles) {
       reparentToPage(*songPage, *toggle);
     }
     for (auto& toggle : channelSoloToggles) {
       reparentToPage(*songPage, *toggle);
-    }
-    for (auto& label : channelPluginLabels) {
-      reparentToPage(*songPage, *label);
     }
     reparentToPage(*instrumentsPage, slotPanelTitle);
     reparentToPage(*instrumentsPage, slotLabel);
@@ -1203,6 +1195,7 @@ public:
     reparentToPage(*editPage, clearClipboardHistoryButton);
     reparentToPage(*editPage, transposeDownButton);
     reparentToPage(*editPage, transposeUpButton);
+    reparentToPage(*editPage, setInstrumentButton);
     reparentToPage(*editPage, applyFxToBlockButton);
     reparentToPage(*editPage, patternMacroTitle);
     reparentToPage(*editPage, patternMacroFillHatsButton);
@@ -1808,7 +1801,7 @@ public:
         "Ins box (toolbar) / Instruments tab slot - instrument written into new notes\n"
         "Samples tab - sample bank; Make Instrument creates an instrument playing the sample\n"
         "Replacing an instrument slot that is in use asks first\n"
-        "Per-channel instrument selector - used by Apply Channel Map and MIDI routing\n"
+        "Set Instrument (Edit tab) - give the notes in the block, or the channel, the selected instrument\n"
         "Waveform editor - drag green handles for trim start/end selection\n"
         "Apply Trim crops to selection (non-destructive source retained in memory)\n"
         "Normalize / Fade In / Fade Out process the current selection\n"
@@ -2117,7 +2110,6 @@ public:
         app.midiInstrument = slot;  // route MIDI to the just-assigned slot
       }
       refreshSlotSelector();
-        refreshChannelPluginLabels();
       refreshParameterSlidersFromSlot();
       assignPluginButton.setButtonText("Assign Plugin To Slot");
       assignPluginButton.setEnabled(true);
@@ -2171,7 +2163,6 @@ public:
               app.midiInstrument = slot;
             }
             refreshSlotSelector();
-            refreshChannelPluginLabels();
             refreshParameterSlidersFromSlot();
           });
   }
@@ -2471,7 +2462,6 @@ public:
         pluginStatusLabel.setText(statusText, juce::dontSendNotification);
         refreshSlotSelector();
         refreshSampleSlotSelector();
-        refreshChannelPluginLabels();
         refreshSampleSlotDetails();
         patternGrid.repaint();
       });
@@ -2577,7 +2567,6 @@ public:
             : "Failed clearing sample slot " + formatSampleSlotHex(selectedSampleSlot),
           juce::dontSendNotification);
       refreshSlotSelector();
-      refreshChannelPluginLabels();
       refreshSampleSlotDetails();
       patternGrid.repaint();
     };
@@ -2778,29 +2767,15 @@ public:
       midiLearnStatusLabel.setText("Cleared editor CC mappings", juce::dontSendNotification);
     };
 
-    applyChannelMapButton.onClick = [this]() {
-      flushPendingChannelInstrumentAssignments();
-      {
-        std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
-        if (!lock.owns_lock()) {
-          pluginStatusLabel.setText("Apply channel map skipped (engine busy)", juce::dontSendNotification);
-          return;
-        }
-        int numRows = static_cast<int>(app.module.currentEditor().rows());
-        int numChannels = static_cast<int>(app.module.currentEditor().channels());
-        for (int row = 0; row < numRows; ++row) {
-          for (int ch = 0; ch < numChannels; ++ch) {
-            if (!app.module.currentEditor().hasNoteAt(row, ch)) {
-              continue;
-            }
-            if (static_cast<std::size_t>(ch) < app.channels.count()) {
-              app.module.currentEditor().setInstrument(row, ch, app.channels.instrument(static_cast<std::size_t>(ch)));
-            }
-          }
-        }
-      }
-      patternGrid.repaint();
-      refreshChannelPluginLabels();
+    setInstrumentButton.onClick = [this]() {
+      const int instrument = std::clamp(app.selectedInstrument, 0, 255);
+      const int changed = patternGrid.setInstrumentOnSelection(static_cast<std::uint8_t>(instrument));
+      pluginStatusLabel.setText(
+          changed < 0 ? juce::String("Set instrument skipped (engine busy)")
+                      : juce::String(changed) + " note(s) set to " + formatInstrumentHex(instrument) +
+                            (patternGrid.hasBlockSelection() ? " in the block" : " in the channel"),
+          juce::dontSendNotification);
+      patternGrid.grabKeyboardFocus();
     };
 
     updateLoopButtonText();
@@ -3130,18 +3105,12 @@ public:
     int channelCount = static_cast<int>(channelLabels.size());
     for (int i = 0; i < channelCount; ++i) {
       auto row = panelArea.removeFromTop(24);
-      channelLabels[static_cast<std::size_t>(i)]->setBounds(row.removeFromLeft(40));
-      channelInstrumentSelectors[static_cast<std::size_t>(i)]->setBounds(row.removeFromLeft(40));
-      row.removeFromLeft(4);
-      channelMuteToggles[static_cast<std::size_t>(i)]->setBounds(row.removeFromLeft(56));
-      channelSoloToggles[static_cast<std::size_t>(i)]->setBounds(row.removeFromLeft(52));
-      row.removeFromLeft(8);
-      channelPluginLabels[static_cast<std::size_t>(i)]->setBounds(row);
+      channelSoloToggles[static_cast<std::size_t>(i)]->setBounds(row.removeFromRight(52));
+      channelMuteToggles[static_cast<std::size_t>(i)]->setBounds(row.removeFromRight(56));
+      row.removeFromRight(8);
+      channelLabels[static_cast<std::size_t>(i)]->setBounds(row);
       panelArea.removeFromTop(2);
     }
-
-    panelArea.removeFromTop(6);
-    applyChannelMapButton.setBounds(panelArea.removeFromTop(26));
     panelArea.removeFromTop(10);
 
     panelArea.removeFromTop(10);
@@ -3474,6 +3443,8 @@ public:
     transposeRow.removeFromLeft(6);
     transposeUpButton.setBounds(transposeRow.removeFromLeft(152));
     panelArea.removeFromTop(4);
+    setInstrumentButton.setBounds(panelArea.removeFromTop(26));
+    panelArea.removeFromTop(4);
     stepVelocityLabel.setBounds(panelArea.removeFromTop(20));
     stepVelocitySlider.setBounds(panelArea.removeFromTop(24));
     panelArea.removeFromTop(6);
@@ -3555,7 +3526,6 @@ public:
       return;
     }
 
-    refreshChannelPluginLabels();
     refreshSlotActivityLabels();
     updateStatusLabels();
     patternGrid.repaint();
@@ -4166,37 +4136,7 @@ private:
                                   app.module.currentEditor().velocityAt(selectedStepRow, selectedStepChannel));
   }
 
-  void flushPendingChannelInstrumentAssignments() {
-    bool hasPending = false;
-    for (int slot : pendingChannelInstrumentSlots) {
-      if (slot >= 0) {
-        hasPending = true;
-        break;
-      }
-    }
-    if (!hasPending) {
-      return;
-    }
-
-    std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
-    if (!lock.owns_lock()) {
-      return;
-    }
-
-    for (std::size_t ch = 0; ch < pendingChannelInstrumentSlots.size(); ++ch) {
-      int slot = pendingChannelInstrumentSlots[ch];
-      if (slot < 0) {
-        continue;
-      }
-      if (ch < app.channels.count()) {
-        app.channels.setInstrument(ch, static_cast<std::uint8_t>(slot));
-      }
-      pendingChannelInstrumentSlots[ch] = -1;
-    }
-  }
-
   void timerCallback() override {
-    flushPendingChannelInstrumentAssignments();
     consumeMidiEditorCcUpdates();
     flushPendingStepEdit();
     captureUndoHistoryIfPatternChanged();
@@ -4213,7 +4153,6 @@ private:
     ++refreshTickCounter;
 
     if ((refreshTickCounter % 10) == 0) {
-      refreshChannelPluginLabels();
       refreshMidiLearnStatus();
     }
     if ((refreshTickCounter % 4) == 0) {
@@ -4353,7 +4292,9 @@ private:
     moduleMessageStateLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF2EA043));
     moduleMessageApplyButton.setTooltip("Apply message text to current module");
 
-    channelPanelTitle.setText("Per-Channel Instrument + Mute", juce::dontSendNotification);
+    channelPanelTitle.setText("Channels", juce::dontSendNotification);
+    setInstrumentButton.setTooltip(
+        "Give the notes in the marked block (or the whole channel) the selected instrument");
     channelPanelTitle.setJustificationType(juce::Justification::centredLeft);
 
     slotPanelTitle.setText("Slot Editor", juce::dontSendNotification);
@@ -5024,78 +4965,14 @@ private:
   }
 
   void initChannelRows() {
-    int numChannels = static_cast<int>(app.module.currentEditor().channels());
-    channelLabels.reserve(static_cast<std::size_t>(numChannels));
-    channelInstrumentSelectors.reserve(static_cast<std::size_t>(numChannels));
-    channelMuteToggles.reserve(static_cast<std::size_t>(numChannels));
-    channelSoloToggles.reserve(static_cast<std::size_t>(numChannels));
-    channelPluginLabels.reserve(static_cast<std::size_t>(numChannels));
-    pendingChannelInstrumentSlots.assign(static_cast<std::size_t>(numChannels), -1);
-
-    for (int ch = 0; ch < numChannels; ++ch) {
-      auto label = std::make_unique<juce::Label>();
-      label->setText("CH " + juce::String(ch), juce::dontSendNotification);
-      label->setJustificationType(juce::Justification::centredLeft);
-      label->setOpaque(true);
-      makeChannelLabelRenamable(*label, ch);
-      if (songPage) {
-        songPage->addAndMakeVisible(*label);
-      } else {
-        addAndMakeVisible(*label);
-      }
-
-      auto combo = std::make_unique<juce::ComboBox>();
-      for (int slot = 0; slot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots); ++slot) {
-        combo->addItem("I" + juce::String(slot), slot + 1);
-      }
-      combo->onChange = [this, ch, comboPtr = combo.get()]() {
-        int selectedSlot = comboPtr->getSelectedId() - 1;
-        if (selectedSlot < 0) {
-          return;
-        }
-        if (static_cast<std::size_t>(ch) < pendingChannelInstrumentSlots.size()) {
-          pendingChannelInstrumentSlots[static_cast<std::size_t>(ch)] = selectedSlot;
-        }
-        patternGrid.grabKeyboardFocus();
-      };
-      if (songPage) {
-        songPage->addAndMakeVisible(*combo);
-      } else {
-        addAndMakeVisible(*combo);
-      }
-
-      auto muteToggle = makeChannelStateToggle(ch, ChannelToggle::Mute);
-      auto soloToggle = makeChannelStateToggle(ch, ChannelToggle::Solo);
-
-      auto pluginLabel = std::make_unique<juce::Label>();
-      pluginLabel->setText("", juce::dontSendNotification);
-      pluginLabel->setJustificationType(juce::Justification::centredLeft);
-      pluginLabel->setOpaque(true);
-      if (songPage) {
-        songPage->addAndMakeVisible(*pluginLabel);
-      } else {
-        addAndMakeVisible(*pluginLabel);
-      }
-
-      channelLabels.push_back(std::move(label));
-      channelInstrumentSelectors.push_back(std::move(combo));
-      channelMuteToggles.push_back(std::move(muteToggle));
-      channelSoloToggles.push_back(std::move(soloToggle));
-      channelPluginLabels.push_back(std::move(pluginLabel));
-    }
+    createChannelRowControls();
     reinitFilterChannelBox();
   }
 
   void reinitChannelRows() {
-    // Clear existing channel controls
     for (auto& label : channelLabels) {
       if (auto* parent = label->getParentComponent()) {
         parent->removeChildComponent(label.get());
-      }
-    }
-    for (auto& combo : channelInstrumentSelectors) {
-      if (auto* parent = combo->getParentComponent()) {
-        parent->removeChildComponent(combo.get());
       }
     }
     for (auto& toggle : channelMuteToggles) {
@@ -5108,25 +4985,21 @@ private:
         parent->removeChildComponent(toggle.get());
       }
     }
-    for (auto& label : channelPluginLabels) {
-      if (auto* parent = label->getParentComponent()) {
-        parent->removeChildComponent(label.get());
-      }
-    }
     channelLabels.clear();
-    channelInstrumentSelectors.clear();
     channelMuteToggles.clear();
     channelSoloToggles.clear();
-    channelPluginLabels.clear();
 
-    // Reinitialize with new channel count
-    int numChannels = static_cast<int>(app.module.currentEditor().channels());
+    createChannelRowControls();
+    reinitFilterChannelBox();
+    refreshChannelRows();
+  }
+
+  // One row per channel on the Song tab: renamable name, Mute, Solo.
+  void createChannelRowControls() {
+    const int numChannels = static_cast<int>(app.module.currentEditor().channels());
     channelLabels.reserve(static_cast<std::size_t>(numChannels));
-    channelInstrumentSelectors.reserve(static_cast<std::size_t>(numChannels));
     channelMuteToggles.reserve(static_cast<std::size_t>(numChannels));
     channelSoloToggles.reserve(static_cast<std::size_t>(numChannels));
-    channelPluginLabels.reserve(static_cast<std::size_t>(numChannels));
-    pendingChannelInstrumentSlots.assign(static_cast<std::size_t>(numChannels), -1);
 
     for (int ch = 0; ch < numChannels; ++ch) {
       auto label = std::make_unique<juce::Label>();
@@ -5140,48 +5013,10 @@ private:
         addAndMakeVisible(*label);
       }
 
-      auto combo = std::make_unique<juce::ComboBox>();
-      for (int slot = 0; slot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots); ++slot) {
-        combo->addItem("I" + juce::String(slot), slot + 1);
-      }
-      combo->onChange = [this, ch, comboPtr = combo.get()]() {
-        int selectedSlot = comboPtr->getSelectedId() - 1;
-        if (selectedSlot < 0) {
-          return;
-        }
-        if (static_cast<std::size_t>(ch) < pendingChannelInstrumentSlots.size()) {
-          pendingChannelInstrumentSlots[static_cast<std::size_t>(ch)] = selectedSlot;
-        }
-        patternGrid.grabKeyboardFocus();
-      };
-      if (songPage) {
-        songPage->addAndMakeVisible(*combo);
-      } else {
-        addAndMakeVisible(*combo);
-      }
-
-      auto muteToggle = makeChannelStateToggle(ch, ChannelToggle::Mute);
-      auto soloToggle = makeChannelStateToggle(ch, ChannelToggle::Solo);
-
-      auto pluginLabel = std::make_unique<juce::Label>();
-      pluginLabel->setText("", juce::dontSendNotification);
-      pluginLabel->setJustificationType(juce::Justification::centredLeft);
-      pluginLabel->setOpaque(true);
-      if (songPage) {
-        songPage->addAndMakeVisible(*pluginLabel);
-      } else {
-        addAndMakeVisible(*pluginLabel);
-      }
-
       channelLabels.push_back(std::move(label));
-      channelInstrumentSelectors.push_back(std::move(combo));
-      channelMuteToggles.push_back(std::move(muteToggle));
-      channelSoloToggles.push_back(std::move(soloToggle));
-      channelPluginLabels.push_back(std::move(pluginLabel));
+      channelMuteToggles.push_back(makeChannelStateToggle(ch, ChannelToggle::Mute));
+      channelSoloToggles.push_back(makeChannelStateToggle(ch, ChannelToggle::Solo));
     }
-
-    reinitFilterChannelBox();
-    refreshChannelRows();
   }
 
   void refreshPluginChoices() {
@@ -5253,7 +5088,6 @@ private:
                 if (loaded) {
                   app.midiInstrument = instrumentSlot;
                   refreshSlotSelector();
-                  refreshChannelPluginLabels();
                   refreshParameterSlidersFromSlot();
                 }
               }
@@ -5633,12 +5467,7 @@ private:
       if (!lock.owns_lock()) {
         return;
       }
-      for (std::size_t ch = 0; ch < channelInstrumentSelectors.size(); ++ch) {
-        int slot = 0;
-        if (ch < app.channels.count()) {
-          slot = static_cast<int>(app.channels.instrument(ch));
-        }
-        channelInstrumentSelectors[ch]->setSelectedId(slot + 1, juce::dontSendNotification);
+      for (std::size_t ch = 0; ch < channelLabels.size(); ++ch) {
         const bool muted = !app.channels.isAudible(ch);
         const bool soloed = app.channels.isSoloed(ch);
         if (ch < channelMuteToggles.size()) {
@@ -5660,51 +5489,6 @@ private:
           channelLabels[ch]->setColour(juce::Label::backgroundColourId,
                                        muted ? juce::Colour(0xFF4A1E1E) : juce::Colour(0xFF222222));
         }
-        if (ch < channelPluginLabels.size()) {
-          channelPluginLabels[ch]->setColour(juce::Label::textColourId,
-                                             muted ? juce::Colour(0xFFFFA0A0) : juce::Colours::lightgrey);
-          channelPluginLabels[ch]->setColour(juce::Label::backgroundColourId,
-                                             muted ? juce::Colour(0xFF3A1717) : juce::Colour(0xFF1F1F1F));
-        }
-      }
-    }
-
-    refreshChannelPluginLabels();
-  }
-
-  void refreshChannelPluginLabels() {
-    std::vector<int> slots(channelPluginLabels.size(), 0);
-
-    {
-      std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
-      if (!lock.owns_lock()) {
-        return;
-      }
-      for (std::size_t ch = 0; ch < slots.size(); ++ch) {
-        if (ch < app.channels.count()) {
-          slots[ch] = static_cast<int>(app.channels.instrument(ch));
-        }
-      }
-    }
-
-    for (std::size_t ch = 0; ch < channelPluginLabels.size(); ++ch) {
-      int slot = std::clamp(slots[ch], 0, 15);
-      std::string pluginId = app.plugins.pluginForInstrument(static_cast<std::uint8_t>(std::clamp(slot, 0, 15)));
-      juce::String labelText;
-      if (pluginId.empty()) {
-        labelText = "(unassigned)";
-      } else {
-        const juce::String juceId(pluginId);
-        labelText = juce::File::isAbsolutePath(juceId)
-            ? juce::File(juceId).getFileNameWithoutExtension()
-            : juceId;
-      }
-      if (ch >= cachedChannelPluginText.size()) {
-        cachedChannelPluginText.resize(ch + 1);
-      }
-      if (cachedChannelPluginText[ch] != labelText) {
-        cachedChannelPluginText[ch] = labelText;
-        channelPluginLabels[ch]->setText(labelText, juce::dontSendNotification);
       }
     }
   }
@@ -7068,7 +6852,7 @@ private:
   juce::TextButton insertPatternAfterButton{"Insert After"};
   juce::TextButton removePatternButton{"Remove Pattern"};
   juce::TextButton gridDensityButton;
-  juce::TextButton applyChannelMapButton;
+  juce::TextButton setInstrumentButton{"Set Instrument"};
   juce::Slider tempoSlider;
   juce::Label tempoLabel;
   juce::Label swingLabel;
@@ -7279,14 +7063,10 @@ private:
   std::vector<std::unique_ptr<ControlPortRow>> controlPortRows;
   juce::Label slotActivityTitle;
   std::vector<std::unique_ptr<juce::Label>> channelLabels;
-  std::vector<std::unique_ptr<juce::ComboBox>> channelInstrumentSelectors;
   std::vector<std::unique_ptr<juce::ToggleButton>> channelMuteToggles;
   std::vector<std::unique_ptr<juce::ToggleButton>> channelSoloToggles;
-  std::vector<std::unique_ptr<juce::Label>> channelPluginLabels;
-  std::vector<int> pendingChannelInstrumentSlots;
   std::vector<std::unique_ptr<juce::Label>> slotActivityLabels;
   std::vector<std::unique_ptr<SlotActivityBar>> slotActivityBars;
-  std::vector<juce::String> cachedChannelPluginText;
   std::vector<juce::String> cachedSlotActivityText;
   int lastTrimSelectionSampleSlot = -1;
   std::string lastTrimSelectionSamplePath;
@@ -7478,7 +7258,7 @@ void TrackerMainComponent::saveHelpToFile() {
     "Ins box (toolbar) / Instruments tab slot - instrument written into new notes\n"
     "Samples tab - sample bank; Make Instrument creates an instrument playing the sample\n"
     "Replacing an instrument slot that is in use asks first\n"
-    "Per-channel instrument selector - used by Apply Channel Map and MIDI routing\n"
+    "Set Instrument (Edit tab) - give the notes in the block, or the channel, the selected instrument\n"
     "Waveform editor - drag green handles for trim start/end selection\n"
     "Apply Trim crops to selection (non-destructive source retained in memory)\n"
     "Normalize / Fade In / Fade Out process the current selection\n"

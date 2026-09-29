@@ -66,6 +66,10 @@ public:
   void setPasteColumns(unsigned columns);
   bool transposeSelectionUp(bool octave = false);
   bool transposeSelectionDown(bool octave = false);
+  // Gives every note in the marked block (or, with no block, the selected
+  // channel) `instrument`. Returns the number of notes changed, -1 if busy.
+  int setInstrumentOnSelection(std::uint8_t instrument);
+  bool hasBlockSelection() const;
   bool applyEffectToSelection(std::uint8_t effectCommand, std::uint8_t effectValue);
 
 private:
@@ -155,7 +159,6 @@ private:
   bool cutSelectionToClipboard();
   bool pasteClipboardAtSelection(extracker::PatternClipboard::PasteMode mode, bool flood);
   bool transposeSelection(int semitoneDelta);
-  bool hasBlockSelection() const;
   bool isCellInBlockSelection(int row, int channel) const;
   void getBlockBounds(int& minRow, int& maxRow, int& minChannel, int& maxChannel) const;
 

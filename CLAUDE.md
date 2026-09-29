@@ -106,7 +106,7 @@ Real-time-ish playback pipeline, all driven by a background thread:
   occupied slot print `Replaced <what> on instrument N`.
 - **MidiInput** — ALSA-seq based MIDI in, with clock/transport sync and channel→instrument mapping.
 - **ChannelManager** (`channel_manager.hpp`) — the single owner of per-channel user state: name,
-  default instrument, mute, solo, volume and base filter. Solo wins over mute (`isAudible`). The
+  mute, solo, volume and base filter (channels have no instrument; notes carry theirs). Solo wins over mute (`isAudible`). The
   sequencer takes it as `update(..., const ChannelManager*)` and reads mute/solo/volume/filter from
   it; the GUI hands the playback thread a copy per tick. Pattern effects 18/19/1A override the base
   filter only in the sequencer's running state, which `Sequencer::reset()` clears.
@@ -167,7 +167,7 @@ pattern), so there are three tail-token parsers in total, plus an `isSongTailTok
 Per-channel and global lines go through shared helpers instead of hand-written loops; prefer adding
 new song state the same way:
 - `writeChannelState` / `applyChannelFileToken` / `isChannelFileToken` (`channel_manager.hpp`):
-  `CHANNEL_INSTRUMENTS`, `CHANNEL_MUTED`, `CHANNEL_VOLUME`, `CHANNEL_NAMES` (quoted),
+  `CHANNEL_MUTED`, `CHANNEL_VOLUME`, `CHANNEL_NAMES` (quoted),
   `CHANNEL_FILTERS` (`type cutoff resonance` per channel, 0–255). Solo is not saved.
 - `writeReverbLine` / `readReverbLine` (`song_bundle.hpp`): `REVERB room damping wet width`, 0–255.
 - Loaders reset `ChannelManager`, channel undo history and reverb before reading a file, so songs

@@ -96,17 +96,6 @@ void ChannelManager::setFilter(std::size_t channel, const BiquadParams& filter) 
   }
 }
 
-std::uint8_t ChannelManager::instrument(std::size_t channel) const {
-  const Channel* ch = find(channel);
-  return ch != nullptr ? ch->instrument : 0;
-}
-
-void ChannelManager::setInstrument(std::size_t channel, std::uint8_t instrument) {
-  if (Channel* ch = ensure(channel)) {
-    ch->instrument = instrument;
-  }
-}
-
 void ChannelManager::remap(const std::vector<int>& sources) {
   std::vector<Channel> remapped;
   remapped.reserve(std::min(sources.size(), kMaxChannels));
@@ -134,12 +123,6 @@ const ChannelManager::Channel* ChannelManager::find(std::size_t channel) const {
 }
 
 void writeChannelState(std::ostream& out, const ChannelManager& channels, std::size_t channelCount) {
-  out << "CHANNEL_INSTRUMENTS";
-  for (std::size_t ch = 0; ch < channelCount; ++ch) {
-    out << " " << static_cast<int>(channels.instrument(ch));
-  }
-  out << "\n";
-
   out << "CHANNEL_MUTED";
   for (std::size_t ch = 0; ch < channelCount; ++ch) {
     out << " " << (channels.isMuted(ch) ? 1 : 0);
@@ -183,10 +166,7 @@ bool applyChannelFileToken(std::istream& in, const std::string& token, ChannelMa
   std::istringstream values(line);
 
   if (token == "CHANNEL_INSTRUMENTS") {
-    int slot = 0;
-    for (std::size_t ch = 0; values >> slot; ++ch) {
-      channels.setInstrument(ch, static_cast<std::uint8_t>(std::clamp(slot, 0, 255)));
-    }
+    // Older files: per-channel default instruments, no longer used.
   } else if (token == "CHANNEL_MUTED") {
     int muted = 0;
     for (std::size_t ch = 0; values >> muted; ++ch) {

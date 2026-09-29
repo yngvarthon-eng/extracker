@@ -376,10 +376,11 @@ The side panel has four tabs: **Song** (song order, arranger, message, channels,
 reverb), **Instruments**, **Samples** and **Edit** (step editor, search, clipboard, MIDI learn,
 macros, undo, keyboard settings).
 
-### Per-Channel Instrument Selector
+### Set Instrument
 
-Each channel has an instrument selector (Song tab). **Apply Channel Map** rewrites the channel's
-notes to that instrument, and it is shown in the pattern header.
+**Set Instrument** (Edit tab) gives every note in the marked block the selected instrument, or
+every note in the selected channel when no block is marked. Channels have no instrument of their
+own; older songs' per-channel instruments are ignored when loaded.
 
 ### Channel Mute, Solo and Names
 
@@ -516,7 +517,7 @@ After all pattern data, the following tokens appear:
 | `MIDI_MAP` | 16 integers | MIDI channel → internal channel map |
 | `MIDI_EDITOR_CC_MAP` | integers | Step editor MIDI CC assignments |
 | `SAMPLE_ENTRY` | `<slot> <name> <path>` | One line per loaded sample slot |
-| `CHANNEL_INSTRUMENTS` | one slot (0–15) per channel | Default instrument per channel |
+| `CHANNEL_INSTRUMENTS` | one slot per channel | Older files only; ignored when loading |
 | `CHANNEL_MUTED` | one `0`/`1` per channel | Channel mute state |
 | `CHANNEL_VOLUME` | one integer (0–200) per channel | Channel volume in percent |
 | `CHANNEL_NAMES` | one quoted string per channel | Channel names (`""` = default) |

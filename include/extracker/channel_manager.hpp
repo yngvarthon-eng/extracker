@@ -50,9 +50,6 @@ public:
   const BiquadParams& filter(std::size_t channel) const;
   void setFilter(std::size_t channel, const BiquadParams& filter);
 
-  // Default instrument slot for notes entered on this channel.
-  std::uint8_t instrument(std::size_t channel) const;
-  void setInstrument(std::size_t channel, std::uint8_t instrument);
 
   // Rebuilds the channel list so new channel i takes the state of old channel
   // sources[i], or defaults when sources[i] < 0.
@@ -64,7 +61,6 @@ private:
     bool muted = false;
     bool soloed = false;
     float volume = 1.0f;
-    std::uint8_t instrument = 0;
     BiquadParams filter;
   };
 
@@ -74,9 +70,10 @@ private:
   std::vector<Channel> channels_;
 };
 
-// Song file persistence. Writes CHANNEL_INSTRUMENTS, CHANNEL_MUTED, CHANNEL_VOLUME,
-// CHANNEL_NAMES and CHANNEL_FILTERS lines for channelCount channels; solo is
-// audition state and is not saved. CHANNEL_FILTERS holds one "type cutoff
+// Song file persistence. Writes CHANNEL_MUTED, CHANNEL_VOLUME, CHANNEL_NAMES and
+// CHANNEL_FILTERS lines for channelCount channels; solo is audition state and is
+// not saved. CHANNEL_INSTRUMENTS (per-channel default instruments, which notes
+// no longer use) is still accepted from older files and ignored. CHANNEL_FILTERS holds one "type cutoff
 // resonance" triple per channel (type 0-4, cutoff and resonance 0-255).
 void writeChannelState(std::ostream& out, const ChannelManager& channels, std::size_t channelCount);
 
