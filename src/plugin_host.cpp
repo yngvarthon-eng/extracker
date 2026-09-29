@@ -6231,11 +6231,12 @@ float PluginHost::getInstrumentDepth(std::uint8_t instrument) const {
   return depthOffsets_[instrument];
 }
 
+// The parameter accessors are called from the CLI, the GUI message thread and
+// song save/load, never from the audio thread, so they wait for the render
+// lock (at most one audio block). With try_to_lock they used to fail whenever
+// a block was rendering: edits were dropped and saved songs lost parameters.
 bool PluginHost::setInstrumentParameter(std::uint8_t instrument, const std::string& name, double value) {
-  std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
-  if (!lock.owns_lock()) {
-    return false;
-  }
+  std::lock_guard<std::timed_mutex> lock(mutex_);
   if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return false;
   }
@@ -6243,10 +6244,7 @@ bool PluginHost::setInstrumentParameter(std::uint8_t instrument, const std::stri
 }
 
 double PluginHost::getInstrumentParameter(std::uint8_t instrument, const std::string& name) const {
-  std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
-  if (!lock.owns_lock()) {
-    return 0.0;
-  }
+  std::lock_guard<std::timed_mutex> lock(mutex_);
   if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return 0.0;
   }
@@ -6254,8 +6252,8 @@ double PluginHost::getInstrumentParameter(std::uint8_t instrument, const std::st
 }
 
 std::vector<std::string> PluginHost::listInstrumentParameters(std::uint8_t instrument) const {
-  std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
-  if (!lock.owns_lock() || !isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return {};
   }
   return instrumentPlugins_[instrument]->listParameters();
