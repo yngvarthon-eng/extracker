@@ -869,6 +869,16 @@ if(BUILD_TESTING)
   target_link_libraries(extracker_sample_slot_priority_collision_test PRIVATE extracker_core)
   add_test(NAME extracker_sample_slot_priority_collision_test COMMAND extracker_sample_slot_priority_collision_test)
 
+  add_executable(extracker_instrument_slot_range_test tests/instrument_slot_range_test.cpp)
+  target_include_directories(extracker_instrument_slot_range_test PRIVATE include)
+  target_link_libraries(extracker_instrument_slot_range_test PRIVATE extracker_core)
+  add_test(NAME extracker_instrument_slot_range_test COMMAND extracker_instrument_slot_range_test)
+
+  add_executable(extracker_sample_instrument_share_test tests/sample_instrument_share_test.cpp)
+  target_include_directories(extracker_sample_instrument_share_test PRIVATE include)
+  target_link_libraries(extracker_sample_instrument_share_test PRIVATE extracker_core)
+  add_test(NAME extracker_sample_instrument_share_test COMMAND extracker_sample_instrument_share_test)
+
   add_executable(extracker_sample_legacy_instrument_fallback_test tests/sample_legacy_instrument_fallback_test.cpp)
   target_include_directories(extracker_sample_legacy_instrument_fallback_test PRIVATE include)
   target_link_libraries(extracker_sample_legacy_instrument_fallback_test PRIVATE extracker_core)
@@ -939,6 +949,10 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_reverb_persist_test tests/cli_reverb_persist_test.cpp)
   add_dependencies(extracker_cli_reverb_persist_test extracker)
   add_test(NAME extracker_cli_reverb_persist_test COMMAND extracker_cli_reverb_persist_test)
+
+  add_executable(extracker_cli_instrument_high_slot_test tests/cli_instrument_high_slot_test.cpp)
+  add_dependencies(extracker_cli_instrument_high_slot_test extracker)
+  add_test(NAME extracker_cli_instrument_high_slot_test COMMAND extracker_cli_instrument_high_slot_test)
 
   add_executable(extracker_cli_instr_sample_persist_test tests/cli_instr_sample_persist_test.cpp)
   add_dependencies(extracker_cli_instr_sample_persist_test extracker)

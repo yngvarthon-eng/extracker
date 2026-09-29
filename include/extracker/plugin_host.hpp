@@ -14,6 +14,7 @@
 
 #include "extracker/biquad_filter.hpp"
 #include "extracker/instrument_effects.hpp"
+#include "extracker/instrument_mix.hpp"
 
 namespace extracker {
 
@@ -35,7 +36,7 @@ struct PluginRenderVoice {
   BiquadState filterState;
 };
 
-static constexpr std::size_t kMaxInstrumentSlotsForFilter = 16;
+static constexpr std::size_t kMaxInstrumentSlotsForFilter = kInstrumentSlotCount;
 
 struct PluginRenderState {
   std::mutex mutex;
@@ -124,7 +125,7 @@ struct PluginPortInfo {
 
 class PluginHost {
 public:
-  static constexpr std::size_t kMaxInstrumentSlots = 16;
+  static constexpr std::size_t kMaxInstrumentSlots = kInstrumentSlotCount;
   static constexpr std::size_t kMaxSampleSlots = 257; // Slots 0..256
   static constexpr std::size_t kMaxEffectSlots = 8;
   using PluginFactory = std::function<std::unique_ptr<IInstrumentPlugin>()>;
@@ -160,11 +161,11 @@ public:
   void allNotesOff();
   void setTransportContext(const PluginTransportContext& ctx);
   bool renderInterleaved(std::vector<double>& monoBuffer, std::uint32_t sampleRate);
-  // Fills one mono buffer per instrument slot (filter+effects already applied).
-  // Returns true if at least one instrument had active voices.
-  bool renderPerInstrument(
-      std::array<std::vector<double>, kMaxInstrumentSlots>& instrBuffers,
-      std::uint32_t sampleRate);
+  // Renders every assigned instrument into its buffer in `mix` (filter and
+  // effects already applied); unassigned slots are left untouched. The caller
+  // has called mix.beginBlock(frames). Returns true if at least one
+  // instrument had active voices.
+  bool renderPerInstrument(InstrumentMixBuffers& mix, std::uint32_t sampleRate);
   bool setInstrumentParameter(std::uint8_t instrument, const std::string& name, double value);
   double getInstrumentParameter(std::uint8_t instrument, const std::string& name) const;
 

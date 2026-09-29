@@ -4593,12 +4593,17 @@ private:
     midiLearnStatusLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF9AA4AE));
   }
 
+  // The activity panel has a fixed number of rows; with 256 instrument slots
+  // they show assigned instruments (sounding ones first) rather than one row
+  // per slot.
+  static constexpr int kSlotActivityRows = 16;
+
   void initSlotActivityRows() {
-    slotActivityLabels.reserve(extracker::PluginHost::kMaxInstrumentSlots);
-    slotActivityBars.reserve(extracker::PluginHost::kMaxInstrumentSlots);
-    for (int slot = 0; slot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots); ++slot) {
+    slotActivityLabels.reserve(kSlotActivityRows);
+    slotActivityBars.reserve(kSlotActivityRows);
+    for (int row = 0; row < kSlotActivityRows; ++row) {
       auto label = std::make_unique<juce::Label>();
-      label->setText("I" + juce::String(slot) + ": v0", juce::dontSendNotification);
+      label->setText("", juce::dontSendNotification);
       label->setJustificationType(juce::Justification::centredLeft);
       if (panelWrapper) {
         panelWrapper->addAndMakeVisible(*label);
@@ -5537,32 +5542,57 @@ private:
   }
 
   void refreshSlotActivityLabels() {
-    std::array<std::size_t, extracker::PluginHost::kMaxInstrumentSlots> voiceCounts{};
-    std::array<double, extracker::PluginHost::kMaxInstrumentSlots> firstFrequencies{};
-
+    struct SlotActivity {
+      int instrument = -1;
+      std::size_t voices = 0;
+      double firstFrequency = 0.0;
+    };
+    std::vector<SlotActivity> sounding;
+    std::vector<SlotActivity> idle;
     for (std::size_t slot = 0; slot < extracker::PluginHost::kMaxInstrumentSlots; ++slot) {
-      std::uint8_t instrument = static_cast<std::uint8_t>(slot);
-      voiceCounts[slot] = app.plugins.activeVoiceCountForInstrument(instrument);
-      firstFrequencies[slot] = app.plugins.activeVoiceFrequencyHzForInstrument(instrument, 0);
+      const auto instrument = static_cast<std::uint8_t>(slot);
+      if (!app.plugins.hasInstrumentAssignment(instrument)) {
+        continue;
+      }
+      SlotActivity activity;
+      activity.instrument = static_cast<int>(slot);
+      activity.voices = app.plugins.activeVoiceCountForInstrument(instrument);
+      activity.firstFrequency = app.plugins.activeVoiceFrequencyHzForInstrument(instrument, 0);
+      (activity.voices > 0 ? sounding : idle).push_back(activity);
     }
+    std::vector<SlotActivity> shown = sounding;
+    for (const auto& activity : idle) {
+      if (shown.size() >= slotActivityLabels.size()) {
+        break;
+      }
+      shown.push_back(activity);
+    }
+    if (shown.size() > slotActivityLabels.size()) {
+      shown.resize(slotActivityLabels.size());
+    }
+    std::sort(shown.begin(), shown.end(),
+              [](const SlotActivity& a, const SlotActivity& b) { return a.instrument < b.instrument; });
 
-    for (std::size_t slot = 0; slot < slotActivityLabels.size(); ++slot) {
-      juce::String text = "I" + juce::String(static_cast<int>(slot)) + ": v" +
-                          juce::String(static_cast<int>(voiceCounts[slot]));
-      if (voiceCounts[slot] > 0 && firstFrequencies[slot] > 0.0) {
-        text += "  " + juce::String(firstFrequencies[slot], 1) + "Hz";
+    for (std::size_t row = 0; row < slotActivityLabels.size(); ++row) {
+      juce::String text;
+      double level = 0.0;
+      if (row < shown.size()) {
+        const auto& activity = shown[row];
+        text = "I" + juce::String(activity.instrument) + ": v" + juce::String(static_cast<int>(activity.voices));
+        if (activity.voices > 0 && activity.firstFrequency > 0.0) {
+          text += "  " + juce::String(activity.firstFrequency, 1) + "Hz";
+        }
+        level = std::min(1.0, static_cast<double>(activity.voices) / 6.0);
       }
-      if (slot >= cachedSlotActivityText.size()) {
-        cachedSlotActivityText.resize(slot + 1);
+      if (row >= cachedSlotActivityText.size()) {
+        cachedSlotActivityText.resize(row + 1);
       }
-      if (cachedSlotActivityText[slot] != text) {
-        cachedSlotActivityText[slot] = text;
-        slotActivityLabels[slot]->setText(text, juce::dontSendNotification);
+      if (cachedSlotActivityText[row] != text) {
+        cachedSlotActivityText[row] = text;
+        slotActivityLabels[row]->setText(text, juce::dontSendNotification);
       }
-
-      if (slot < slotActivityBars.size()) {
-        double level = std::min(1.0, static_cast<double>(voiceCounts[slot]) / 6.0);
-        slotActivityBars[slot]->setLevel(level);
+      if (row < slotActivityBars.size()) {
+        slotActivityBars[row]->setLevel(level);
       }
     }
   }

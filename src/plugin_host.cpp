@@ -541,10 +541,25 @@ protected:
   }
 };
 
+// Sample data plus the per-sample playback properties. A sample-bank slot and
+// every instrument that plays it share one SampleAsset (all access is under the
+// PluginHost mutex); each BuiltinSamplePlugin keeps its own voices.
+struct SampleAsset {
+  SampleData sample;
+  SampleData source;  // as loaded, for trim/restore
+  std::string path;
+  int rootMidiNote = 60;
+  double gain = 1.0;
+  double pan = 0.5;
+  int loopMode = 0;  // 0=none, 1=forward, 2=bidi, 3=sustain
+  std::size_t loopStart = 0;
+  std::size_t loopEnd = std::numeric_limits<std::size_t>::max();
+};
+
 class BuiltinSamplePlugin final : public extracker::IInstrumentPlugin {
 public:
   void noteOn(int midiNote, std::uint8_t velocity, bool retrigger) override {
-    if (sample_.mono.empty() || sample_.sampleRate == 0) {
+    if (a_->sample.mono.empty() || a_->sample.sampleRate == 0) {
       return;
     }
 
@@ -553,8 +568,8 @@ public:
       if (voice.midiNote == midiNote) {
         voice.active = true;
         voice.pos = retrigger ? 0.0 : voice.pos;
-        voice.level = vel * gain_;
-        voice.pitchRatio = std::pow(2.0, static_cast<double>(midiNote - rootMidiNote_) / 12.0);
+        voice.level = vel * a_->gain;
+        voice.pitchRatio = std::pow(2.0, static_cast<double>(midiNote - a_->rootMidiNote) / 12.0);
         return;
       }
     }
@@ -563,8 +578,8 @@ public:
 
     Voice voice;
     voice.midiNote = midiNote;
-    voice.level = vel * gain_;
-    voice.pitchRatio = std::pow(2.0, static_cast<double>(midiNote - rootMidiNote_) / 12.0);
+    voice.level = vel * a_->gain;
+    voice.pitchRatio = std::pow(2.0, static_cast<double>(midiNote - a_->rootMidiNote) / 12.0);
     voices_.push_back(voice);
   }
 
@@ -581,16 +596,16 @@ public:
   }
 
   void renderAdd(std::vector<double>& monoBuffer, std::uint32_t sampleRate) override {
-    if (monoBuffer.empty() || sampleRate == 0 || sample_.mono.empty()) {
+    if (monoBuffer.empty() || sampleRate == 0 || a_->sample.mono.empty()) {
       return;
     }
 
-    const double baseStep = static_cast<double>(sample_.sampleRate) / static_cast<double>(sampleRate);
+    const double baseStep = static_cast<double>(a_->sample.sampleRate) / static_cast<double>(sampleRate);
     const double releaseStep = 1.0 / std::max<double>(static_cast<double>(sampleRate) * 0.03, 1.0);
-    const std::size_t sampleSize = sample_.mono.size();
-    const std::size_t loopEndEff = (loopEnd_ != std::numeric_limits<std::size_t>::max() && loopEnd_ <= sampleSize)
-        ? loopEnd_ : sampleSize;
-    const std::size_t loopStartEff = (loopStart_ < loopEndEff) ? loopStart_ : 0;
+    const std::size_t sampleSize = a_->sample.mono.size();
+    const std::size_t loopEndEff = (a_->loopEnd != std::numeric_limits<std::size_t>::max() && a_->loopEnd <= sampleSize)
+        ? a_->loopEnd : sampleSize;
+    const std::size_t loopStartEff = (a_->loopStart < loopEndEff) ? a_->loopStart : 0;
 
     for (std::size_t frame = 0; frame < monoBuffer.size(); ++frame) {
       double mixed = 0.0;
@@ -602,12 +617,12 @@ public:
         }
 
         // Apply loop wrapping before index computation
-        if (loopMode_ != 0) {
-          if (loopMode_ == 1) {  // forward loop
+        if (a_->loopMode != 0) {
+          if (a_->loopMode == 1) {  // forward loop
             if (voice.pos >= static_cast<double>(loopEndEff)) {
               voice.pos = static_cast<double>(loopStartEff);
             }
-          } else if (loopMode_ == 2) {  // bidirectional
+          } else if (a_->loopMode == 2) {  // bidirectional
             if (voice.direction > 0.0 && voice.pos >= static_cast<double>(loopEndEff)) {
               voice.pos = static_cast<double>(loopEndEff > 0 ? loopEndEff - 1 : 0);
               voice.direction = -1.0;
@@ -615,7 +630,7 @@ public:
               voice.pos = static_cast<double>(loopStartEff);
               voice.direction = 1.0;
             }
-          } else if (loopMode_ == 3) {  // sustain loop
+          } else if (a_->loopMode == 3) {  // sustain loop
             if (!voice.releasing && voice.pos >= static_cast<double>(loopEndEff)) {
               voice.pos = static_cast<double>(loopStartEff);
             }
@@ -635,8 +650,8 @@ public:
         std::size_t nextIdx = std::min(idx + 1, sampleSize - 1);
         const double frac = voice.pos - static_cast<double>(idx);
         const double sampleValue =
-            static_cast<double>(sample_.mono[idx]) * (1.0 - frac) +
-            static_cast<double>(sample_.mono[nextIdx]) * frac;
+            static_cast<double>(a_->sample.mono[idx]) * (1.0 - frac) +
+            static_cast<double>(a_->sample.mono[nextIdx]) * frac;
 
         if (voice.releasing) {
           voice.envelope = std::max(0.0, voice.envelope - releaseStep);
@@ -669,30 +684,30 @@ public:
 
   bool setParameter(const std::string& name, double value) override {
     if (name == "gain") {
-      gain_ = std::clamp(value, 0.0, 2.0);
+      a_->gain = std::clamp(value, 0.0, 2.0);
       return true;
     }
     if (name == "sample_root") {
-      rootMidiNote_ = static_cast<int>(std::clamp(value, 0.0, 127.0));
+      a_->rootMidiNote = static_cast<int>(std::clamp(value, 0.0, 127.0));
       return true;
     }
     if (name == "pan") {
-      pan_ = std::clamp(value, 0.0, 1.0);
+      a_->pan = std::clamp(value, 0.0, 1.0);
       return true;
     }
     if (name == "loop_mode") {
-      loopMode_ = static_cast<int>(std::clamp(value, 0.0, 3.0));
+      a_->loopMode = static_cast<int>(std::clamp(value, 0.0, 3.0));
       return true;
     }
     if (name == "loop_start") {
-      loopStart_ = static_cast<std::size_t>(std::max(value, 0.0));
+      a_->loopStart = static_cast<std::size_t>(std::max(value, 0.0));
       return true;
     }
     if (name == "loop_end") {
       if (value <= 0.0) {
-        loopEnd_ = std::numeric_limits<std::size_t>::max();
+        a_->loopEnd = std::numeric_limits<std::size_t>::max();
       } else {
-        loopEnd_ = static_cast<std::size_t>(value);
+        a_->loopEnd = static_cast<std::size_t>(value);
       }
       return true;
     }
@@ -701,22 +716,22 @@ public:
 
   double getParameter(const std::string& name) const override {
     if (name == "gain") {
-      return gain_;
+      return a_->gain;
     }
     if (name == "sample_root") {
-      return static_cast<double>(rootMidiNote_);
+      return static_cast<double>(a_->rootMidiNote);
     }
     if (name == "pan") {
-      return pan_;
+      return a_->pan;
     }
     if (name == "loop_mode") {
-      return static_cast<double>(loopMode_);
+      return static_cast<double>(a_->loopMode);
     }
     if (name == "loop_start") {
-      return static_cast<double>(loopStart_);
+      return static_cast<double>(a_->loopStart);
     }
     if (name == "loop_end") {
-      return (loopEnd_ == std::numeric_limits<std::size_t>::max()) ? 0.0 : static_cast<double>(loopEnd_);
+      return (a_->loopEnd == std::numeric_limits<std::size_t>::max()) ? 0.0 : static_cast<double>(a_->loopEnd);
     }
     return 0.0;
   }
@@ -741,71 +756,71 @@ public:
     if (!loadWavFile(wavPath, loaded)) {
       return false;
     }
-    sourceSample_ = loaded;
-    sample_ = std::move(loaded);
-    samplePath_ = wavPath;
+    a_->source = loaded;
+    a_->sample = std::move(loaded);
+    a_->path = wavPath;
     voices_.clear();
     return true;
   }
 
   bool saveSample(const std::string& wavPath) const {
-    return saveWavFile(wavPath, sample_);
+    return saveWavFile(wavPath, a_->sample);
   }
 
   void clearSample() {
-    sample_ = SampleData{};
-    sourceSample_ = SampleData{};
-    samplePath_.clear();
+    a_->sample = SampleData{};
+    a_->source = SampleData{};
+    a_->path.clear();
     voices_.clear();
   }
 
   std::string samplePath() const {
-    return samplePath_;
+    return a_->path;
   }
 
   std::size_t sampleFrameCount() const {
-    return sample_.mono.size();
+    return a_->sample.mono.size();
   }
 
   std::size_t sourceFrameCount() const {
-    return sourceSample_.mono.size();
+    return a_->source.mono.size();
   }
 
   std::uint32_t sampleRateValue() const {
-    return sample_.sampleRate;
+    return a_->sample.sampleRate;
   }
 
   bool trimFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sourceSample_.mono.empty()) {
+    if (a_->source.mono.empty()) {
       return false;
     }
-    if (startFrame >= endFrameExclusive || endFrameExclusive > sourceSample_.mono.size()) {
+    if (startFrame >= endFrameExclusive || endFrameExclusive > a_->source.mono.size()) {
       return false;
     }
 
-    sample_.mono = std::vector<float>(sourceSample_.mono.begin() + startFrame,
-                                      sourceSample_.mono.begin() + endFrameExclusive);
+    a_->sample.mono = std::vector<float>(a_->source.mono.begin() + startFrame,
+                                      a_->source.mono.begin() + endFrameExclusive);
     voices_.clear();
-    return !sample_.mono.empty();
+    return !a_->sample.mono.empty();
   }
 
   bool restoreSource() {
-    if (sourceSample_.mono.empty()) {
+    if (a_->source.mono.empty()) {
       return false;
     }
-    sample_ = sourceSample_;
+    a_->sample = a_->source;
     voices_.clear();
     return true;
   }
 
   bool normalizeFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (a_->sample.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
 
     float maxAbs = 0.0f;
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
-      maxAbs = std::max(maxAbs, std::abs(sample_.mono[i]));
+      maxAbs = std::max(maxAbs, std::abs(a_->sample.mono[i]));
     }
     if (maxAbs <= 0.000001f) {
       return false;
@@ -813,55 +828,55 @@ public:
 
     const float gain = 1.0f / maxAbs;
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
-      sample_.mono[i] = std::clamp(sample_.mono[i] * gain, -1.0f, 1.0f);
+      a_->sample.mono[i] = std::clamp(a_->sample.mono[i] * gain, -1.0f, 1.0f);
     }
     return true;
   }
 
   bool fadeInFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (a_->sample.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
     const double denom = std::max<double>(static_cast<double>(endFrameExclusive - startFrame - 1), 1.0);
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
       const double t = static_cast<double>(i - startFrame) / denom;
-      sample_.mono[i] = static_cast<float>(sample_.mono[i] * t);
+      a_->sample.mono[i] = static_cast<float>(a_->sample.mono[i] * t);
     }
     return true;
   }
 
   bool fadeOutFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (a_->sample.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
     const double denom = std::max<double>(static_cast<double>(endFrameExclusive - startFrame - 1), 1.0);
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
       const double t = static_cast<double>(i - startFrame) / denom;
-      sample_.mono[i] = static_cast<float>(sample_.mono[i] * (1.0 - t));
+      a_->sample.mono[i] = static_cast<float>(a_->sample.mono[i] * (1.0 - t));
     }
     return true;
   }
 
   bool reverseFrames(std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (a_->sample.mono.empty() || startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
-    std::reverse(sample_.mono.begin() + startFrame, sample_.mono.begin() + endFrameExclusive);
+    std::reverse(a_->sample.mono.begin() + startFrame, a_->sample.mono.begin() + endFrameExclusive);
     voices_.clear();
     return true;
   }
 
   bool resampleTo(std::uint32_t newRate) {
-    if (sample_.mono.empty() || newRate < 1000 || newRate > 192000) {
+    if (a_->sample.mono.empty() || newRate < 1000 || newRate > 192000) {
       return false;
     }
-    if (newRate == sample_.sampleRate) {
+    if (newRate == a_->sample.sampleRate) {
       return false;
     }
 
-    const std::size_t oldLen = sample_.mono.size();
+    const std::size_t oldLen = a_->sample.mono.size();
     // source-frames advanced per output-frame; >1 when downsampling.
-    const double ratio = static_cast<double>(sample_.sampleRate) / static_cast<double>(newRate);
+    const double ratio = static_cast<double>(a_->sample.sampleRate) / static_cast<double>(newRate);
     const std::size_t newLen = std::max<std::size_t>(
         1, static_cast<std::size_t>(std::llround(static_cast<double>(oldLen) / ratio)));
 
@@ -892,29 +907,29 @@ public:
         if (w == 0.0) continue;
         const std::size_t idx = static_cast<std::size_t>(
             std::clamp<long>(s, 0, static_cast<long>(oldLen) - 1));
-        acc += static_cast<double>(sample_.mono[idx]) * w;
+        acc += static_cast<double>(a_->sample.mono[idx]) * w;
         wsum += w;
       }
       out[i] = (wsum != 0.0) ? static_cast<float>(std::clamp(acc / wsum, -1.0, 1.0)) : 0.0f;
     }
 
-    sample_.mono = std::move(out);
-    sample_.sampleRate = newRate;
+    a_->sample.mono = std::move(out);
+    a_->sample.sampleRate = newRate;
     voices_.clear();
     return true;
   }
 
   bool quantizeBits(int bits, std::size_t startFrame, std::size_t endFrameExclusive) {
-    if (sample_.mono.empty() || bits < 1 || bits > 32) {
+    if (a_->sample.mono.empty() || bits < 1 || bits > 32) {
       return false;
     }
-    if (startFrame >= endFrameExclusive || endFrameExclusive > sample_.mono.size()) {
+    if (startFrame >= endFrameExclusive || endFrameExclusive > a_->sample.mono.size()) {
       return false;
     }
     const double levels = std::pow(2.0, bits - 1);
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
-      const double q = std::round(static_cast<double>(sample_.mono[i]) * levels) / levels;
-      sample_.mono[i] = static_cast<float>(std::clamp(q, -1.0, 1.0));
+      const double q = std::round(static_cast<double>(a_->sample.mono[i]) * levels) / levels;
+      a_->sample.mono[i] = static_cast<float>(std::clamp(q, -1.0, 1.0));
     }
     voices_.clear();
     return true;
@@ -924,16 +939,16 @@ public:
   // audio just before loopStart (equal-power crossfade), so wrapping from
   // loopEnd back to loopStart is click-free.
   bool crossfadeLoop(std::size_t lengthFrames) {
-    if (sample_.mono.empty()) {
+    if (a_->sample.mono.empty()) {
       return false;
     }
-    if (loopMode_ != 1 && loopMode_ != 3) {  // forward / sustain only
+    if (a_->loopMode != 1 && a_->loopMode != 3) {  // forward / sustain only
       return false;
     }
-    const std::size_t sampleSize = sample_.mono.size();
-    const std::size_t loopEnd = (loopEnd_ != std::numeric_limits<std::size_t>::max() && loopEnd_ <= sampleSize)
-        ? loopEnd_ : sampleSize;
-    const std::size_t loopStart = loopStart_;
+    const std::size_t sampleSize = a_->sample.mono.size();
+    const std::size_t loopEnd = (a_->loopEnd != std::numeric_limits<std::size_t>::max() && a_->loopEnd <= sampleSize)
+        ? a_->loopEnd : sampleSize;
+    const std::size_t loopStart = a_->loopStart;
     if (loopStart < 1 || loopEnd <= loopStart) {
       return false;
     }
@@ -950,25 +965,38 @@ public:
       const double gIn = std::sin(t * M_PI / 2.0);    // pre-loopStart fades in
       const std::size_t tailIdx = loopEnd - n + i;
       const std::size_t preIdx = loopStart - n + i;
-      const double mixed = static_cast<double>(sample_.mono[tailIdx]) * gOut +
-                           static_cast<double>(sample_.mono[preIdx]) * gIn;
-      sample_.mono[tailIdx] = static_cast<float>(std::clamp(mixed, -1.0, 1.0));
+      const double mixed = static_cast<double>(a_->sample.mono[tailIdx]) * gOut +
+                           static_cast<double>(a_->sample.mono[preIdx]) * gIn;
+      a_->sample.mono[tailIdx] = static_cast<float>(std::clamp(mixed, -1.0, 1.0));
     }
     voices_.clear();
     return true;
   }
 
+  // Play `other`'s sample data and sample properties (shared, not copied), so
+  // edits to the sample-bank slot reach every instrument that uses it.
+  void shareSampleWith(const BuiltinSamplePlugin& other) {
+    a_ = other.a_;
+    voices_.clear();
+  }
+
+  // Stop sharing: this plugin gets its own, empty sample.
+  void detachSample() {
+    a_ = std::make_shared<SampleAsset>();
+    voices_.clear();
+  }
+
   std::vector<float> waveformPreview(std::size_t maxPoints) const {
-    if (sample_.mono.empty() || maxPoints == 0) {
+    if (a_->sample.mono.empty() || maxPoints == 0) {
       return {};
     }
 
-    const std::size_t points = std::min<std::size_t>(maxPoints, sample_.mono.size());
+    const std::size_t points = std::min<std::size_t>(maxPoints, a_->sample.mono.size());
     std::vector<float> preview(points, 0.0f);
     for (std::size_t i = 0; i < points; ++i) {
-      const double pos = static_cast<double>(i) * static_cast<double>(sample_.mono.size() - 1) /
+      const double pos = static_cast<double>(i) * static_cast<double>(a_->sample.mono.size() - 1) /
                          static_cast<double>(std::max<std::size_t>(points - 1, 1));
-      preview[i] = sample_.mono[static_cast<std::size_t>(std::llround(pos))];
+      preview[i] = a_->sample.mono[static_cast<std::size_t>(std::llround(pos))];
     }
     return preview;
   }
@@ -985,16 +1013,8 @@ private:
     double direction = 1.0;  // 1.0 = forward, -1.0 = reverse (bidirectional loop)
   };
 
-  SampleData sample_;
-  SampleData sourceSample_;
+  std::shared_ptr<SampleAsset> a_ = std::make_shared<SampleAsset>();
   std::vector<Voice> voices_;
-  std::string samplePath_;
-  int rootMidiNote_ = 60;
-  double gain_ = 1.0;
-  double pan_ = 0.5;
-  int loopMode_ = 0;  // 0=none, 1=forward, 2=bidi, 3=sustain
-  std::size_t loopStart_ = 0;
-  std::size_t loopEnd_ = std::numeric_limits<std::size_t>::max();
 };
 
 #ifndef _WIN32  // LV2 is not supported on Windows
@@ -5693,6 +5713,7 @@ void PluginHost::clearInstrumentSlots() {
   std::lock_guard<std::timed_mutex> lock(mutex_);
   for (auto& p : instrumentPlugins_) p.reset();
   instrumentSlots_.fill({});
+  instrumentSampleSlots_.fill(-1);
 }
 
 void PluginHost::unloadAll() {
@@ -5862,6 +5883,12 @@ bool PluginHost::assignInstrument(std::uint8_t instrument, const std::string& pl
   instrumentPlugins_[instrument] = std::move(plugin);
   if (pluginId != "builtin.sample") {
     instrumentSampleSlots_[instrument] = -1;
+  } else if (const int linked = instrumentSampleSlots_[instrument]; linked >= 0) {
+    auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get());
+    auto* bankPlugin = asSamplePlugin(sampleSlotPlugins_[static_cast<std::size_t>(linked)].get());
+    if (samplePlugin && bankPlugin) {
+      samplePlugin->shareSampleWith(*bankPlugin);
+    }
   }
   return true;
 }
@@ -6157,29 +6184,23 @@ bool PluginHost::renderInterleaved(std::vector<double>& monoBuffer, std::uint32_
   return anyRendered;
 }
 
-bool PluginHost::renderPerInstrument(
-    std::array<std::vector<double>, kMaxInstrumentSlots>& instrBuffers,
-    std::uint32_t sampleRate) {
+bool PluginHost::renderPerInstrument(InstrumentMixBuffers& mix, std::uint32_t sampleRate) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
 
-  if (sampleRate == 0) return false;
-  const std::size_t n = instrBuffers[0].size();
-  if (n == 0) return false;
-
-  for (auto& b : instrBuffers) { b.assign(n, 0.0); }
+  if (sampleRate == 0 || mix.frames() == 0) return false;
+  const std::size_t n = mix.frames();
 
   bool anyRendered = false;
 
   for (std::size_t i = 0; i < instrumentPlugins_.size(); ++i) {
     if (!instrumentPlugins_[i]) continue;
+    std::vector<double>& buffer = mix.touch(i);
     instrumentPlugins_[i]->setTransportContext(transportCtx_, projectTimeSamples_);
-    instrumentPlugins_[i]->renderAdd(instrBuffers[i], sampleRate);
-    const bool hasFilter  = i < instrumentFilters_.size() && instrumentFilters_[i].isActive();
-    const bool hasEffects = i < instrumentEffects_.size() && instrumentEffects_[i].params.isActive();
-    if (hasFilter)
-      instrumentFilters_[i].apply(instrBuffers[i], static_cast<double>(sampleRate));
-    if (hasEffects)
-      applyInstrumentEffects(instrBuffers[i], instrumentEffects_[i].params,
+    instrumentPlugins_[i]->renderAdd(buffer, sampleRate);
+    if (instrumentFilters_[i].isActive())
+      instrumentFilters_[i].apply(buffer, static_cast<double>(sampleRate));
+    if (instrumentEffects_[i].params.isActive())
+      applyInstrumentEffects(buffer, instrumentEffects_[i].params,
                              instrumentEffects_[i].state, static_cast<double>(sampleRate));
     anyRendered = anyRendered || instrumentPlugins_[i]->activeVoiceCount() > 0;
   }
@@ -6187,18 +6208,16 @@ bool PluginHost::renderPerInstrument(
   // Route each sample-slot plugin to the instrument it's assigned to.
   for (std::size_t slot = 0; slot < sampleSlotPlugins_.size(); ++slot) {
     if (!sampleSlotPlugins_[slot] || sampleSlotPaths_[slot].empty()) continue;
-    int assignedInstr = -1;
+    if (sampleSlotPlugins_[slot]->activeVoiceCount() == 0) continue;
+    std::size_t dest = 0;
     for (std::size_t instr = 0; instr < instrumentSampleSlots_.size(); ++instr) {
       if (instrumentSampleSlots_[instr] == static_cast<int>(slot)) {
-        assignedInstr = static_cast<int>(instr);
+        dest = instr;
         break;
       }
     }
-    auto& dest = (assignedInstr >= 0 && assignedInstr < static_cast<int>(instrBuffers.size()))
-                   ? instrBuffers[static_cast<std::size_t>(assignedInstr)]
-                   : instrBuffers[0];
-    sampleSlotPlugins_[slot]->renderAdd(dest, sampleRate);
-    anyRendered = anyRendered || sampleSlotPlugins_[slot]->activeVoiceCount() > 0;
+    sampleSlotPlugins_[slot]->renderAdd(mix.touch(dest), sampleRate);
+    anyRendered = true;
   }
 
   if (transportCtx_.isPlaying) {
@@ -6452,6 +6471,11 @@ bool PluginHost::clearSampleSlot(std::uint16_t sampleSlot) {
   for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
     if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot)) {
       instrumentSampleSlots_[instrument] = -1;
+      // Instruments that played this sample fall silent rather than keep a
+      // private copy of a sample that is no longer in the bank.
+      if (auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get())) {
+        samplePlugin->detachSample();
+      }
     }
   }
   return true;
@@ -6677,9 +6701,11 @@ bool PluginHost::assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uin
   }
 
   auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get());
-  if (!samplePlugin || !samplePlugin->loadSample(sourcePath)) {
+  auto* bankPlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  if (!samplePlugin || !bankPlugin) {
     return false;
   }
+  samplePlugin->shareSampleWith(*bankPlugin);
 
   instrumentSampleSlots_[instrument] = static_cast<int>(sampleSlot);
   return true;
@@ -6716,6 +6742,9 @@ bool PluginHost::loadSampleToInstrument(std::uint8_t instrument, const std::stri
   auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get());
   if (!samplePlugin) {
     return false;
+  }
+  if (instrumentSampleSlots_[instrument] >= 0) {
+    samplePlugin->detachSample();  // don't overwrite the shared bank sample
   }
   const bool loaded = samplePlugin->loadSample(wavPath);
   if (loaded) {
@@ -6975,7 +7004,11 @@ bool PluginHost::clearSampleFromInstrument(std::uint8_t instrument) {
   if (!samplePlugin) {
     return false;
   }
-  samplePlugin->clearSample();
+  if (instrumentSampleSlots_[instrument] >= 0) {
+    samplePlugin->detachSample();  // leave the shared bank sample alone
+  } else {
+    samplePlugin->clearSample();
+  }
   instrumentSampleSlots_[instrument] = -1;
   return true;
 }
