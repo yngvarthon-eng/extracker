@@ -123,6 +123,13 @@ struct PluginPortInfo {
   std::vector<PluginControlPortMeta> controlOutMeta;
 };
 
+// Whose playback properties (root note, gain, pan, loop) a sample instrument
+// keeps when it is linked to a sample-bank slot and starts sharing its sample.
+enum class SampleLinkProperties {
+  FromSample,      // the bank sample's (interactive linking)
+  FromInstrument,  // the instrument's own, e.g. just read from a song file
+};
+
 class PluginHost {
 public:
   static constexpr std::size_t kMaxInstrumentSlots = kInstrumentSlotCount;
@@ -152,12 +159,10 @@ public:
   std::string pluginForInstrument(std::uint8_t instrument) const;
   bool triggerNoteOn(std::uint8_t instrument, int midiNote, std::uint8_t velocity, bool retrigger);
   bool triggerNoteOff(std::uint8_t instrument, int midiNote);
-  bool triggerNoteOnResolved(std::uint8_t instrument,
-                             std::uint16_t sampleSlot,
-                             int midiNote,
-                             std::uint8_t velocity,
-                             bool retrigger);
-  bool triggerNoteOffResolved(std::uint8_t instrument, std::uint16_t sampleSlot, int midiNote);
+  // Plays a sample-bank slot directly (sample list preview), independent of
+  // any instrument.
+  bool previewSampleNoteOn(std::uint16_t sampleSlot, int midiNote, std::uint8_t velocity);
+  bool previewSampleNoteOff(std::uint16_t sampleSlot, int midiNote);
   void allNotesOff();
   void setTransportContext(const PluginTransportContext& ctx);
   bool renderInterleaved(std::vector<double>& monoBuffer, std::uint32_t sampleRate);
@@ -213,8 +218,11 @@ public:
   std::vector<float> sampleWaveformForSlot(std::uint16_t sampleSlot, std::size_t maxPoints = 2048) const;
   bool setSampleNameForSlot(std::uint16_t sampleSlot, const std::string& name);
   std::string sampleNameForSlot(std::uint16_t sampleSlot) const;
-  bool assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument);
+  bool assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument,
+                                    SampleLinkProperties properties = SampleLinkProperties::FromSample);
   int sampleSlotForInstrument(std::uint8_t instrument) const;
+  // Lowest sample instrument (builtin.sample) linked to `sampleSlot`, or -1.
+  int instrumentForSampleSlot(std::uint16_t sampleSlot) const;
   bool loadSampleToInstrument(std::uint8_t instrument, const std::string& wavPath);
   bool loadXpmInstrument(const std::string& xpmPath, std::uint8_t instrument);
   bool loadSfzInstrument(const std::string& sfzPath, std::uint8_t instrument);
@@ -234,6 +242,9 @@ public:
   bool saveSampleFromInstrument(std::uint8_t instrument, const std::string& wavPath) const;
   bool clearSampleFromInstrument(std::uint8_t instrument);
   std::string samplePathForInstrument(std::uint8_t instrument) const;
+  // Frames of sample data a builtin.sample instrument would play (0 for other
+  // plugins or an empty sample instrument). Waits for the lock.
+  std::size_t sampleFrameCountForInstrument(std::uint8_t instrument) const;
   std::size_t activeVoiceCountForInstrument(std::uint8_t instrument) const;
   double activeVoiceFrequencyHzForInstrument(std::uint8_t instrument, std::size_t voiceIndex) const;
   std::size_t noteOnEventCount() const;

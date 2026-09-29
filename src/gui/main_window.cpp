@@ -1,6 +1,7 @@
 #include "main_window.h"
 #include "pattern_grid.h"
 #include "app.h"
+#include "extracker/sample_instrument_migration.hpp"
 #include "extracker/pattern_templates.hpp"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
@@ -2369,12 +2370,27 @@ public:
         static_cast<std::uint16_t>(selectedSampleSlot),
         std::filesystem::path(file.getFullPathName().toStdString()).stem().string());
     }
-        const juce::String statusText = loaded
+        // Notes play instruments, so the sample gets its sample instrument: the
+        // one already linked to this slot, else the selected instrument slot if
+        // it is empty, else the lowest free slot.
+        int sampleInstrument = -1;
+        if (loaded) {
+          sampleInstrument = extracker::ensureSampleInstrument(
+              app.plugins, static_cast<std::uint16_t>(selectedSampleSlot),
+              extracker::InstrumentUseMap{}, getSelectedSlot());
+        }
+        juce::String statusText = loaded
             ? "Loaded sample to " + formatSampleSlotHex(selectedSampleSlot)
             : "Failed to load sample to " + formatSampleSlotHex(selectedSampleSlot);
+        if (loaded) {
+          statusText += sampleInstrument >= 0
+              ? " - plays on instrument " + juce::String::toHexString(sampleInstrument).paddedLeft('0', 2).toUpperCase()
+              : " - no free instrument slot";
+        }
 
         // Don't auto-arm on load: arming must be explicit (Arm for Notes button).
         pluginStatusLabel.setText(statusText, juce::dontSendNotification);
+        refreshSlotSelector();
         refreshSampleSlotSelector();
         refreshChannelPluginLabels();
         refreshSampleSlotDetails();
@@ -2389,21 +2405,15 @@ public:
         return;
       }
 
-      if (selectedSampleSlot > 255) {
-        pluginStatusLabel.setText("Preview supports sample slots 0-255", juce::dontSendNotification);
-        return;
-      }
-
       if (app.plugins.samplePathForSlot(static_cast<std::uint16_t>(selectedSampleSlot)).empty()) {
         pluginStatusLabel.setText("Selected sample slot is empty", juce::dontSendNotification);
         return;
       }
 
       const int previewNote = static_cast<int>(std::lround(keyboardOctaveSlider.getValue())) * 12 + 12;
-      const bool started = app.plugins.triggerNoteOn(static_cast<std::uint8_t>(selectedSampleSlot),
-                                                     previewNote,
-                                                     127,
-                                                     true);
+      const bool started = app.plugins.previewSampleNoteOn(static_cast<std::uint16_t>(selectedSampleSlot),
+                                                           previewNote,
+                                                           127);
       pluginStatusLabel.setText(
           started ? "Previewing " + formatSampleSlotHex(selectedSampleSlot) + " at MIDI note " + juce::String(previewNote)
                   : "Failed previewing " + formatSampleSlotHex(selectedSampleSlot),
@@ -2418,14 +2428,9 @@ public:
         return;
       }
 
-      if (selectedSampleSlot > 255) {
-        pluginStatusLabel.setText("Preview supports sample slots 0-255", juce::dontSendNotification);
-        return;
-      }
-
       const int previewNote = static_cast<int>(std::lround(keyboardOctaveSlider.getValue())) * 12 + 12;
-      const bool stopped = app.plugins.triggerNoteOff(static_cast<std::uint8_t>(selectedSampleSlot),
-                                                      previewNote);
+      const bool stopped = app.plugins.previewSampleNoteOff(static_cast<std::uint16_t>(selectedSampleSlot),
+                                                            previewNote);
       pluginStatusLabel.setText(
           stopped ? "Stopped preview for " + formatSampleSlotHex(selectedSampleSlot)
                   : "No active preview for " + formatSampleSlotHex(selectedSampleSlot),
@@ -2439,22 +2444,21 @@ public:
         pluginStatusLabel.setText("Select a sample slot first", juce::dontSendNotification);
         return;
       }
-      if (selectedSampleSlot > 255) {
-        pluginStatusLabel.setText("Keystation routing supports sample slots 0-255", juce::dontSendNotification);
-        return;
-      }
-      const auto instrSlot = static_cast<std::uint8_t>(selectedSampleSlot);
-      const bool ok = app.plugins.assignSampleSlotToInstrument(
-          static_cast<std::uint16_t>(selectedSampleSlot), instrSlot);
-      if (ok) {
+      // Route to the sample's instrument (created in a free slot if needed);
+      // never overwrite whatever plugin holds the same-numbered instrument.
+      const int instrSlot = extracker::ensureSampleInstrument(
+          app.plugins, static_cast<std::uint16_t>(selectedSampleSlot),
+          extracker::InstrumentUseMap{}, selectedSampleSlot);
+      if (instrSlot >= 0) {
         std::lock_guard<std::mutex> lock(app.stateMutex);
         app.midiInstrument = instrSlot;
         app.midiThruEnabled = true;
         pluginStatusLabel.setText(
-            "Keystation -> sample slot " + formatSampleSlotHex(selectedSampleSlot),
+            "Keystation -> sample slot " + formatSampleSlotHex(selectedSampleSlot) + " (instrument " +
+                juce::String::toHexString(instrSlot).paddedLeft('0', 2).toUpperCase() + ")",
             juce::dontSendNotification);
       } else {
-        pluginStatusLabel.setText("Route failed: slot empty?", juce::dontSendNotification);
+        pluginStatusLabel.setText("Route failed: slot empty or no free instrument slot", juce::dontSendNotification);
       }
     };
 
@@ -2757,8 +2761,11 @@ public:
       moduleMessageEditor.setText(juce::String(app.module.message()), juce::dontSendNotification);
       moduleMessageSavedSnapshot = juce::String(app.module.message());
       updateModuleMessageStateIndicator();
-      isSongDirty = false;
-      pluginStatusLabel.setText("Restored: " + lastSongFile.getFileName(), juce::dontSendNotification);
+      // A song converted to sample instruments differs from the file on disk.
+      isSongDirty = !app.lastLoadConversionSummary.empty();
+      pluginStatusLabel.setText("Restored: " + lastSongFile.getFileName() +
+                                    (isSongDirty ? " - " + juce::String(app.lastLoadConversionSummary) : juce::String()),
+                                juce::dontSendNotification);
     }
   }
 
@@ -3818,8 +3825,11 @@ private:
               moduleMessageEditor.setText(juce::String(app.module.message()), juce::dontSendNotification);
               moduleMessageSavedSnapshot = juce::String(app.module.message());
               updateModuleMessageStateIndicator();
-              isSongDirty = false;
-              pluginStatusLabel.setText("Song loaded: " + selectedFile.getFileName(), juce::dontSendNotification);
+              // A song converted to sample instruments differs from the file on disk.
+              isSongDirty = !app.lastLoadConversionSummary.empty();
+              pluginStatusLabel.setText("Song loaded: " + selectedFile.getFileName() +
+                                            (isSongDirty ? " - " + juce::String(app.lastLoadConversionSummary) : juce::String()),
+                                        juce::dontSendNotification);
             } else {
               pluginStatusLabel.setText("Failed to load song", juce::dontSendNotification);
             }

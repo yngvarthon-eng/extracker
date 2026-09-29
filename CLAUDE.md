@@ -88,6 +88,14 @@ Real-time-ish playback pipeline, all driven by a background thread:
   slot's `SampleAsset` (data + root/gain/loop), so bank edits reach every linked instrument;
   each plugin keeps its own voices. The audio thread renders into reusable
   `InstrumentMixBuffers` and only touches instruments that are assigned or sounding.
+  **A note plays its instrument and nothing else** (`triggerNoteOn`): the step's `sample` field is
+  kept only for reading older files, and an empty instrument slot no longer borrows the
+  same-numbered bank sample. `migrateSampleReferences` (`sample_instrument_migration.hpp`)
+  converts older songs after every load (CLI `load`, GUI `loadPatternFromFile`) and
+  `ensureSampleInstrument` finds/creates the sample instrument for a bank slot (used by
+  `sample load`, GUI note entry with an armed sample, keyboard routing). Bank previews use
+  `previewSampleNoteOn/Off`. On load, `INSTR_SAMPLE_SLOT` links with
+  `SampleLinkProperties::FromInstrument` so the instrument's saved root/loop params survive.
 - **MidiInput** — ALSA-seq based MIDI in, with clock/transport sync and channel→instrument mapping.
 - **ChannelManager** (`channel_manager.hpp`) — the single owner of per-channel user state: name,
   default instrument, mute, solo, volume and base filter. Solo wins over mute (`isAudible`). The

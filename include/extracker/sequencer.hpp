@@ -22,7 +22,6 @@ public:
     int midiNote = -1;
     std::size_t channel = 0;
     std::uint8_t instrument = 0;
-    std::uint16_t sample = 0xFFFF;  // 0xFFFF means no sample
     std::uint32_t gateTicks = 0;
     std::uint8_t velocity = 100;
     bool retrigger = false;
@@ -85,7 +84,6 @@ private:
     bool active = false;
     int midiNote = -1;
     std::uint8_t instrument = 0;
-    std::uint16_t sample = 0xFFFF;
     bool fadingOut = false;
     std::uint8_t fadeDecrement = 0;
     std::uint8_t currentVelocity = 100;

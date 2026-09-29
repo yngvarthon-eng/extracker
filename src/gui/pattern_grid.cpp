@@ -1,6 +1,7 @@
 #include "pattern_grid.h"
 #include "app.h"
 #include "extracker/pattern_editor.hpp"
+#include "extracker/sample_instrument_migration.hpp"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <algorithm>
 #include <chrono>
@@ -12,13 +13,33 @@
 namespace {
 
 std::uint8_t defaultInsertInstrument(const ExTrackerApp& app, int channel) {
-  // activeSampleSlot is written separately into the step's sample field, so it
-  // must NOT also override the instrument field — that would corrupt notes placed
-  // on other channels/instruments while a sample slot is armed in the panel.
   if (channel >= 0 && static_cast<std::size_t>(channel) < app.channels.count()) {
     return app.channels.instrument(static_cast<std::size_t>(channel));
   }
   return static_cast<std::uint8_t>(std::clamp(app.midiInstrument, 0, 255));
+}
+
+// The sample instrument that plays sample-bank slot `sampleSlot` (created on
+// first use in a free instrument slot), or -1 if the bank slot is empty or no
+// slot is free. A note's instrument alone decides its sound, so an armed or
+// typed sample is written as that instrument. Call with app.stateMutex held.
+int sampleInstrumentFor(ExTrackerApp& app, int sampleSlot) {
+  if (sampleSlot < 0 || sampleSlot >= static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
+    return -1;
+  }
+  return extracker::ensureSampleInstrument(app.plugins, static_cast<std::uint16_t>(sampleSlot),
+                                           extracker::instrumentsUsedByNotes(app.module), sampleSlot);
+}
+
+// Instrument for a note placed on `channel`: the armed sample's instrument
+// when a sample is armed, otherwise the channel's default instrument.
+std::uint8_t insertInstrument(ExTrackerApp& app, int channel, bool sampleArmed) {
+  if (sampleArmed) {
+    if (const int instrument = sampleInstrumentFor(app, app.activeSampleSlot); instrument >= 0) {
+      return static_cast<std::uint8_t>(instrument);
+    }
+  }
+  return defaultInsertInstrument(app, channel);
 }
 
 std::string toUpperHex(unsigned int value, int width) {
@@ -589,34 +610,28 @@ void PatternGrid::drawCell(juce::Graphics& g,
 
   const bool isVolumeOnlyEffect = (!hasNote && effectCommand == 0x0C && effectValue > 0);
 
-  int sampleSlot = -1;
-  if (sample != 0xFFFF) {
-    sampleSlot = static_cast<int>(sample);
-  } else {
-    sampleSlot = app.plugins.sampleSlotForInstrument(instrument);
-    if (sampleSlot < 0 && !app.plugins.samplePathForSlot(static_cast<std::uint16_t>(instrument)).empty()) {
-      sampleSlot = instrument;
-    }
-  }
-  const std::string sampleSlotText = sampleSlot >= 0 ? toUpperHex(static_cast<unsigned int>(sampleSlot), 3) : "...";
+  // The instrument number alone decides a note's sound, so that is what the
+  // cell shows.
+  juce::ignoreUnused(sample);
+  const std::string instrumentText = (hasNote && !isNoteOff) ? toUpperHex(instrument, 2) : "..";
 
   juce::String tickText;
   if (isNoteOff) {
-    tickText = "^^^ ... ... ....";
+    tickText = "^^^ .. ... ....";
   } else if (hasNote) {
     const std::string noteText = formatTrackerNote(note);
     const bool velocityIsDefault = (velocity == extracker::PatternEditor::kDefaultVelocity);
     const std::string volumeFxText = velocityIsDefault ? "..." : std::string("a") + toUpperHex(velocity, 2);
-    tickText = juce::String(noteText) + " " + juce::String(sampleSlotText) + " " +
+    tickText = juce::String(noteText) + " " + juce::String(instrumentText) + " " +
                juce::String(volumeFxText) + " " + juce::String(effectText);
   } else if (isVolumeOnlyEffect) {
     const std::string volumeFxText = std::string("a") + toUpperHex(effectValue, 2);
-    tickText = juce::String("... ") + juce::String(sampleSlotText) + " " +
+    tickText = juce::String("... ") + juce::String(instrumentText) + " " +
                juce::String(volumeFxText) + " " + juce::String(effectText);
   } else if (hasEffect) {
-    tickText = juce::String("... ") + juce::String(sampleSlotText) + " ... " + juce::String(effectText);
+    tickText = juce::String("... ") + juce::String(instrumentText) + " ... " + juce::String(effectText);
   } else {
-    tickText = juce::String("... ") + juce::String(sampleSlotText) + " ... ....";
+    tickText = juce::String("... ") + juce::String(instrumentText) + " ... ....";
   }
 
   g.setColour(showLiveFxPreview ? juce::Colour(0xFFFFCC00) : juce::Colours::white);
@@ -722,17 +737,11 @@ void PatternGrid::mouseDown(const juce::MouseEvent& event) {
         const int targetChannel = (sampleArmed && app.sampleTargetChannel >= 0 &&
                                     app.sampleTargetChannel < numCh)
             ? app.sampleTargetChannel : channel;
-        const std::uint8_t instrument = defaultInsertInstrument(app, targetChannel);
+        const std::uint8_t instrument = insertInstrument(app, targetChannel, sampleArmed);
         app.module.currentEditor().insertNote(row, targetChannel, 60, instrument, insertGateTicks, insertVelocity, true);
-        std::uint16_t sample = 0xFFFF;
-        if (sampleArmed) {
-          sample = static_cast<std::uint16_t>(app.activeSampleSlot);
-          app.module.currentEditor().setSample(row, targetChannel, sample);
-        } else {
-          app.module.currentEditor().setSample(row, targetChannel, 0xFFFF);
-        }
+        app.module.currentEditor().setSample(row, targetChannel, 0xFFFF);
         lock.unlock();
-        previewPlacedNote(instrument, sample, 60, insertVelocity);
+        previewPlacedNote(instrument, 60, insertVelocity);
         refreshSnapshot();
         repaintCell(row, targetChannel);
         return;
@@ -1189,8 +1198,12 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
       }
 
       auto& editor = app.module.currentEditor();
-      const auto sample = static_cast<std::uint16_t>(std::clamp(static_cast<int>(parsed), 0, 255));
-      editor.setSample(selectedRow, selectedChannel, sample);
+      // A typed sample number sets the note's instrument to that sample's instrument.
+      const int instrument = sampleInstrumentFor(app, std::clamp(static_cast<int>(parsed), 0, 255));
+      if (instrument >= 0) {
+        editor.setInstrument(selectedRow, selectedChannel, static_cast<std::uint8_t>(instrument));
+        editor.setSample(selectedRow, selectedChannel, 0xFFFF);
+      }
 
       const int nextRow = std::min(static_cast<int>(editor.rows()) - 1, selectedRow + editStep);
       lock.unlock();
@@ -1603,20 +1616,14 @@ bool PatternGrid::commitNoteFromKeyboard(int midiNote) {
                               app.sampleTargetChannel < numChannels)
       ? app.sampleTargetChannel : selectedChannel;
 
-  const std::uint8_t instrument = defaultInsertInstrument(app, targetChannel);
+  const std::uint8_t instrument = insertInstrument(app, targetChannel, sampleArmed);
 
   app.module.currentEditor().insertNote(selectedRow, targetChannel, midiNote, instrument, insertGateTicks, insertVelocity, true);
-  std::uint16_t sample = 0xFFFF;
-  if (sampleArmed) {
-    sample = static_cast<std::uint16_t>(app.activeSampleSlot);
-    app.module.currentEditor().setSample(selectedRow, targetChannel, sample);
-  } else {
-    app.module.currentEditor().setSample(selectedRow, targetChannel, 0xFFFF);
-  }
+  app.module.currentEditor().setSample(selectedRow, targetChannel, 0xFFFF);
 
   int nextRow = std::min(static_cast<int>(app.module.currentEditor().rows()) - 1, selectedRow + editStep);
   lock.unlock();
-  previewPlacedNote(instrument, sample, midiNote, insertVelocity);
+  previewPlacedNote(instrument, midiNote, insertVelocity);
   refreshSnapshot();
   repaint();
   selectCell(nextRow, selectedChannel);
@@ -1624,15 +1631,13 @@ bool PatternGrid::commitNoteFromKeyboard(int midiNote) {
 }
 
 void PatternGrid::previewPlacedNote(std::uint8_t instrument,
-                                    std::uint16_t sample,
                                     int midiNote,
                                     std::uint8_t velocity) {
   if (midiNote < 0 || midiNote > 127) {
     return;
   }
-  const bool triggered = app.plugins.triggerNoteOnResolved(
+  const bool triggered = app.plugins.triggerNoteOn(
       instrument,
-      sample,
       midiNote,
       std::clamp<std::uint8_t>(velocity, 1, 127),
       true);
@@ -1642,7 +1647,6 @@ void PatternGrid::previewPlacedNote(std::uint8_t instrument,
 
   PendingPreviewNoteOff pending;
   pending.instrument = instrument;
-  pending.sample = sample;
   pending.midiNote = midiNote;
   pending.dueMs = juce::Time::getMillisecondCounter() + previewDurationMs;
   pendingPreviewNoteOffs.push_back(pending);
@@ -1671,11 +1675,10 @@ void PatternGrid::previewSelectedStepIfEnabled(bool force) {
     return;  // note-off step (^^^): no audio to preview
   }
   const std::uint8_t instrument = app.module.currentEditor().instrumentAt(selectedRow, selectedChannel);
-  const std::uint16_t sample = app.module.currentEditor().sampleAt(selectedRow, selectedChannel);
   const std::uint8_t velocity = app.module.currentEditor().velocityAt(selectedRow, selectedChannel);
   lock.unlock();
 
-  previewPlacedNote(instrument, sample, midiNote, velocity);
+  previewPlacedNote(instrument, midiNote, velocity);
 }
 
 void PatternGrid::timerCallback() {
@@ -1689,7 +1692,7 @@ void PatternGrid::timerCallback() {
   while (next != pendingPreviewNoteOffs.end()) {
     const auto due = next->dueMs;
     if (static_cast<std::int32_t>(now - due) >= 0) {
-      app.plugins.triggerNoteOffResolved(next->instrument, next->sample, next->midiNote);
+      app.plugins.triggerNoteOff(next->instrument, next->midiNote);
       next = pendingPreviewNoteOffs.erase(next);
     } else {
       ++next;

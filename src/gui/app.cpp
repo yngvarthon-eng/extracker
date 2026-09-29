@@ -1,4 +1,6 @@
 #include "app.h"
+
+#include "extracker/sample_instrument_migration.hpp"
 #include "main_window.h"
 #include "extracker/cli_parse_utils.hpp"
 #include "extracker/song_bundle.hpp"
@@ -714,6 +716,17 @@ bool ExTrackerApp::loadPatternFromFile(const std::string& path, bool blocking) {
     return false;
   }
 
+  lastLoadConversionSummary.clear();
+  if (!readSongFile(path)) {
+    return false;
+  }
+  // Older songs could reach samples through the per-note sample column or the
+  // same-number fallback; turn those into sample instruments.
+  lastLoadConversionSummary = extracker::migrateSampleReferences(module, plugins).summary();
+  return true;
+}
+
+bool ExTrackerApp::readSongFile(const std::string& path) {
   std::ifstream in(path);
   if (!in) {
     return false;
@@ -1025,7 +1038,8 @@ bool ExTrackerApp::loadPatternFromFile(const std::string& path, bool blocking) {
           if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots) &&
               sampleSlot >= 0 && sampleSlot < static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
             plugins.assignSampleSlotToInstrument(static_cast<std::uint16_t>(sampleSlot),
-                                                 static_cast<std::uint8_t>(instrSlot));
+                                                 static_cast<std::uint8_t>(instrSlot),
+                                                 extracker::SampleLinkProperties::FromInstrument);
           }
         }
       } else if (tailToken == "INSTRUMENT_PRESET") {

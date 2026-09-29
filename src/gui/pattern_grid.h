@@ -69,7 +69,6 @@ public:
 private:
   struct PendingPreviewNoteOff {
     std::uint8_t instrument = 0;
-    std::uint16_t sample = 0xFFFF;
     int midiNote = -1;
     std::uint32_t dueMs = 0;
   };
@@ -140,7 +139,7 @@ private:
   void repaintCell(int row, int channel);
   bool refreshSnapshot();
   void timerCallback() override;
-  void previewPlacedNote(std::uint8_t instrument, std::uint16_t sample, int midiNote, std::uint8_t velocity);
+  void previewPlacedNote(std::uint8_t instrument, int midiNote, std::uint8_t velocity);
   void previewSelectedStepIfEnabled(bool force = false);
   void selectCell(int row, int channel, bool preserveBlock = false);
   bool commitNoteFromKeyboard(int midiNote);

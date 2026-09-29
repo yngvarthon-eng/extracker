@@ -55,6 +55,9 @@ public:
   // File I/O
   bool savePatternToFile(const std::string& path, bool blocking = false);
   bool loadPatternFromFile(const std::string& path, bool blocking = false);
+  // Set by loadPatternFromFile when an older song was converted to sample
+  // instruments; empty otherwise.
+  std::string lastLoadConversionSummary;
   void armMidiEditorLearn(MidiEditorAction action);
   void clearMidiEditorCcMappings();
   int midiEditorCcMappingCode(MidiEditorAction action) const;
@@ -122,6 +125,8 @@ public:
   std::atomic<std::uint64_t> lastRecoverySnapshotEpochMs{0};
 
 private:
+  // Reads a song file into the engine objects; caller holds stateMutex.
+  bool readSongFile(const std::string& path);
   std::unique_ptr<MainWindow> mainWindow;
   std::thread sequencerThread;
 };

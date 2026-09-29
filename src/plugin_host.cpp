@@ -980,6 +980,20 @@ public:
     voices_.clear();
   }
 
+  // Copy the playback properties (root note, gain, pan, loop) of `other`'s
+  // sample into this plugin's sample, leaving the sample data alone.
+  void copySamplePropertiesFrom(const BuiltinSamplePlugin& other) {
+    if (other.a_ == a_) {
+      return;
+    }
+    a_->rootMidiNote = other.a_->rootMidiNote;
+    a_->gain = other.a_->gain;
+    a_->pan = other.a_->pan;
+    a_->loopMode = other.a_->loopMode;
+    a_->loopStart = other.a_->loopStart;
+    a_->loopEnd = other.a_->loopEnd;
+  }
+
   // Stop sharing: this plugin gets its own, empty sample.
   void detachSample() {
     a_ = std::make_shared<SampleAsset>();
@@ -5898,20 +5912,13 @@ bool PluginHost::hasInstrumentAssignment(std::uint8_t instrument) const {
   if (!isValidInstrument(instrument)) {
     return false;
   }
-  return !instrumentSlots_[instrument].empty() ||
-         (static_cast<std::size_t>(instrument) < sampleSlotPaths_.size() &&
-          !sampleSlotPaths_[instrument].empty());
+  return !instrumentSlots_[instrument].empty();
 }
 
 std::string PluginHost::pluginForInstrument(std::uint8_t instrument) const {
   std::lock_guard<std::timed_mutex> lock(mutex_);
   if (!isValidInstrument(instrument)) {
     return "";
-  }
-  if (instrumentSlots_[instrument].empty() &&
-      static_cast<std::size_t>(instrument) < sampleSlotPaths_.size() &&
-      !sampleSlotPaths_[instrument].empty()) {
-    return "builtin.sample";
   }
   return instrumentSlots_[instrument];
 }
@@ -5927,34 +5934,19 @@ bool PluginHost::isValidSampleSlot(std::uint16_t sampleSlot) const {
 bool PluginHost::triggerNoteOn(std::uint8_t instrument, int midiNote, std::uint8_t velocity, bool retrigger) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
 
-  if (!isValidInstrument(instrument)) {
+  // A note plays its instrument and nothing else: there is no per-note sample
+  // override and no fallback from an empty instrument slot to the sample-bank
+  // slot with the same number (songs relying on either are converted on load,
+  // see migrateSampleReferences).
+  if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return false;
   }
-
-  if (!instrumentSlots_[instrument].empty() && instrumentPlugins_[instrument]) {
-    auto* sp = asSamplePlugin(instrumentPlugins_[instrument].get());
-    if (sp && sp->sampleFrameCount() == 0) {
-      const int mapped = instrumentSampleSlots_[instrument];
-      const std::uint16_t slot = (mapped >= 0) ? static_cast<std::uint16_t>(mapped)
-                                               : static_cast<std::uint16_t>(instrument);
-      if (isValidSampleSlot(slot) && !sampleSlotPaths_[slot].empty() && sampleSlotPlugins_[slot]) {
-        sampleSlotPlugins_[slot]->noteOn(midiNote, velocity, retrigger);
-        noteOnEventCount_ += 1;
-        return true;
-      }
-    }
-    instrumentPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
-    noteOnEventCount_ += 1;
-    return true;
+  // Apply per-instrument pitch offset (rounded to nearest semitone for MIDI)
+  const int offset = static_cast<int>(std::round(pitchOffsets_[instrument]));
+  if (offset != 0) {
+    midiNote = std::clamp(midiNote + offset, 0, 127);
   }
-
-  if (static_cast<std::size_t>(instrument) >= sampleSlotPlugins_.size() ||
-      sampleSlotPaths_[instrument].empty() ||
-      !sampleSlotPlugins_[instrument]) {
-    return false;
-  }
-
-  sampleSlotPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
+  instrumentPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
   noteOnEventCount_ += 1;
   return true;
 }
@@ -5962,158 +5954,50 @@ bool PluginHost::triggerNoteOn(std::uint8_t instrument, int midiNote, std::uint8
 bool PluginHost::triggerNoteOff(std::uint8_t instrument, int midiNote) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
 
-  if (!isValidInstrument(instrument)) {
+  if (!isValidInstrument(instrument) || !instrumentPlugins_[instrument]) {
     return false;
   }
-
-  if (!instrumentSlots_[instrument].empty() && instrumentPlugins_[instrument]) {
-    auto* sp = asSamplePlugin(instrumentPlugins_[instrument].get());
-    if (sp && sp->sampleFrameCount() == 0) {
-      const int mapped = instrumentSampleSlots_[instrument];
-      const std::uint16_t slot = (mapped >= 0) ? static_cast<std::uint16_t>(mapped)
-                                               : static_cast<std::uint16_t>(instrument);
-      if (isValidSampleSlot(slot) && !sampleSlotPaths_[slot].empty() && sampleSlotPlugins_[slot]) {
-        sampleSlotPlugins_[slot]->noteOff(midiNote);
-        noteOffEventCount_ += 1;
-        return true;
-      }
-    }
-    instrumentPlugins_[instrument]->noteOff(midiNote);
-    noteOffEventCount_ += 1;
-    return true;
+  const int offset = static_cast<int>(std::round(pitchOffsets_[instrument]));
+  if (offset != 0) {
+    midiNote = std::clamp(midiNote + offset, 0, 127);
   }
-
-  if (static_cast<std::size_t>(instrument) >= sampleSlotPlugins_.size() ||
-      sampleSlotPaths_[instrument].empty() ||
-      !sampleSlotPlugins_[instrument]) {
-    return false;
-  }
-
-  sampleSlotPlugins_[instrument]->noteOff(midiNote);
-
+  instrumentPlugins_[instrument]->noteOff(midiNote);
   noteOffEventCount_ += 1;
   return true;
 }
 
-bool PluginHost::triggerNoteOnResolved(std::uint8_t instrument,
-                                       std::uint16_t sampleSlot,
-                                       int midiNote,
-                                       std::uint8_t velocity,
-                                       bool retrigger) {
+bool PluginHost::previewSampleNoteOn(std::uint16_t sampleSlot, int midiNote, std::uint8_t velocity) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
-  // Apply per-instrument pitch offset (rounded to nearest semitone for MIDI)
-  if (instrument < kMaxInstrumentSlotsForFilter) {
-    const int offset = static_cast<int>(std::round(pitchOffsets_[instrument]));
-    if (offset != 0)
-      midiNote = std::clamp(midiNote + offset, 0, 127);
-  }
-
-  // If a pattern step explicitly carries a sample slot, that sample has priority over instrument plugins.
-  if (sampleSlot != 0xFFFF &&
-      isValidSampleSlot(sampleSlot) &&
-      !sampleSlotPaths_[sampleSlot].empty() &&
-      sampleSlotPlugins_[sampleSlot]) {
-    sampleSlotPlugins_[sampleSlot]->noteOn(midiNote, velocity, retrigger);
-    noteOnEventCount_ += 1;
-    return true;
-  }
-
-  // Legacy compatibility: allow instrument column values beyond instrument slots
-  // to address sample slots when no explicit sample field is present.
-  if (!isValidInstrument(instrument)) {
-    const std::uint16_t legacySampleSlot = static_cast<std::uint16_t>(instrument);
-    if (isValidSampleSlot(legacySampleSlot) &&
-        !sampleSlotPaths_[legacySampleSlot].empty() &&
-        sampleSlotPlugins_[legacySampleSlot]) {
-      sampleSlotPlugins_[legacySampleSlot]->noteOn(midiNote, velocity, retrigger);
-      noteOnEventCount_ += 1;
-      return true;
-    }
+  if (!isValidSampleSlot(sampleSlot) || sampleSlotPaths_[sampleSlot].empty() || !sampleSlotPlugins_[sampleSlot]) {
     return false;
   }
-
-  if (!instrumentSlots_[instrument].empty() && instrumentPlugins_[instrument]) {
-    // If this is a builtin.sample with no data (e.g. loaded from a legacy song without
-    // INSTR_SAMPLE_SLOT), fall back to the sample slot — prefer the mapped slot, otherwise
-    // treat the instrument index as the sample slot index.
-    auto* sp = asSamplePlugin(instrumentPlugins_[instrument].get());
-    if (sp && sp->sampleFrameCount() == 0) {
-      const int mapped = instrumentSampleSlots_[instrument];
-      const std::uint16_t slot = (mapped >= 0) ? static_cast<std::uint16_t>(mapped)
-                                               : static_cast<std::uint16_t>(instrument);
-      if (isValidSampleSlot(slot) && !sampleSlotPaths_[slot].empty() && sampleSlotPlugins_[slot]) {
-        sampleSlotPlugins_[slot]->noteOn(midiNote, velocity, retrigger);
-        noteOnEventCount_ += 1;
-        return true;
-      }
-    }
-    instrumentPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
-    noteOnEventCount_ += 1;
-    return true;
-  }
-
-  if (static_cast<std::size_t>(instrument) >= sampleSlotPlugins_.size() ||
-      sampleSlotPaths_[instrument].empty() ||
-      !sampleSlotPlugins_[instrument]) {
-    return false;
-  }
-
-  sampleSlotPlugins_[instrument]->noteOn(midiNote, velocity, retrigger);
+  sampleSlotPlugins_[sampleSlot]->noteOn(midiNote, velocity, true);
   noteOnEventCount_ += 1;
   return true;
 }
 
-bool PluginHost::triggerNoteOffResolved(std::uint8_t instrument, std::uint16_t sampleSlot, int midiNote) {
+bool PluginHost::previewSampleNoteOff(std::uint16_t sampleSlot, int midiNote) {
   std::lock_guard<std::timed_mutex> lock(mutex_);
-
-  if (sampleSlot != 0xFFFF &&
-      isValidSampleSlot(sampleSlot) &&
-      !sampleSlotPaths_[sampleSlot].empty() &&
-      sampleSlotPlugins_[sampleSlot]) {
-    sampleSlotPlugins_[sampleSlot]->noteOff(midiNote);
-    noteOffEventCount_ += 1;
-    return true;
-  }
-
-  if (!isValidInstrument(instrument)) {
-    const std::uint16_t legacySampleSlot = static_cast<std::uint16_t>(instrument);
-    if (isValidSampleSlot(legacySampleSlot) &&
-        !sampleSlotPaths_[legacySampleSlot].empty() &&
-        sampleSlotPlugins_[legacySampleSlot]) {
-      sampleSlotPlugins_[legacySampleSlot]->noteOff(midiNote);
-      noteOffEventCount_ += 1;
-      return true;
-    }
+  if (!isValidSampleSlot(sampleSlot) || !sampleSlotPlugins_[sampleSlot]) {
     return false;
   }
-
-  if (!instrumentSlots_[instrument].empty() && instrumentPlugins_[instrument]) {
-    auto* sp = asSamplePlugin(instrumentPlugins_[instrument].get());
-    if (sp && sp->sampleFrameCount() == 0) {
-      const int mapped = instrumentSampleSlots_[instrument];
-      const std::uint16_t slot = (mapped >= 0) ? static_cast<std::uint16_t>(mapped)
-                                               : static_cast<std::uint16_t>(instrument);
-      if (isValidSampleSlot(slot) && !sampleSlotPaths_[slot].empty() && sampleSlotPlugins_[slot]) {
-        sampleSlotPlugins_[slot]->noteOff(midiNote);
-        noteOffEventCount_ += 1;
-        return true;
-      }
-    }
-    instrumentPlugins_[instrument]->noteOff(midiNote);
-    noteOffEventCount_ += 1;
-    return true;
-  }
-
-  if (static_cast<std::size_t>(instrument) >= sampleSlotPlugins_.size() ||
-      sampleSlotPaths_[instrument].empty() ||
-      !sampleSlotPlugins_[instrument]) {
-    return false;
-  }
-
-  sampleSlotPlugins_[instrument]->noteOff(midiNote);
+  sampleSlotPlugins_[sampleSlot]->noteOff(midiNote);
   noteOffEventCount_ += 1;
   return true;
 }
+
+int PluginHost::instrumentForSampleSlot(std::uint16_t sampleSlot) const {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  for (std::size_t instrument = 0; instrument < instrumentSampleSlots_.size(); ++instrument) {
+    if (instrumentSampleSlots_[instrument] == static_cast<int>(sampleSlot) &&
+        instrumentSlots_[instrument] == "builtin.sample") {
+      return static_cast<int>(instrument);
+    }
+  }
+  return -1;
+}
+
+
 
 void PluginHost::allNotesOff() {
   std::lock_guard<std::timed_mutex> lock(mutex_);
@@ -6675,7 +6559,8 @@ std::string PluginHost::sampleNameForSlot(std::uint16_t sampleSlot) const {
   return sampleSlotNames_[sampleSlot];
 }
 
-bool PluginHost::assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument) {
+bool PluginHost::assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uint8_t instrument,
+                                              SampleLinkProperties properties) {
   std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
   if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot) || !isValidInstrument(instrument)) {
     return false;
@@ -6705,7 +6590,17 @@ bool PluginHost::assignSampleSlotToInstrument(std::uint16_t sampleSlot, std::uin
   if (!samplePlugin || !bankPlugin) {
     return false;
   }
-  samplePlugin->shareSampleWith(*bankPlugin);
+  if (properties == SampleLinkProperties::FromInstrument) {
+    // Song files store a sample instrument's root/gain/loop as INSTRUMENT_PARAM
+    // lines ahead of the link; keep them once the instrument plays the bank's
+    // shared sample.
+    BuiltinSamplePlugin saved;
+    saved.copySamplePropertiesFrom(*samplePlugin);
+    samplePlugin->shareSampleWith(*bankPlugin);
+    samplePlugin->copySamplePropertiesFrom(saved);
+  } else {
+    samplePlugin->shareSampleWith(*bankPlugin);
+  }
 
   instrumentSampleSlots_[instrument] = static_cast<int>(sampleSlot);
   return true;
@@ -7013,6 +6908,15 @@ bool PluginHost::clearSampleFromInstrument(std::uint8_t instrument) {
   return true;
 }
 
+std::size_t PluginHost::sampleFrameCountForInstrument(std::uint8_t instrument) const {
+  std::lock_guard<std::timed_mutex> lock(mutex_);
+  if (!isValidInstrument(instrument)) {
+    return 0;
+  }
+  const auto* samplePlugin = asSamplePlugin(instrumentPlugins_[instrument].get());
+  return samplePlugin ? samplePlugin->sampleFrameCount() : 0;
+}
+
 std::string PluginHost::samplePathForInstrument(std::uint8_t instrument) const {
   std::unique_lock<std::timed_mutex> lock(mutex_, std::try_to_lock);
   if (!lock.owns_lock() || !isValidInstrument(instrument)) {
@@ -7045,9 +6949,6 @@ std::size_t PluginHost::activeVoiceCountForInstrument(std::uint8_t instrument) c
   if (instrumentPlugins_[instrument]) {
     return instrumentPlugins_[instrument]->activeVoiceCount();
   }
-  if (static_cast<std::size_t>(instrument) < sampleSlotPlugins_.size() && sampleSlotPlugins_[instrument]) {
-    return sampleSlotPlugins_[instrument]->activeVoiceCount();
-  }
   return 0;
 }
 
@@ -7061,9 +6962,6 @@ double PluginHost::activeVoiceFrequencyHzForInstrument(std::uint8_t instrument, 
   }
   if (instrumentPlugins_[instrument]) {
     return instrumentPlugins_[instrument]->activeVoiceFrequencyHz(voiceIndex);
-  }
-  if (static_cast<std::size_t>(instrument) < sampleSlotPlugins_.size() && sampleSlotPlugins_[instrument]) {
-    return sampleSlotPlugins_[instrument]->activeVoiceFrequencyHz(voiceIndex);
   }
   return 0.0;
 }

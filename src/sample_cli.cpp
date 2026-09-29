@@ -2,6 +2,7 @@
 
 #include "extracker/cli_parse_utils.hpp"
 #include "extracker/sample_editor_utils.hpp"
+#include "extracker/sample_instrument_migration.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -56,6 +57,16 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
     plugins.setSampleNameForSlot(static_cast<std::uint16_t>(slot), name);
 
     std::cout << "Sample slot " << slot << " \"" << name << "\": " << wavPath << "\n";
+    // Notes play instruments, so a loaded sample gets its sample instrument:
+    // the one already linked to this slot, else the same number if that
+    // instrument slot has no plugin, else the lowest free slot.
+    const int instrument = ensureSampleInstrument(plugins, static_cast<std::uint16_t>(slot),
+                                                  InstrumentUseMap{}, slot);
+    if (instrument >= 0) {
+      std::cout << "Instrument " << instrument << " plays sample slot " << slot << "\n";
+    } else {
+      std::cout << "No free instrument slot for sample slot " << slot << "\n";
+    }
     return;
   }
 
@@ -118,15 +129,11 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
       return;
     }
 
-    if (slot > 255) {
-      std::cout << "Sample preview currently supports slots 0-255\n";
-      return;
-    }
     if (plugins.samplePathForSlot(static_cast<std::uint16_t>(slot)).empty()) {
       std::cout << "Sample slot " << slot << " is empty\n";
       return;
     }
-    if (!plugins.triggerNoteOn(static_cast<std::uint8_t>(slot), note, 127, true)) {
+    if (!plugins.previewSampleNoteOn(static_cast<std::uint16_t>(slot), note, 127)) {
       std::cout << "Failed to preview sample slot " << slot << "\n";
       return;
     }
@@ -148,11 +155,7 @@ void handleSampleCommand(PluginHost& plugins, std::istringstream& input) {
       return;
     }
 
-    if (slot > 255) {
-      std::cout << "Sample preview currently supports slots 0-255\n";
-      return;
-    }
-    if (!plugins.triggerNoteOff(static_cast<std::uint8_t>(slot), note)) {
+    if (!plugins.previewSampleNoteOff(static_cast<std::uint16_t>(slot), note)) {
       std::cout << "Failed to stop sample slot " << slot << "\n";
       return;
     }

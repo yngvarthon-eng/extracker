@@ -52,6 +52,7 @@ add_library(extracker_core
   src/transport.cpp
   src/plugin_host.cpp
   src/song_bundle.cpp
+  src/sample_instrument_migration.cpp
 )
 
 target_include_directories(extracker_core PRIVATE include)
@@ -879,6 +880,11 @@ if(BUILD_TESTING)
   target_link_libraries(extracker_sample_instrument_share_test PRIVATE extracker_core)
   add_test(NAME extracker_sample_instrument_share_test COMMAND extracker_sample_instrument_share_test)
 
+  add_executable(extracker_sample_reference_migration_test tests/sample_reference_migration_test.cpp)
+  target_include_directories(extracker_sample_reference_migration_test PRIVATE include)
+  target_link_libraries(extracker_sample_reference_migration_test PRIVATE extracker_core)
+  add_test(NAME extracker_sample_reference_migration_test COMMAND extracker_sample_reference_migration_test)
+
   add_executable(extracker_sample_legacy_instrument_fallback_test tests/sample_legacy_instrument_fallback_test.cpp)
   target_include_directories(extracker_sample_legacy_instrument_fallback_test PRIVATE include)
   target_link_libraries(extracker_sample_legacy_instrument_fallback_test PRIVATE extracker_core)
@@ -953,6 +959,10 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_instrument_high_slot_test tests/cli_instrument_high_slot_test.cpp)
   add_dependencies(extracker_cli_instrument_high_slot_test extracker)
   add_test(NAME extracker_cli_instrument_high_slot_test COMMAND extracker_cli_instrument_high_slot_test)
+
+  add_executable(extracker_cli_sample_instrument_convert_test tests/cli_sample_instrument_convert_test.cpp)
+  add_dependencies(extracker_cli_sample_instrument_convert_test extracker)
+  add_test(NAME extracker_cli_sample_instrument_convert_test COMMAND extracker_cli_sample_instrument_convert_test)
 
   add_executable(extracker_cli_instr_sample_persist_test tests/cli_instr_sample_persist_test.cpp)
   add_dependencies(extracker_cli_instr_sample_persist_test extracker)

@@ -930,7 +930,8 @@ int main() {
           if (instrSlot >= 0 && instrSlot < static_cast<int>(extracker::PluginHost::kMaxInstrumentSlots) &&
               sampleSlot >= 0 && sampleSlot < static_cast<int>(extracker::PluginHost::kMaxSampleSlots)) {
             plugins.assignSampleSlotToInstrument(static_cast<std::uint16_t>(sampleSlot),
-                                                 static_cast<std::uint8_t>(instrSlot));
+                                                 static_cast<std::uint8_t>(instrSlot),
+                                                 extracker::SampleLinkProperties::FromInstrument);
           }
         } else if (tailToken == "INSTRUMENT_PARAM") {
           int instrSlot = -1;
