@@ -532,8 +532,9 @@ static void renderFrames4ch(const AudioConfig& config,
   }
 }
 
-// Stereo folddown wrapper — for backends that output only 2 channels.
-// Rear channels are mixed into front at -3 dB to maintain loudness.
+#if defined(EXTRACKER_HAVE_PIPEWIRE) || defined(_WIN32)
+// Stereo folddown wrapper — for backends that output only 2 channels
+// (PipeWire, Windows). Rear channels are mixed into front at -3 dB to maintain loudness.
 static void renderFramesToStereo(const AudioConfig& config,
                                   const EnvelopeSteps& env,
                                   float* leftOut, float* rightOut,
@@ -546,6 +547,7 @@ static void renderFramesToStereo(const AudioConfig& config,
     rightOut[i] = std::clamp(rightOut[i] + rr[i] * kRearGain, -1.0f, 1.0f);
   }
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // JACK backend

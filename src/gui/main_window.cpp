@@ -6155,10 +6155,6 @@ private:
     int ticksPerRow = static_cast<int>(app.transport.ticksPerRow());
     std::uint64_t dispatchCount = app.sequencer.dispatchCount();
     std::size_t activeVoices = app.sequencer.activeVoiceCount();
-    std::size_t pluginNoteOn = app.plugins.noteOnEventCount();
-    std::size_t pluginNoteOff = app.plugins.noteOffEventCount();
-    const bool rowEditAllChannels = app.module.rowEditAllChannels();
-    const bool inheritSwingOnInsert = app.module.inheritSwingOnInsert();
 
     juce::String autoSaveText = "AS off";
     if (app.recoveryAutoSaveEnabled.load()) {
@@ -7523,7 +7519,9 @@ MainWindow::MainWindow(ExTrackerApp& app)
 
   // Set window properties - use screen bounds to determine reasonable size
   auto& desktop = juce::Desktop::getInstance();
-  auto screenBounds = desktop.getDisplays().getMainDisplay().userArea;
+  const auto* primaryDisplay = desktop.getDisplays().getPrimaryDisplay();
+  const auto screenBounds = primaryDisplay != nullptr ? primaryDisplay->userArea
+                                                      : juce::Rectangle<int>(0, 0, 1500, 1000);
   int initialWidth = std::min(1400, screenBounds.getWidth() - 100);
   int initialHeight = std::min(900, screenBounds.getHeight() - 100);
   setSize(initialWidth, initialHeight);
