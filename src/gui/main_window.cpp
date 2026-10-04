@@ -3037,6 +3037,9 @@ public:
     toolbar1.removeFromLeft(4);
     playModeSongButton.setBounds(toolbar1.removeFromLeft(60));
     toolbar1.removeFromLeft(8);
+    volumeSlider.setBounds(toolbar1.removeFromRight(160));
+    volumeLabel.setBounds(toolbar1.removeFromRight(28));
+    toolbar1.removeFromRight(12);
     statusLabel.setBounds(toolbar1);
 
     // Toolbar 2: Timing parameters (~890px)
@@ -3066,9 +3069,6 @@ public:
     currentInstrumentLabel.setBounds(toolbar2.removeFromLeft(30));
     toolbar2.removeFromLeft(4);
     currentInstrumentBox.setBounds(toolbar2.removeFromLeft(150));
-    toolbar2.removeFromLeft(12);
-    volumeLabel.setBounds(toolbar2.removeFromLeft(28));
-    volumeSlider.setBounds(toolbar2.removeFromLeft(160));
 
     // Toolbar 3: File, size, row editing, UI toggles (~1230px)
     newModuleButton.setBounds(toolbar3.removeFromLeft(90));
