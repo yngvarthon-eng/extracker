@@ -129,12 +129,47 @@ void applyRecordWrite(
   state.canRedo = false;
 }
 
+void joinRecordWrite(RecordWorkflowState& state, const RecordEditState& earlier) {
+  RecordEditState& latest = state.undoState;
+  std::vector<RecordCellEdit> cells = earlier.chordCells;
+  cells.push_back(RecordCellEdit{earlier.row, earlier.channel, earlier.beforeStep, earlier.afterStep});
+  cells.insert(cells.end(), latest.chordCells.begin(), latest.chordCells.end());
+  latest.chordCells = std::move(cells);
+  latest.cursorBefore = earlier.cursorBefore;
+}
+
+void applyRecordChordWrite(PatternEditor& editor,
+                           RecordWorkflowState& state,
+                           int row,
+                           const std::vector<int>& channels,
+                           const std::vector<int>& notes,
+                           std::uint8_t instrument,
+                           std::uint8_t velocity) {
+  const int savedChannel = state.channel;
+  bool first = true;
+  for (std::size_t i = 0; i < notes.size() && i < channels.size(); ++i) {
+    const RecordEditState earlier = state.undoState;
+    state.channel = channels[i];
+    applyRecordWrite(editor, state, row, notes[i], instrument, 0, velocity, false, 0, 0);
+    editor.setSample(row, channels[i], 0xFFFF);
+    state.undoState.afterStep = captureStep(editor, row, channels[i]);
+    if (!first) {
+      joinRecordWrite(state, earlier);
+    }
+    first = false;
+  }
+  state.channel = savedChannel;
+}
+
 bool undoRecordWrite(PatternEditor& editor, RecordWorkflowState& state) {
   if (!state.canUndo) {
     return false;
   }
 
   restoreStep(editor, state.undoState.row, state.undoState.channel, state.undoState.beforeStep);
+  for (auto it = state.undoState.chordCells.rbegin(); it != state.undoState.chordCells.rend(); ++it) {
+    restoreStep(editor, it->row, it->channel, it->beforeStep);
+  }
   state.cursorRow = state.undoState.cursorBefore;
   state.redoState = state.undoState;
   state.canRedo = true;
@@ -147,6 +182,9 @@ bool redoRecordWrite(PatternEditor& editor, RecordWorkflowState& state) {
     return false;
   }
 
+  for (const RecordCellEdit& cell : state.redoState.chordCells) {
+    restoreStep(editor, cell.row, cell.channel, cell.afterStep);
+  }
   restoreStep(editor, state.redoState.row, state.redoState.channel, state.redoState.afterStep);
   state.cursorRow = state.redoState.cursorAfter;
   state.undoState = state.redoState;
@@ -177,7 +215,43 @@ void writeRecordState(std::ostream& out, const RecordWorkflowState& state) {
   out << " ";
   writeStep(out, state.redoState.afterStep);
   out << "\n";
+  // The other cells of a recorded chord, after the line they belong to.
+  auto writeChordCells = [&out](const char* token, const RecordEditState& edit) {
+    if (edit.chordCells.empty()) {
+      return;
+    }
+    out << token << " " << edit.chordCells.size();
+    for (const RecordCellEdit& cell : edit.chordCells) {
+      out << " " << cell.row << " " << cell.channel << " ";
+      writeStep(out, cell.beforeStep);
+      out << " ";
+      writeStep(out, cell.afterStep);
+    }
+    out << "\n";
+  };
+  writeChordCells("RECORD_UNDO_CHORD", state.undoState);
+  writeChordCells("RECORD_REDO_CHORD", state.redoState);
 }
+
+namespace {
+
+bool readChordCells(std::istream& in, std::size_t patternRows, std::vector<RecordCellEdit>& cells) {
+  std::size_t count = 0;
+  if (!(in >> count) || count > patternRows * 64) {
+    return false;
+  }
+  cells.clear();
+  for (std::size_t i = 0; i < count; ++i) {
+    RecordCellEdit cell;
+    if (!(in >> cell.row >> cell.channel) || !readStep(in, cell.beforeStep) || !readStep(in, cell.afterStep)) {
+      return false;
+    }
+    cells.push_back(cell);
+  }
+  return true;
+}
+
+}  // namespace
 
 bool applyRecordFileToken(
     std::istream& in,
@@ -219,7 +293,16 @@ bool applyRecordFileToken(
       return false;
     }
     state.canUndo = (canUndo != 0);
+    state.undoState.chordCells.clear();
     return true;
+  }
+
+  if (token == "RECORD_UNDO_CHORD") {
+    return readChordCells(in, patternRows, state.undoState.chordCells);
+  }
+
+  if (token == "RECORD_REDO_CHORD") {
+    return readChordCells(in, patternRows, state.redoState.chordCells);
   }
 
   if (token == "RECORD_REDO") {
@@ -235,6 +318,7 @@ bool applyRecordFileToken(
       return false;
     }
     state.canRedo = (canRedo != 0);
+    state.redoState.chordCells.clear();
     return true;
   }
 

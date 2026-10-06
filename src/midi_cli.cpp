@@ -780,6 +780,9 @@ void handleMidiEventLocked(const MidiEvent& event,
           targetRow >= 0 ? context.chordRecorder.noteOn(context.channels, recordChannel, targetRow, event.note).channel
                          : -1;
       if (targetRow >= 0 && targetChannel >= 0) {
+        // A note joining a held chord shares its undo step.
+        const RecordEditState earlier = context.recordState.undoState;
+        const bool joinChord = heldRow >= 0 && context.recordState.canUndo && earlier.row == targetRow;
         context.applyRecordWrite(
             targetRow,
             targetChannel,
@@ -790,6 +793,9 @@ void handleMidiEventLocked(const MidiEvent& event,
             false,
             0,
             0);
+        if (joinChord) {
+          joinRecordWrite(context.recordState, earlier);
+        }
       }
     }
   } else if (event.type == MidiEvent::Type::NoteOff) {

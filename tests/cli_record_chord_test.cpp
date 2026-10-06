@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -46,6 +47,19 @@ int main() {
     expect(out, "Recorded chord at row 0: ch 4=60 ch 5=64 ch 6=67", "chord spread over the track");
     expect(out, "Recorded chord at row 2: ch 4=57 ch 5=60", "next chord after the jump");
     expect(out, "Record cursor row: 4", "cursor advanced once per chord");
+  }
+
+  // record undo/redo take a whole chord back and forth, also after save/load.
+  {
+    const std::string path = "/tmp/xt_cli_record_chord_test.xtp";
+    std::filesystem::remove(path);
+    const auto out = run("ch track add 4 6; record on 4; record chord 60 64 67; record undo; pattern print 0 0; "
+                         "record redo; save " + path + "; quit");
+    const auto reloaded = run("load " + path + "; record undo; pattern print 0 0; quit");
+    std::filesystem::remove(path);
+    expect(out, "Undid record write at row 0, channel 6 and 2 more chord note(s)", "chord undo");
+    expect(out, "Redid record write at row 0, channel 6 and 2 more chord note(s)", "chord redo");
+    expect(reloaded, "Undid record write at row 0, channel 6 and 2 more chord note(s)", "chord undo after load");
   }
 
   if (failures != 0) {

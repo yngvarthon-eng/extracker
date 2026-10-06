@@ -1455,7 +1455,7 @@ public:
       panelViewport.setViewPosition(0, targetY);
     });
     patternGrid.setChannelHeaderMenuCallback([this](int ch) { showChannelHeaderMenu(ch); });
-    patternGrid.setRowDoubleClickedCallback([this](int row) {
+    patternGrid.setRowClickedCallback([this](int row) {
       recordStartRowSlider.setValue(row, juce::sendNotificationSync);
     });
     patternGrid.setSearchNavigationCallback([this](bool forward) {
@@ -1570,6 +1570,7 @@ public:
       app.recordState.enabled = !app.recordState.enabled;
       const bool on = app.recordState.enabled;
       recordButton.setButtonText(on ? "Rec: On" : "Record");
+      patternGrid.repaint();  // record-channel dot
       recordButton.setColour(juce::TextButton::buttonColourId,
                              on ? juce::Colour(0xFFCC2222) : getLookAndFeel().findColour(juce::TextButton::buttonColourId));
     };
@@ -1580,6 +1581,7 @@ public:
       app.transport.play();
       app.recordState.enabled = true;
       recordButton.setButtonText("Rec: On");
+      patternGrid.repaint();  // record-channel dot
       recordButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFFCC2222));
     };
 
@@ -1855,8 +1857,9 @@ public:
         "[ / ]   step size down / up\n"
         "Shift+O set note-off fadeout (uses current Gate ticks)\n"
         "Del/Bsp clear selected step\n"
+        "Click        - select step, set Row: (record/step-entry row)\n"
+        "Double-click - insert a default note into an empty step\n"
         "Right-click  - clear step\n"
-        "Double-click - set Row: (record/step-entry row) to that row\n"
         "\n"
         "=== FX / VOL / INS DIRECT ENTRY ===\n"
         "F2      cycle modes: Normal -> FX -> Volume -> Instrument -> Normal\n"
@@ -7682,8 +7685,9 @@ void TrackerMainComponent::saveHelpToFile() {
     "[ / ]   step size down / up\n"
     "Shift+O set note-off fadeout (uses current Gate ticks)\n"
     "Del/Bsp clear selected step\n"
+    "Click        - select step, set Row: (record/step-entry row)\n"
+    "Double-click - insert a default note into an empty step\n"
     "Right-click  - clear step\n"
-    "Double-click - set Row: (record/step-entry row) to that row\n"
     "\n"
     "=== FX DIRECT ENTRY ===\n"
     "`       toggle FX mode (header shows [FX])\n"

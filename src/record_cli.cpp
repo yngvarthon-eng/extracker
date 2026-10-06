@@ -386,14 +386,7 @@ void handleRecordCommand(std::istringstream& recordInput,
       std::cout << "Record chord dry-run: row " << row << ", instr " << static_cast<int>(instr) << ", vel "
                 << static_cast<int>(vel) << ',';
     } else {
-      for (std::size_t i = 0; i < notes.size(); ++i) {
-        editor.insertNote(row, placedChannels[i], notes[i], instr, 0, vel, false, 0, 0);
-        editor.setSample(row, placedChannels[i], 0xFFFF);
-      }
-      recordCursorRow = (row + std::max(recordInsertJump, 1)) % static_cast<int>(editor.rows());
-      // Record undo covers one cell, so it cannot take a chord back.
-      recordState.canUndo = false;
-      recordState.canRedo = false;
+      applyRecordChordWrite(editor, recordState, row, placedChannels, notes, instr, vel);
       std::cout << "Recorded chord at row " << row << ':';
     }
     for (std::size_t i = 0; i < notes.size(); ++i) {
@@ -497,7 +490,11 @@ void handleRecordCommand(std::istringstream& recordInput,
       std::cout << "No record action to undo" << '\n';
     } else {
       std::cout << "Undid record write at row " << recordState.redoState.row
-                << ", channel " << recordState.redoState.channel << '\n';
+                << ", channel " << recordState.redoState.channel;
+      if (!recordState.redoState.chordCells.empty()) {
+        std::cout << " and " << recordState.redoState.chordCells.size() << " more chord note(s)";
+      }
+      std::cout << '\n';
     }
   } else if (subcommand == "redo") {
     std::lock_guard<std::mutex> lock(stateMutex);
@@ -505,7 +502,11 @@ void handleRecordCommand(std::istringstream& recordInput,
       std::cout << "No record action to redo" << '\n';
     } else {
       std::cout << "Redid record write at row " << recordState.undoState.row
-                << ", channel " << recordState.undoState.channel << '\n';
+                << ", channel " << recordState.undoState.channel;
+      if (!recordState.undoState.chordCells.empty()) {
+        std::cout << " and " << recordState.undoState.chordCells.size() << " more chord note(s)";
+      }
+      std::cout << '\n';
     }
   } else {
     std::cout << "Usage: record <on|off|play|punch|channel|cursor|note|chord|quantize|overdub|jump|undo|redo> ..." << '\n';

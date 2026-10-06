@@ -97,8 +97,8 @@ void PatternGrid::setChannelHeaderMenuCallback(std::function<void(int)> callback
   channelHeaderMenuCallback = std::move(callback);
 }
 
-void PatternGrid::setRowDoubleClickedCallback(std::function<void(int)> callback) {
-  rowDoubleClickedCallback = std::move(callback);
+void PatternGrid::setRowClickedCallback(std::function<void(int)> callback) {
+  rowClickedCallback = std::move(callback);
 }
 
 void PatternGrid::setClipboardChangedCallback(std::function<void()> callback) {
@@ -355,6 +355,25 @@ void PatternGrid::drawHeaders(juce::Graphics& g) {
       label += " " + juce::String(app.channels.name(channel));
     }
     g.drawText(label, x, 0, cellWidth, channelNumberBandHeight, juce::Justification::centred);
+  }
+
+  // Record channel: a red dot on the channel MIDI recording writes into (the
+  // cursor channel), on every channel of its track for a chord track.
+  if (app.recordState.enabled && selectedChannel >= 0 && selectedChannel < numChannels) {
+    int first = selectedChannel;
+    int last = selectedChannel;
+    if (app.channels.inTrack(static_cast<std::size_t>(selectedChannel))) {
+      const auto track = app.channels.track(static_cast<std::size_t>(selectedChannel));
+      first = static_cast<int>(track.first);
+      last = std::min(static_cast<int>(track.last), numChannels - 1);
+    }
+    const float dot = compactDensity ? 6.0f : 7.0f;
+    g.setColour(juce::Colour(0xFFE53935));
+    for (int ch = first; ch <= last; ++ch) {
+      const float dx = static_cast<float>(labelWidth + ch * cellWidth) + 3.0f;
+      const float dy = (static_cast<float>(channelNumberBandHeight) - dot) * 0.5f;
+      g.fillEllipse(dx, dy, dot, dot);
+    }
   }
 
   g.setColour(juce::Colours::dimgrey);
@@ -739,62 +758,43 @@ void PatternGrid::mouseDown(const juce::MouseEvent& event) {
   }
   const bool auditionScrub = event.mods.isAltDown();
 
-  // Double-click on a cell: set the record/step-entry row (toolbar "Row:").
-  // The first click of the pair may have dropped a default note into an
-  // empty cell; take it out again so a double-click never edits the pattern.
-  if (row >= 0 && channel >= 0 && event.getNumberOfClicks() >= 2 && event.mods.isLeftButtonDown()) {
-    if (autoInsertedRow == row && autoInsertedChannel == channel) {
-      std::unique_lock<std::mutex> lock(app.stateMutex, std::defer_lock);
-      if (lockStateWithRetry(lock)) {
-        app.module.currentEditor().clearStep(row, channel);
-      }
-    }
-    autoInsertedRow = -1;
-    autoInsertedChannel = -1;
-    selectCell(row, channel);
-    refreshSnapshot();
-    repaintCell(row, channel);
-    if (rowDoubleClickedCallback) {
-      rowDoubleClickedCallback(row);
-    }
+  if (row < 0 || channel < 0) {
     return;
   }
-  autoInsertedRow = -1;
-  autoInsertedChannel = -1;
 
-  if (row >= 0 && channel >= 0) {
-    grabKeyboardFocus();
-    selectCell(row, channel);
-    if (auditionScrub) {
-      previewSelectedStepIfEnabled(true);
+  // Double-click an empty cell: insert a default note. A single click only
+  // selects (and sets Row:), so a double-click on a note does nothing more.
+  if (event.getNumberOfClicks() >= 2 && event.mods.isLeftButtonDown()) {
+    if (auditionScrub || fxInputMode || volumeInputMode || instrumentInputMode) {
+      return;
     }
+    std::unique_lock<std::mutex> lock(app.stateMutex, std::defer_lock);
+    if (!lockStateWithRetry(lock) || app.module.currentEditor().hasNoteAt(row, channel)) {
+      return;
+    }
+    const std::uint8_t instrument = insertTypedNote(app, row, channel, 60, insertGateTicks, insertVelocity);
+    lock.unlock();
+    previewPlacedNote(instrument, 60, insertVelocity);
+    refreshSnapshot();
+    repaintCell(row, channel);
+    return;
+  }
 
+  grabKeyboardFocus();
+  selectCell(row, channel);
+  if (event.mods.isLeftButtonDown() && rowClickedCallback) {
+    rowClickedCallback(row);  // toolbar Row: (record/step-entry row) follows the click
+  }
+  if (auditionScrub) {
+    previewSelectedStepIfEnabled(true);
+  }
+
+  if (event.mods.isRightButtonDown()) {
     std::unique_lock<std::mutex> lock(app.stateMutex, std::defer_lock);
     if (!lockStateWithRetry(lock)) {
       return;
     }
-
-    if (event.mods.isRightButtonDown()) {
-      // Right-click: clear note
-      app.module.currentEditor().clearStep(row, channel);
-    } else if (event.mods.isLeftButtonDown() && !auditionScrub) {
-      // Left-click: select existing note, or insert a default note into an empty cell.
-      // While in a step-edit column mode (FX/Vol/Ins), click just navigates — no auto-insert.
-      if (!fxInputMode && !volumeInputMode && !instrumentInputMode &&
-          !app.module.currentEditor().hasNoteAt(row, channel)) {
-        const int targetChannel = channel;
-        const std::uint8_t instrument =
-            insertTypedNote(app, row, targetChannel, 60, insertGateTicks, insertVelocity);
-        autoInsertedRow = row;
-        autoInsertedChannel = targetChannel;
-        lock.unlock();
-        previewPlacedNote(instrument, 60, insertVelocity);
-        refreshSnapshot();
-        repaintCell(row, targetChannel);
-        return;
-      }
-    }
-
+    app.module.currentEditor().clearStep(row, channel);  // right-click clears the step
     lock.unlock();
     refreshSnapshot();
     repaintCell(row, channel);
@@ -1632,6 +1632,9 @@ void PatternGrid::selectCell(int row, int channel, bool preserveBlock) {
   }
   repaintCell(oldRow, oldChannel);
   repaintCell(selectedRow, selectedChannel);
+  if (channel != oldChannel) {
+    repaint(0, 0, getWidth(), headerHeight);  // the record-channel dot follows the cursor
+  }
 
   if (selectionChangedCallback) {
     selectionChangedCallback(row, channel);

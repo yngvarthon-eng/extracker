@@ -230,6 +230,11 @@ if(BUILD_TESTING)
   target_link_libraries(extracker_chord_recorder_test PRIVATE extracker_core)
   add_test(NAME extracker_chord_recorder_test COMMAND extracker_chord_recorder_test)
 
+  add_executable(extracker_record_chord_undo_test tests/record_chord_undo_test.cpp)
+  target_include_directories(extracker_record_chord_undo_test PRIVATE include)
+  target_link_libraries(extracker_record_chord_undo_test PRIVATE extracker_core)
+  add_test(NAME extracker_record_chord_undo_test COMMAND extracker_record_chord_undo_test)
+
   add_executable(extracker_pattern_clipboard_test tests/pattern_clipboard_test.cpp)
   target_include_directories(extracker_pattern_clipboard_test PRIVATE include)
   target_link_libraries(extracker_pattern_clipboard_test PRIVATE extracker_core)

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "app.h"
 
 #include "extracker/sample_instrument_migration.hpp"
@@ -262,20 +263,48 @@ void ExTrackerApp::initialise(const juce::String& commandLine) {
       if (recordState.enabled) {
         auto it = pendingRecordNotes.find(static_cast<int>(event.note));
         if (it != pendingRecordNotes.end()) {
-          const auto& p = it->second;
+          auto& p = it->second;
           const auto heldMs = std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::steady_clock::now() - p.startTime).count();
           const double bpm = transport.tempoBpm();
           const std::uint32_t tpr = transport.ticksPerRow();
-          const std::uint32_t gate = static_cast<std::uint32_t>(
+          p.gateTicks = static_cast<std::uint32_t>(
               std::clamp(static_cast<double>(heldMs) * bpm * static_cast<double>(tpr) / 60000.0,
                          1.0, static_cast<double>(tpr * 8)));
-          // Write directly — cursor was already advanced on NoteOn
-          module.currentEditor().insertNote(p.row, p.channel, static_cast<int>(event.note),
-                                            p.instrument, gate, p.velocity, false, 0, 0);
-          module.currentEditor().setSample(p.row, p.channel, 0xFFFF);
-          pendingRecordNotes.erase(it);
-          recordDirty.store(true, std::memory_order_relaxed);
+          p.released = true;
+          const PendingRecordNote releasedNote = p;  // the map entry may be erased below
+
+          // Same chord: same row, and the same track (or the same channel outside a track).
+          auto sameChord = [this, &releasedNote](const PendingRecordNote& other) {
+            if (other.row != releasedNote.row) {
+              return false;
+            }
+            const auto a = static_cast<std::size_t>(releasedNote.channel);
+            const auto b = static_cast<std::size_t>(other.channel);
+            if (channels.inTrack(a) && channels.inTrack(b)) {
+              return channels.track(a).first == channels.track(b).first;
+            }
+            return a == b;
+          };
+          const bool chordStillHeld = std::any_of(
+              pendingRecordNotes.begin(), pendingRecordNotes.end(),
+              [&sameChord](const auto& entry) { return !entry.second.released && sameChord(entry.second); });
+          if (!chordStillHeld) {
+            // Write the whole chord at once. The cursor was already advanced on NoteOn.
+            auto& editor = module.currentEditor();
+            for (auto entry = pendingRecordNotes.begin(); entry != pendingRecordNotes.end();) {
+              const PendingRecordNote& note = entry->second;
+              if (note.released && sameChord(note)) {
+                editor.insertNote(note.row, note.channel, entry->first, note.instrument, note.gateTicks,
+                                  note.velocity, false, 0, 0);
+                editor.setSample(note.row, note.channel, 0xFFFF);
+                entry = pendingRecordNotes.erase(entry);
+              } else {
+                ++entry;
+              }
+            }
+            recordDirty.store(true, std::memory_order_relaxed);
+          }
         }
       }
     }

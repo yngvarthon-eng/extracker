@@ -102,6 +102,10 @@ public:
     std::uint8_t instrument = 0;
     std::uint8_t velocity = 0;
     std::chrono::steady_clock::time_point startTime;
+    // Chord notes wait for the whole chord to be released, then are written
+    // together so the chord is one pattern change (one undo step).
+    bool released = false;
+    std::uint32_t gateTicks = 0;
   };
   std::unordered_map<int, PendingRecordNote> pendingRecordNotes;
   // Spreads chords recorded into a track over its channels.
