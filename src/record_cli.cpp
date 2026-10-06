@@ -1,5 +1,6 @@
 #include "extracker/record_cli.hpp"
 
+#include "extracker/chord_recorder.hpp"
 #include "extracker/cli_parse_utils.hpp"
 
 #include <algorithm>
@@ -324,6 +325,81 @@ void handleRecordCommand(std::istringstream& recordInput,
         std::cout << "Recorded note at row " << targetRow << ", channel " << recordChannel << '\n';
       }
     }
+  } else if (subcommand == "chord") {
+    const std::string usage = "Usage: record chord [dry] <midi> <midi> [<midi>...] [instr <i>] [vel <v>]";
+    if (!recordEnabled) {
+      std::cout << "Record is not enabled. Use: record on [channel]" << '\n';
+      return;
+    }
+    bool dryRun = false;
+    std::vector<int> notes;
+    int instrument = midiInstrument;
+    int velocity = 100;
+    std::string token;
+    bool parsedOk = true;
+    while (parsedOk && recordInput >> token) {
+      int value = 0;
+      if (token == "dry" && notes.empty() && !dryRun) {
+        dryRun = true;
+      } else if (token == "instr" || token == "vel") {
+        std::string valueToken;
+        parsedOk = static_cast<bool>(recordInput >> valueToken) && cli::parseStrictIntToken(valueToken, value);
+        (token == "instr" ? instrument : velocity) = value;
+      } else if (cli::parseStrictIntToken(token, value) && value >= 0 && value <= 127) {
+        notes.push_back(value);
+      } else {
+        parsedOk = false;
+      }
+    }
+    if (!parsedOk || notes.size() < 2) {
+      std::cout << usage << '\n';
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(stateMutex);
+    const ChannelManager& channels = context.channels;
+    if (recordChannel < 0 || !channels.inTrack(static_cast<std::size_t>(recordChannel))) {
+      std::cout << "Record channel " << recordChannel << " is not in a track; make one with: channel track add\n";
+      return;
+    }
+    const ChannelManager::TrackInfo track = channels.track(static_cast<std::size_t>(recordChannel));
+    const std::size_t width = track.last - track.first + 1;
+    if (notes.size() > width) {
+      std::cout << "Chord has " << notes.size() << " notes but track " << track.first << "-" << track.last
+                << " has " << width << " channels\n";
+      return;
+    }
+    const int row = chooseRecordRow(static_cast<int>(track.first));
+    if (row < 0) {
+      std::cout << "No empty rows available in channel " << track.first << '\n';
+      return;
+    }
+
+    ChordRecorder recorder;
+    std::vector<int> placedChannels;
+    for (const int note : notes) {
+      placedChannels.push_back(recorder.noteOn(channels, recordChannel, row, note).channel);
+    }
+    const auto instr = static_cast<std::uint8_t>(std::clamp(instrument, 0, 255));
+    const auto vel = static_cast<std::uint8_t>(std::clamp(velocity, 1, 127));
+    if (dryRun) {
+      std::cout << "Record chord dry-run: row " << row << ", instr " << static_cast<int>(instr) << ", vel "
+                << static_cast<int>(vel) << ',';
+    } else {
+      for (std::size_t i = 0; i < notes.size(); ++i) {
+        editor.insertNote(row, placedChannels[i], notes[i], instr, 0, vel, false, 0, 0);
+        editor.setSample(row, placedChannels[i], 0xFFFF);
+      }
+      recordCursorRow = (row + std::max(recordInsertJump, 1)) % static_cast<int>(editor.rows());
+      // Record undo covers one cell, so it cannot take a chord back.
+      recordState.canUndo = false;
+      recordState.canRedo = false;
+      std::cout << "Recorded chord at row " << row << ':';
+    }
+    for (std::size_t i = 0; i < notes.size(); ++i) {
+      std::cout << " ch " << placedChannels[i] << '=' << notes[i];
+    }
+    std::cout << '\n';
   } else if (subcommand == "quantize") {
     std::string mode;
     recordInput >> mode;
@@ -432,7 +508,7 @@ void handleRecordCommand(std::istringstream& recordInput,
                 << ", channel " << recordState.undoState.channel << '\n';
     }
   } else {
-    std::cout << "Usage: record <on|off|play|punch|channel|cursor|note|quantize|overdub|jump|undo|redo> ..." << '\n';
+    std::cout << "Usage: record <on|off|play|punch|channel|cursor|note|chord|quantize|overdub|jump|undo|redo> ..." << '\n';
   }
 }
 

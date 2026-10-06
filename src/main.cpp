@@ -131,6 +131,7 @@ int main() {
   std::atomic<bool> songModeEnabled{false};
   std::atomic<std::size_t> songPlaybackPosition{0};
   extracker::RecordWorkflowState recordState;
+  extracker::ChordRecorder chordRecorder;
   bool& recordEnabled = recordState.enabled;
   int& recordChannel = recordState.channel;
   int& recordCursorRow = recordState.cursorRow;
@@ -379,6 +380,8 @@ int main() {
                          recordEnabled,
                          recordChannel,
                          recordState,
+                         channels,
+                         chordRecorder,
                          chooseRecordRowFn,
                          applyRecordWriteFn,
                          midiNoteToFrequencyHzFn});
@@ -1353,7 +1356,7 @@ int main() {
   std::cout << "Plugin commands: plugin list, plugin load <id>, plugin assign <instrument> <id>, sample <load|unload|rename|play|stop|list|status> ..., sine <instrument>" << '\n';
   std::cout << "Pattern commands: note set <row> <ch> <midi> <instr> [vel] [fx] [fxval], note set dry <row> <ch> <midi> <instr> [vel] [fx] [fxval], note off <row> <ch> <fadeout_ticks>, note off dry <row> <ch> <fadeout_ticks>, note clear <row> <ch>, note clear dry <row> <ch>, note vel <row> <ch> <vel>, note vel dry <row> <ch> <vel>, note gate <row> <ch> <ticks>, note gate dry <row> <ch> <ticks>, note fx <row> <ch> <fx> <fxval>, note fx dry <row> <ch> <fx> <fxval>, pattern print [from] [to], pattern display [from] [to], pattern watch [update_interval_ms], pattern play [from] [to] [step <n>], pattern template <blank|house|electro>, pattern transpose [dry [preview [verbose]]] <semitones> [from] [to] [ch] [step <n>] [chance <p>], pattern velocity [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern gate [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern effect [dry [preview [verbose]]] <fx> <fxval> [from] [to] [ch] [step <n>] [chance <p>], pattern copy <from> <to> [chFrom] [chTo] [step <n>], pattern paste [dry [preview [verbose]]] <destRow> [channelOffset] [step <n>] [mode overwrite|merge|mix|insert] [flood] [cols <nivf>], pattern clip [list|use <slot>|clear], pattern humanize [dry [preview [verbose]]] <velRange> <gateRangePercent> <seed> [from] [to] [ch] [step <n>], pattern randomize [dry [preview [verbose]]] <probabilityPercent> <seed> [from] [to] [ch] [step <n>], pattern scale-duration [dry [preview [verbose]]] <percent> [from] [to] [ch] [step <n>] [chance <p>], pattern invert-notes [dry [preview [verbose]]] [centerNote] [from] [to] [ch] [step <n>], pattern filter-notes [dry [preview [verbose]]] <minNote> <maxNote> [minVel] [maxVel] [from] [to] [ch] [delete], pattern undo, pattern redo" << '\n';
   std::cout << "Song commands: pattern duplicate [index] (pattern dup), pattern switch <index> (pattern sw), pattern list (pattern ls), pattern insert <before|after> (pattern in), pattern insert-swing <on|off|status>, pattern remove (pattern del), song status (song st), song list (song ls), song pos (song p, song gp), song set <entry> <pattern> (song se), song insert <entry> <pattern> (song si), song append <pattern> (song ap), song remove <entry> (song rm), song move <entry> <up|down> (song mv), song goto <entry> (song g), song first (song f), song last (song l), song next [wrap] (song n), song prev [wrap] (song b), song play <pattern|song|status> (song pl)" << '\n';
-  std::cout << "Record commands: record on [channel] (rec [channel]), record off, record channel <index|status>, record cursor <row|+delta|-delta|start|end|next|prev|status>, record note <midi> [instr] [vel] [fx] [fxval], record note <midi> vel <vel> [fx] [fxval], record note <midi> fx <fx> <fxval>, record note <midi> instr <i> [vel <v>] [fx <f> <fv>], record note dry <midi> ..., record quantize <on|off|status>, record overdub <on|off|status>, record jump <ticks|ratio|status>, record undo, record redo" << '\n';
+  std::cout << "Record commands: record on [channel] (rec [channel]), record off, record channel <index|status>, record cursor <row|+delta|-delta|start|end|next|prev|status>, record note <midi> [instr] [vel] [fx] [fxval], record note <midi> vel <vel> [fx] [fxval], record note <midi> fx <fx> <fxval>, record note <midi> instr <i> [vel <v>] [fx <f> <fv>], record note dry <midi> ..., record chord [dry] <midi> <midi>... [instr <i>] [vel <v>] (spread over the record channel's track), record quantize <on|off|status>, record overdub <on|off|status>, record jump <ticks|ratio|status>, record undo, record redo" << '\n';
   std::cout << "MIDI commands: midi on, midi off, midi status, midi quick [all|compact], midi thru <on|off>, midi instrument <index>, midi learn <on|off|status>, midi map <ch> <instr|clear>, midi map <status|clear all>, midi transport <on|off|toggle|status|timeout|lock|reset>, midi clock <help|quick|sources|autoconnect|diagnose>" << '\n';
   std::cout << "exTracker> " << std::flush;
 
@@ -1414,7 +1417,8 @@ int main() {
                                            recordInsertJump,
                                            midiInstrument,
                                            chooseRecordRowFn,
-                                           applyRecordWriteFn};
+                                           applyRecordWriteFn,
+                                           channels};
   };
 
   extracker::MidiCommandContext midiContext{midiInput,

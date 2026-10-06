@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include "extracker/channel_manager.hpp"
@@ -15,6 +16,12 @@ namespace extracker {
 // has no other note in it.
 int trackLeadInstrument(const PatternEditor& editor, const ChannelManager& channels, int row, int channel,
                         int skipChannel = -1);
+
+// Instrument for a note typed at (row, channel) when `selected` is the chosen
+// instrument: a note above the track's lead takes the lead's instrument, any
+// other note (outside a track, or becoming the lead) keeps `selected`.
+std::uint8_t chordEntryInstrument(const PatternEditor& editor, const ChannelManager& channels, int row, int channel,
+                                  std::uint8_t selected);
 
 // Call after writing a note with an explicit instrument at (row, channel),
 // passing the lead instrument from before the write. If channel now holds the

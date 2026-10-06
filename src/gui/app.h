@@ -16,6 +16,7 @@
 #include "extracker/audio_engine.hpp"
 #include "extracker/channel_layout.hpp"
 #include "extracker/channel_manager.hpp"
+#include "extracker/chord_recorder.hpp"
 #include "extracker/module.hpp"
 #include "extracker/plugin_host.hpp"
 #include "extracker/record_workflow.hpp"
@@ -103,6 +104,11 @@ public:
     std::chrono::steady_clock::time_point startTime;
   };
   std::unordered_map<int, PendingRecordNote> pendingRecordNotes;
+  // Spreads chords recorded into a track over its channels.
+  extracker::ChordRecorder chordRecorder;
+  // Grid cursor channel; MIDI recording writes into it. Atomic so the grid can
+  // set it without taking stateMutex.
+  std::atomic<int> cursorChannel{0};
 
   // MIDI state
   bool midiThruEnabled = true;

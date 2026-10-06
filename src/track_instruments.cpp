@@ -35,6 +35,15 @@ int trackLeadInstrument(const PatternEditor& editor, const ChannelManager& chann
   return lead < 0 ? -1 : editor.instrumentAt(row, lead);
 }
 
+std::uint8_t chordEntryInstrument(const PatternEditor& editor, const ChannelManager& channels, int row, int channel,
+                                  std::uint8_t selected) {
+  if (!isCell(editor, row, channel) || !channels.inTrack(static_cast<std::size_t>(channel))) {
+    return selected;
+  }
+  const int lead = leadChannel(editor, channels.track(static_cast<std::size_t>(channel)), row, channel);
+  return lead >= 0 && lead < channel ? editor.instrumentAt(row, lead) : selected;
+}
+
 std::vector<int> followTrackLead(PatternEditor& editor, const ChannelManager& channels, int row, int channel,
                                  int previousLead) {
   std::vector<int> changed;

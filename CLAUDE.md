@@ -116,7 +116,10 @@ Real-time-ish playback pipeline, all driven by a background thread:
   effect column) with a name, mute, solo and volume; the sequencer uses `effectiveVolume()` (channel ×
   track) and `isAudible()` folds track mute/solo in. `remap()` keeps tracks contiguous. Chord notes
   share an instrument via the track's lead note (lowest channel on the row): `track_instruments.hpp`
-  (`trackLeadInstrument`, `followTrackLead`); CLI `channel track ...` and `note set ... -`.
+  (`trackLeadInstrument`, `followTrackLead`, `chordEntryInstrument` for GUI typing); CLI
+  `channel track ...` and `note set ... -`. Recording: `ChordRecorder` (`chord_recorder.hpp`) spreads
+  notes held together over the record channel's track on one row (CLI MIDI + `record chord`, GUI MIDI).
+  GUI MIDI recording writes into the grid cursor channel (`ExTrackerApp::cursorChannel`).
 - **Channel layout** (`channel_layout.hpp`) — insert/delete/move/duplicate a channel across *all*
   patterns plus `ChannelManager`, keeping each pattern's channel count. `ChannelEditResult::sources`
   maps new→old channel so callers can carry other per-channel state (record channel, cursor, ...).

@@ -1329,6 +1329,9 @@ public:
     patternGrid.setSelectionChangedCallback([this](int row, int channel) {
       selectedStepRow = row;
       selectedStepChannel = channel;
+      if (channel >= 0) {
+        app.cursorChannel.store(channel);  // MIDI recording writes here
+      }
       updateStepEditorFromSelection();
     });
     patternGrid.setKeyboardStateChangedCallback([this](int octave, int step) {
@@ -4964,9 +4967,14 @@ private:
     menu.addSeparator();
     menu.addItem(kUndo, "Undo channel edit", app.channelHistory.canUndo());
     menu.addItem(kRedo, "Redo channel edit", app.channelHistory.canRedo());
+    addTrackMenuItems(menu, ch);
 
     menu.showMenuAsync(juce::PopupMenu::Options(), [this, ch, channel](int result) {
       if (result == 0) {
+        return;
+      }
+      if (result >= kTrackMenuBase) {
+        handleTrackMenuResult(result, ch);
         return;
       }
       if (result == kMute || result == kSolo) {
@@ -5046,6 +5054,166 @@ private:
       patternGrid.repaint();
       pluginStatusLabel.setText(done, juce::dontSendNotification);
     });
+  }
+
+  // Track (chord group) items in the channel header menu. Ids start at
+  // kTrackMenuBase so they never clash with the channel items.
+  static constexpr int kTrackMenuBase = 1000;
+  enum TrackMenuId {
+    kTrackMute = kTrackMenuBase,
+    kTrackSolo,
+    kTrackRename,
+    kTrackRemove,
+    kTrackFromSelection,
+    kTrackWithNextBase = kTrackMenuBase + 10,    // + number of extra channels (1-3)
+    kTrackVolumeBase = kTrackMenuBase + 100,     // + volume percent (0-200)
+  };
+
+  void addTrackMenuItems(juce::PopupMenu& menu, int ch) {
+    const auto channel = static_cast<std::size_t>(ch);
+    const int numChannels = static_cast<int>(app.module.currentEditor().channels());
+    menu.addSeparator();
+
+    if (app.channels.inTrack(channel)) {
+      const auto track = app.channels.track(channel);
+      menu.addSectionHeader(trackTitle(track));
+      menu.addItem(kTrackMute, "Mute track", true, track.muted);
+      menu.addItem(kTrackSolo, "Solo track", true, track.soloed);
+      juce::PopupMenu volume;
+      const int current = static_cast<int>(std::lround(track.volume * 100.0f));
+      for (int pct = 0; pct <= 200; pct += 25) {
+        volume.addItem(kTrackVolumeBase + pct, juce::String(pct) + "%", true, pct == current);
+      }
+      menu.addSubMenu("Track volume (" + juce::String(current) + "%)", volume);
+      menu.addItem(kTrackRename, "Rename track...");
+      menu.addItem(kTrackRemove, "Remove track (keep notes)");
+      return;
+    }
+
+    auto rangeIsFree = [this, numChannels](int first, int last) {
+      if (first < 0 || last >= numChannels || first > last) {
+        return false;
+      }
+      for (int c = first; c <= last; ++c) {
+        if (app.channels.inTrack(static_cast<std::size_t>(c))) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    juce::PopupMenu make;
+    int selFirst = ch;
+    int selLast = ch;
+    patternGrid.selectedChannelRange(selFirst, selLast);
+    if (selFirst < selLast && selFirst <= ch && ch <= selLast) {
+      make.addItem(kTrackFromSelection,
+                   "From marked channels " + juce::String(selFirst) + "-" + juce::String(selLast),
+                   rangeIsFree(selFirst, selLast));
+    }
+    for (int extra = 1; extra <= 3; ++extra) {
+      make.addItem(kTrackWithNextBase + extra,
+                   "Channels " + juce::String(ch) + "-" + juce::String(ch + extra) + " (" +
+                       juce::String(extra + 1) + "-note chord)",
+                   rangeIsFree(ch, ch + extra));
+    }
+    menu.addSubMenu("Make track", make);
+  }
+
+  static juce::String trackTitle(const extracker::ChannelManager::TrackInfo& track) {
+    juce::String title = "Track " + juce::String(static_cast<int>(track.first)) + "-" +
+                         juce::String(static_cast<int>(track.last));
+    if (!track.name.empty()) {
+      title += " (" + juce::String(track.name) + ")";
+    }
+    return title;
+  }
+
+  void handleTrackMenuResult(int result, int ch) {
+    const auto channel = static_cast<std::size_t>(ch);
+    if (result == kTrackRename) {
+      showRenameTrackDialog(ch);
+      return;
+    }
+
+    juce::String done;
+    {
+      std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
+      if (!lock.owns_lock()) {
+        pluginStatusLabel.setText("Track edit skipped (engine busy)", juce::dontSendNotification);
+        return;
+      }
+      auto& channels = app.channels;
+
+      if (result == kTrackFromSelection || (result > kTrackWithNextBase && result <= kTrackWithNextBase + 3)) {
+        int first = ch;
+        int last = ch + (result - kTrackWithNextBase);
+        if (result == kTrackFromSelection) {
+          patternGrid.selectedChannelRange(first, last);
+        }
+        std::string error;
+        if (!channels.addTrack(static_cast<std::size_t>(first), static_cast<std::size_t>(last), "", error)) {
+          lock.unlock();
+          pluginStatusLabel.setText("Make track failed: " + juce::String(error), juce::dontSendNotification);
+          return;
+        }
+        done = "Made " + trackTitle(channels.track(static_cast<std::size_t>(first))) +
+               ": notes above a row's lowest note take its instrument";
+      } else if (!channels.inTrack(channel)) {
+        return;
+      } else {
+        const auto track = channels.track(channel);
+        if (result == kTrackMute) {
+          channels.setTrackMuted(channel, !track.muted);
+          done = trackTitle(track) + (track.muted ? " unmuted" : " muted");
+        } else if (result == kTrackSolo) {
+          channels.setTrackSoloed(channel, !track.soloed);
+          done = trackTitle(track) + " solo " + (track.soloed ? "off" : "on");
+        } else if (result == kTrackRemove) {
+          channels.removeTrack(channel);
+          done = "Removed " + trackTitle(track);
+        } else if (result >= kTrackVolumeBase && result <= kTrackVolumeBase + 200) {
+          const int pct = result - kTrackVolumeBase;
+          channels.setTrackVolume(channel, static_cast<float>(pct) / 100.0f);
+          done = trackTitle(track) + " volume " + juce::String(pct) + "%";
+        } else {
+          return;
+        }
+        if (result == kTrackMute || result == kTrackSolo || result == kTrackRemove) {
+          app.plugins.allNotesOff();
+          app.audio.allNotesOff();
+        }
+      }
+    }
+
+    refreshChannelRows();
+    patternGrid.repaint();
+    patternGrid.grabKeyboardFocus();
+    pluginStatusLabel.setText(done, juce::dontSendNotification);
+  }
+
+  void showRenameTrackDialog(int ch) {
+    if (!app.channels.inTrack(static_cast<std::size_t>(ch))) {
+      return;
+    }
+    const auto track = app.channels.track(static_cast<std::size_t>(ch));
+    auto* aw = new juce::AlertWindow("Rename " + trackTitle(track), "Name for this track (empty to clear):",
+                                     juce::AlertWindow::NoIcon);
+    aw->addTextEditor("name", juce::String(track.name));
+    aw->addButton("Rename", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    aw->enterModalState(true, juce::ModalCallbackFunction::create([this, aw, ch](int result) {
+      if (result == 1) {
+        const std::string name = aw->getTextEditorContents("name").trim().toStdString();
+        {
+          std::lock_guard<std::mutex> lock(app.stateMutex);
+          app.channels.setTrackName(static_cast<std::size_t>(ch), name);
+        }
+        patternGrid.repaint();
+      }
+      delete aw;
+      patternGrid.grabKeyboardFocus();
+    }));
   }
 
   enum class ChannelToggle { Mute, Solo };

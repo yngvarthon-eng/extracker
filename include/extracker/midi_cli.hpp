@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "extracker/audio_engine.hpp"
+#include "extracker/channel_manager.hpp"
+#include "extracker/chord_recorder.hpp"
 #include "extracker/midi_input.hpp"
 #include "extracker/plugin_host.hpp"
 #include "extracker/record_workflow.hpp"
@@ -69,6 +71,8 @@ struct MidiEventContext {
   bool& recordEnabled;
   int& recordChannel;
   RecordWorkflowState& recordState;
+  const ChannelManager& channels;
+  ChordRecorder& chordRecorder;
   const std::function<int(int)>& chooseRecordRow;
   const std::function<void(int,
                            int,

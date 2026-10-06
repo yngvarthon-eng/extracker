@@ -74,6 +74,19 @@ int main() {
           "no previous lead: all notes follow");
   }
 
+  // Typed notes: above the lead they take its instrument, otherwise the selection.
+  {
+    PatternEditor editor(16, 8);
+    check(extracker::chordEntryInstrument(editor, channels, 0, 3, 4) == 4, "no lead: selected instrument");
+    editor.insertNote(0, 2, 60, 8);
+    check(extracker::chordEntryInstrument(editor, channels, 0, 3, 4) == 8, "above the lead: lead instrument");
+    check(extracker::chordEntryInstrument(editor, channels, 0, 2, 4) == 4, "typing over the lead: selected");
+    check(extracker::chordEntryInstrument(editor, channels, 0, 1, 4) == 4, "outside the track: selected");
+    editor.insertNote(0, 4, 67, 1);
+    editor.clearStep(0, 2);
+    check(extracker::chordEntryInstrument(editor, channels, 0, 2, 4) == 4, "below the lead: becomes the lead");
+  }
+
   if (failures != 0) {
     std::cerr << failures << " check(s) failed" << '\n';
     return 1;

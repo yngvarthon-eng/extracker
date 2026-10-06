@@ -70,6 +70,8 @@ public:
   // channel) `instrument`. Returns the number of notes changed, -1 if busy.
   int setInstrumentOnSelection(std::uint8_t instrument);
   bool hasBlockSelection() const;
+  // Channels covered by the marked block (or the selected cell).
+  void selectedChannelRange(int& first, int& last) const;
   bool applyEffectToSelection(std::uint8_t effectCommand, std::uint8_t effectValue);
 
 private:

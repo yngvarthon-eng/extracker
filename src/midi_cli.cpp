@@ -769,11 +769,20 @@ void handleMidiEventLocked(const MidiEvent& event,
           (context.transport.isPlaying() &&
            context.transport.currentRow() >= rs.punchIn &&
            context.transport.currentRow() <= rs.punchOut);
-      int targetRow = punchOk ? context.chooseRecordRow(context.recordChannel) : -1;
-      if (targetRow >= 0) {
+      // On a track, notes held together form a chord on one row (see ChordRecorder).
+      const int recordChannel = context.recordChannel;
+      const int heldRow = context.chordRecorder.heldChordRow(context.channels, recordChannel);
+      const int leadChannel = context.channels.inTrack(static_cast<std::size_t>(std::max(recordChannel, 0)))
+                                  ? static_cast<int>(context.channels.track(static_cast<std::size_t>(recordChannel)).first)
+                                  : recordChannel;
+      int targetRow = !punchOk ? -1 : (heldRow >= 0 ? heldRow : context.chooseRecordRow(leadChannel));
+      const int targetChannel =
+          targetRow >= 0 ? context.chordRecorder.noteOn(context.channels, recordChannel, targetRow, event.note).channel
+                         : -1;
+      if (targetRow >= 0 && targetChannel >= 0) {
         context.applyRecordWrite(
             targetRow,
-            context.recordChannel,
+            targetChannel,
             event.note,
             static_cast<std::uint8_t>(std::clamp(targetInstrument, 0, 255)),
             0,
@@ -784,6 +793,7 @@ void handleMidiEventLocked(const MidiEvent& event,
       }
     }
   } else if (event.type == MidiEvent::Type::NoteOff) {
+    context.chordRecorder.noteOff(event.note);
     if (context.midiThruEnabled) {
       if (!context.plugins.triggerNoteOff(static_cast<std::uint8_t>(targetInstrument), event.note)) {
         context.audio.noteOff(event.note, static_cast<std::uint8_t>(targetInstrument));

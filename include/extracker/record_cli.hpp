@@ -5,6 +5,7 @@
 #include <mutex>
 #include <sstream>
 
+#include "extracker/channel_manager.hpp"
 #include "extracker/pattern_editor.hpp"
 #include "extracker/record_workflow.hpp"
 #include "extracker/transport.hpp"
@@ -33,6 +34,7 @@ struct RecordCommandContext {
                            bool,
                            std::uint8_t,
                            std::uint8_t)>& applyRecordWrite;
+  const ChannelManager& channels;
 };
 
 void handleRecordCommand(std::istringstream& recordInput,

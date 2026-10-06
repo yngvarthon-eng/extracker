@@ -228,24 +228,34 @@ void ExTrackerApp::initialise(const juce::String& commandLine) {
            static_cast<int>(transport.currentRow()) >= recordState.punchIn &&
            static_cast<int>(transport.currentRow()) <= recordState.punchOut);
       if (recordState.enabled && punchOk) {
-        const int savedChannel = recordState.channel;
-        recordState.channel = targetInstrument;
-        int row;
-        if (transport.isPlaying()) {
-          row = extracker::chooseRecordRow(module.currentEditor(), transport, recordState);
-        } else {
-          row = std::clamp(recordState.cursorRow, 0, static_cast<int>(module.currentEditor().rows()) - 1);
-          // Advance cursor now so overlapping chords land on different rows
-          recordState.cursorRow = (row + std::max(recordState.insertJump, 1)) % static_cast<int>(module.currentEditor().rows());
+        // Notes go to the cursor channel. On a track, notes held together form a
+        // chord on one row, spread over the track's channels (ChordRecorder).
+        const auto& editor = module.currentEditor();
+        const int recordChannel = std::clamp(cursorChannel.load(), 0, static_cast<int>(editor.channels()) - 1);
+        const int heldRow = chordRecorder.heldChordRow(channels, recordChannel);
+        int row = heldRow;
+        if (row < 0 && transport.isPlaying()) {
+          const int savedChannel = recordState.channel;
+          recordState.channel = channels.inTrack(static_cast<std::size_t>(recordChannel))
+                                    ? static_cast<int>(channels.track(static_cast<std::size_t>(recordChannel)).first)
+                                    : recordChannel;
+          row = extracker::chooseRecordRow(editor, transport, recordState);
+          recordState.channel = savedChannel;
+        } else if (row < 0) {
+          row = std::clamp(recordState.cursorRow, 0, static_cast<int>(editor.rows()) - 1);
+          // Advance the cursor now: the next note (or chord) lands on the next row.
+          recordState.cursorRow = (row + std::max(recordState.insertJump, 1)) % static_cast<int>(editor.rows());
         }
-        recordState.channel = savedChannel;
-        if (row >= 0) {
+        const int channel =
+            row >= 0 ? chordRecorder.noteOn(channels, recordChannel, row, static_cast<int>(event.note)).channel : -1;
+        if (channel >= 0) {
           pendingRecordNotes[static_cast<int>(event.note)] = {
-              row, targetInstrument, static_cast<std::uint8_t>(targetInstrument),
+              row, channel, static_cast<std::uint8_t>(targetInstrument),
               event.velocity, std::chrono::steady_clock::now()};
         }
       }
     } else if (event.type == extracker::MidiEvent::Type::NoteOff) {
+      chordRecorder.noteOff(static_cast<int>(event.note));
       if (!plugins.triggerNoteOff(static_cast<std::uint8_t>(targetInstrument), event.note)) {
         audio.noteOff(event.note, static_cast<std::uint8_t>(targetInstrument));
       }

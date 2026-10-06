@@ -1,9 +1,11 @@
 #include "pattern_grid.h"
 #include "app.h"
 #include "extracker/pattern_editor.hpp"
+#include "extracker/track_instruments.hpp"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -14,6 +16,21 @@ namespace {
 // New notes get the instrument selected in the Instruments tab / toolbar.
 std::uint8_t insertInstrument(const ExTrackerApp& app) {
   return static_cast<std::uint8_t>(std::clamp(app.selectedInstrument, 0, 255));
+}
+
+// Writes a typed note (caller holds stateMutex). In a track, a note above the
+// row's lead note takes the lead's instrument, and a new lead instrument reaches
+// the chord notes that followed the old one. Returns the instrument used.
+std::uint8_t insertTypedNote(ExTrackerApp& app, int row, int channel, int midiNote, std::uint32_t gateTicks,
+                             std::uint8_t velocity) {
+  auto& editor = app.module.currentEditor();
+  const int previousLead = extracker::trackLeadInstrument(editor, app.channels, row, channel);
+  const std::uint8_t instrument =
+      extracker::chordEntryInstrument(editor, app.channels, row, channel, insertInstrument(app));
+  editor.insertNote(row, channel, midiNote, instrument, gateTicks, velocity, true);
+  editor.setSample(row, channel, 0xFFFF);
+  extracker::followTrackLead(editor, app.channels, row, channel, previousLead);
+  return instrument;
 }
 
 std::string toUpperHex(unsigned int value, int width) {
@@ -350,6 +367,9 @@ void PatternGrid::drawHeaders(juce::Graphics& g) {
   for (int ch = 0; ch < numChannels; ++ch) {
     int x = labelWidth + ch * cellWidth;
     int y = channelInfoBandY;
+    if (app.channels.inTrack(static_cast<std::size_t>(ch))) {
+      continue;  // the track band below covers this channel
+    }
 
     // Channel pan (notes carry their own instrument, so none is shown here)
     const std::uint8_t pan = app.sequencer.panByChannel(static_cast<std::size_t>(ch));
@@ -357,6 +377,42 @@ void PatternGrid::drawHeaders(juce::Graphics& g) {
 
     g.drawText(juce::String(infoText), x + 1, y + 1, cellWidth - 2, channelInfoBandHeight - 2,
                juce::Justification::centred);
+  }
+
+  // Track bands: one bar across each track's channels.
+  for (const auto& track : app.channels.tracks()) {
+    if (track.first >= static_cast<std::size_t>(numChannels)) {
+      continue;
+    }
+    const int last = std::min(static_cast<int>(track.last), numChannels - 1);
+    const int x = labelWidth + static_cast<int>(track.first) * cellWidth;
+    const int width = (last - static_cast<int>(track.first) + 1) * cellWidth;
+    const juce::Rectangle<float> bar(static_cast<float>(x + 2), static_cast<float>(channelInfoBandY + 1),
+                                     static_cast<float>(width - 4), static_cast<float>(channelInfoBandHeight - 2));
+    juce::Colour fill = juce::Colour(0xFF2E6F73);  // teal
+    if (track.soloed) {
+      fill = juce::Colour(0xFF8A7420);
+    } else if (track.muted) {
+      fill = juce::Colour(0xFF7A3434);
+    }
+    g.setColour(fill);
+    g.fillRoundedRectangle(bar, 3.0f);
+
+    juce::String label = track.name.empty()
+                             ? "Track " + juce::String(static_cast<int>(track.first)) + "-" + juce::String(last)
+                             : juce::String(track.name);
+    if (track.soloed) {
+      label += " S";
+    }
+    if (track.muted) {
+      label += " M";
+    }
+    const int volumePct = static_cast<int>(std::lround(track.volume * 100.0f));
+    if (volumePct != 100) {
+      label += " " + juce::String(volumePct) + "%";
+    }
+    g.setColour(juce::Colours::white);
+    g.drawText(label, bar.toNearestInt().reduced(3, 0), juce::Justification::centred, true);
   }
 
   g.setColour(juce::Colours::dimgrey);
@@ -468,6 +524,21 @@ void PatternGrid::drawGrid(juce::Graphics& g) {
                static_cast<float>(x + cellWidth - 1),
                static_cast<float>(startY + numRows * cellHeight - 1),
                1.5f);
+  }
+
+  // Track edges: a teal line down both sides of each track's channels.
+  g.setColour(juce::Colour(0xFF3FA7AD));
+  for (const auto& track : app.channels.tracks()) {
+    if (track.first >= static_cast<std::size_t>(numChannels)) {
+      continue;
+    }
+    const int last = std::min(static_cast<int>(track.last), numChannels - 1);
+    const float top = static_cast<float>(startY);
+    const float bottom = static_cast<float>(startY + numRows * cellHeight);
+    const float left = static_cast<float>(labelWidth + static_cast<int>(track.first) * cellWidth) + 0.5f;
+    const float right = static_cast<float>(labelWidth + (last + 1) * cellWidth) - 0.5f;
+    g.drawLine(left, top, left, bottom, 1.5f);
+    g.drawLine(right, top, right, bottom, 1.5f);
   }
 
   if (fxInputMode) {
@@ -712,9 +783,8 @@ void PatternGrid::mouseDown(const juce::MouseEvent& event) {
       if (!fxInputMode && !volumeInputMode && !instrumentInputMode &&
           !app.module.currentEditor().hasNoteAt(row, channel)) {
         const int targetChannel = channel;
-        const std::uint8_t instrument = insertInstrument(app);
-        app.module.currentEditor().insertNote(row, targetChannel, 60, instrument, insertGateTicks, insertVelocity, true);
-        app.module.currentEditor().setSample(row, targetChannel, 0xFFFF);
+        const std::uint8_t instrument =
+            insertTypedNote(app, row, targetChannel, 60, insertGateTicks, insertVelocity);
         autoInsertedRow = row;
         autoInsertedChannel = targetChannel;
         lock.unlock();
@@ -1175,8 +1245,11 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
       }
 
       auto& editor = app.module.currentEditor();
+      const int previousLead = extracker::trackLeadInstrument(editor, app.channels, selectedRow, selectedChannel);
       editor.setInstrument(selectedRow, selectedChannel, static_cast<std::uint8_t>(std::min(parsed, 255u)));
       editor.setSample(selectedRow, selectedChannel, 0xFFFF);
+      // Typing over a chord's lead instrument re-points the notes that followed it.
+      extracker::followTrackLead(editor, app.channels, selectedRow, selectedChannel, previousLead);
 
       const int nextRow = std::min(static_cast<int>(editor.rows()) - 1, selectedRow + editStep);
       lock.unlock();
@@ -1574,10 +1647,8 @@ bool PatternGrid::commitNoteFromKeyboard(int midiNote) {
   }
 
   const int targetChannel = selectedChannel;
-  const std::uint8_t instrument = insertInstrument(app);
-
-  app.module.currentEditor().insertNote(selectedRow, targetChannel, midiNote, instrument, insertGateTicks, insertVelocity, true);
-  app.module.currentEditor().setSample(selectedRow, targetChannel, 0xFFFF);
+  const std::uint8_t instrument =
+      insertTypedNote(app, selectedRow, targetChannel, midiNote, insertGateTicks, insertVelocity);
 
   int nextRow = std::min(static_cast<int>(app.module.currentEditor().rows()) - 1, selectedRow + editStep);
   lock.unlock();
@@ -1804,6 +1875,14 @@ bool PatternGrid::transposeSelection(int semitoneDelta) {
   refreshSnapshot();
   repaint();
   return true;
+}
+
+void PatternGrid::selectedChannelRange(int& first, int& last) const {
+  int minRow = selectedRow;
+  int maxRow = selectedRow;
+  first = selectedChannel;
+  last = selectedChannel;
+  getBlockBounds(minRow, maxRow, first, last);
 }
 
 int PatternGrid::setInstrumentOnSelection(std::uint8_t instrument) {
