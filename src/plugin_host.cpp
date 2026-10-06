@@ -2554,7 +2554,7 @@ public:
 // (only used when the adapter's *_PATH env var is unset).
 static void appendUserInstrumentRoots(std::vector<std::string>& searchPaths,
                                       const std::string& home) {
-  for (const char* sub : {"/Musikk/musicworks/instruments", "/Musikk/instruments",
+  for (const char* sub : {"/Musikk/musikk/instruments", "/Musikk/musicworks/instruments", "/Musikk/instruments",
                           "/Music/musicworks/instruments", "/Music/instruments",
                           "/Music/musikk/instruments", "/musikk/instruments"}) {
     searchPaths.push_back(home + sub);

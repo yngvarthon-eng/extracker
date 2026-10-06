@@ -15,8 +15,15 @@ cd "$BUILD_DIR" || exit 1
 
 # Personal instrument library — not covered by the built-in default search
 # paths, so point the SF2/SFZ/S3I scanners at it directly.
-INSTRUMENTS_DIR="$HOME/Musikk/musicworks/instruments"
-if [ -d "$INSTRUMENTS_DIR" ]; then
+# The library moved from ~/Musikk/musicworks to ~/Musikk/musikk; use whichever exists.
+INSTRUMENTS_DIR=""
+for dir in "$HOME/Musikk/musikk/instruments" "$HOME/Musikk/musicworks/instruments"; do
+    if [ -d "$dir" ]; then
+        INSTRUMENTS_DIR="$dir"
+        break
+    fi
+done
+if [ -n "$INSTRUMENTS_DIR" ]; then
     export SF2_PATH="${SF2_PATH:-$INSTRUMENTS_DIR}"
     export SFZ_PATH="${SFZ_PATH:-$INSTRUMENTS_DIR}"
     export S3I_PATH="${S3I_PATH:-$INSTRUMENTS_DIR}"
