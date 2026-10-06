@@ -728,6 +728,100 @@ public:
   }
 };
 
+// Song tab: one header row per track above its channel rows, with the track's
+// name (double-click to rename), Mute, Solo and volume. The owner wires the
+// callbacks and calls update() with fresh state.
+class TrackHeaderRow : public juce::Component {
+public:
+  std::function<void(bool)> onMute;
+  std::function<void(bool)> onSolo;
+  std::function<void(float)> onVolume;
+  std::function<void(const std::string&)> onRename;
+
+  TrackHeaderRow() {
+    name_.setJustificationType(juce::Justification::centredLeft);
+    name_.setColour(juce::Label::textColourId, juce::Colours::white);
+    name_.setEditable(false, true, false);
+    name_.onEditorShow = [this]() {
+      if (auto* editor = name_.getCurrentTextEditor()) {
+        editor->setText(juce::String(trackName_), false);
+        editor->selectAll();
+      }
+    };
+    name_.onTextChange = [this]() {
+      if (onRename) onRename(name_.getText().trim().toStdString());
+    };
+    mute_.setButtonText("Mute");
+    solo_.setButtonText("Solo");
+    mute_.onClick = [this]() { if (onMute) onMute(mute_.getToggleState()); };
+    solo_.onClick = [this]() { if (onSolo) onSolo(solo_.getToggleState()); };
+    volume_.setSliderStyle(juce::Slider::LinearHorizontal);
+    volume_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 18);
+    volume_.setRange(0.0, 200.0, 1.0);
+    volume_.setNumDecimalPlacesToDisplay(0);
+    volume_.setTextValueSuffix("%");
+    volume_.setScrollWheelEnabled(false);  // the wheel scrolls the tab page
+    volume_.onValueChange = [this]() {
+      if (onVolume) onVolume(static_cast<float>(volume_.getValue()) / 100.0f);
+    };
+    for (juce::Component* child : std::initializer_list<juce::Component*>{&name_, &mute_, &solo_, &volume_}) {
+      addAndMakeVisible(child);
+    }
+  }
+
+  void update(const extracker::ChannelManager::TrackInfo& track) {
+    trackName_ = track.name;
+    const juce::String range = juce::String(static_cast<int>(track.first)) + "-" +
+                               juce::String(static_cast<int>(track.last));
+    const juce::String title = track.name.empty() ? "Track " + range : juce::String(track.name) + " (" + range + ")";
+    if (!name_.isBeingEdited()) {
+      name_.setText(juce::String::fromUTF8("\u25BC ") + title, juce::dontSendNotification);
+    }
+    name_.setTooltip(title + " - double-click to rename");
+    mute_.setToggleState(track.muted, juce::dontSendNotification);
+    solo_.setToggleState(track.soloed, juce::dontSendNotification);
+    mute_.setColour(juce::ToggleButton::textColourId, track.muted ? juce::Colour(0xFFFF9A9A) : juce::Colours::white);
+    solo_.setColour(juce::ToggleButton::textColourId, track.soloed ? juce::Colour(0xFFFFD966) : juce::Colours::white);
+    if (!volume_.isMouseButtonDown()) {
+      volume_.setValue(static_cast<double>(track.volume) * 100.0, juce::dontSendNotification);
+    }
+    volume_.setTooltip(title + " volume (multiplies each channel's volume)");
+    muted_ = track.muted;
+    soloed_ = track.soloed;
+    repaint();
+  }
+
+  void paint(juce::Graphics& g) override {
+    juce::Colour fill(0xFF2E6F73);  // teal, as the grid's track bars
+    if (soloed_) {
+      fill = juce::Colour(0xFF8A7420);
+    } else if (muted_) {
+      fill = juce::Colour(0xFF7A3434);
+    }
+    g.setColour(fill);
+    g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.0f);
+  }
+
+  void resized() override {
+    auto row = getLocalBounds().reduced(4, 0);
+    solo_.setBounds(row.removeFromRight(52));
+    mute_.setBounds(row.removeFromRight(56));
+    row.removeFromRight(4);
+    const int nameWidth = std::min(row.getWidth() / 2, 150);
+    name_.setBounds(row.removeFromLeft(nameWidth));
+    volume_.setBounds(row);
+  }
+
+private:
+  juce::Label name_;
+  juce::ToggleButton mute_;
+  juce::ToggleButton solo_;
+  juce::Slider volume_;
+  std::string trackName_;
+  bool muted_ = false;
+  bool soloed_ = false;
+};
+
 class TrackerMainComponent : public juce::Component,
                              private juce::Timer {
 public:
@@ -3245,11 +3339,24 @@ public:
 
     int channelCount = static_cast<int>(channelLabels.size());
     for (int i = 0; i < channelCount; ++i) {
+      const auto ch = static_cast<std::size_t>(i);
+      // A track's header row sits above its first channel; its channels are indented.
+      bool inTrack = false;
+      for (std::size_t t = 0; t < trackHeaderRows.size(); ++t) {
+        if (trackHeaderFirsts[t] == ch) {
+          trackHeaderRows[t]->setBounds(panelArea.removeFromTop(26));
+          panelArea.removeFromTop(2);
+        }
+        inTrack = inTrack || (trackHeaderFirsts[t] <= ch && ch <= trackHeaderLasts[t]);
+      }
       auto row = panelArea.removeFromTop(24);
-      channelSoloToggles[static_cast<std::size_t>(i)]->setBounds(row.removeFromRight(52));
-      channelMuteToggles[static_cast<std::size_t>(i)]->setBounds(row.removeFromRight(56));
+      if (inTrack) {
+        row.removeFromLeft(16);
+      }
+      channelSoloToggles[ch]->setBounds(row.removeFromRight(52));
+      channelMuteToggles[ch]->setBounds(row.removeFromRight(56));
       row.removeFromRight(8);
-      channelLabels[static_cast<std::size_t>(i)]->setBounds(row);
+      channelLabels[ch]->setBounds(row);
       panelArea.removeFromTop(2);
     }
     panelArea.removeFromTop(10);
@@ -5776,6 +5883,7 @@ private:
   }
 
   void refreshChannelRows() {
+    std::vector<extracker::ChannelManager::TrackInfo> tracks;
     {
       std::unique_lock<std::mutex> lock(app.stateMutex, std::try_to_lock);
       if (!lock.owns_lock()) {
@@ -5804,7 +5912,82 @@ private:
                                        muted ? juce::Colour(0xFF4A1E1E) : juce::Colour(0xFF222222));
         }
       }
+      tracks = app.channels.tracks();
     }
+    syncTrackHeaderRows(tracks);
+  }
+
+  // Rebuilds the Song tab track header rows when the set of tracks changed,
+  // then refreshes their state.
+  void syncTrackHeaderRows(const std::vector<extracker::ChannelManager::TrackInfo>& tracks) {
+    std::vector<extracker::ChannelManager::TrackInfo> shown;
+    for (const auto& track : tracks) {
+      if (track.first < channelLabels.size()) {
+        shown.push_back(track);
+      }
+    }
+
+    bool sameLayout = shown.size() == trackHeaderRows.size();
+    for (std::size_t t = 0; sameLayout && t < shown.size(); ++t) {
+      sameLayout = shown[t].first == trackHeaderFirsts[t] && shown[t].last == trackHeaderLasts[t];
+    }
+    if (!sameLayout) {
+      for (auto& header : trackHeaderRows) {
+        if (auto* parent = header->getParentComponent()) {
+          parent->removeChildComponent(header.get());
+        }
+      }
+      trackHeaderRows.clear();
+      trackHeaderFirsts.clear();
+      trackHeaderLasts.clear();
+      for (const auto& track : shown) {
+        trackHeaderRows.push_back(makeTrackHeaderRow(track.first));
+        trackHeaderFirsts.push_back(track.first);
+        trackHeaderLasts.push_back(track.last);
+      }
+      resized();
+    }
+    for (std::size_t t = 0; t < shown.size(); ++t) {
+      trackHeaderRows[t]->update(shown[t]);
+    }
+  }
+
+  std::unique_ptr<TrackHeaderRow> makeTrackHeaderRow(std::size_t first) {
+    auto header = std::make_unique<TrackHeaderRow>();
+    // Each change takes the lock briefly, then refreshes the rows and the grid.
+    auto apply = [this, first](auto change, bool silenceNotes) {
+      {
+        std::lock_guard<std::mutex> lock(app.stateMutex);
+        if (!app.channels.inTrack(first)) {
+          return;
+        }
+        change(app.channels);
+        if (silenceNotes) {
+          app.plugins.allNotesOff();
+          app.audio.allNotesOff();
+        }
+      }
+      refreshChannelRows();
+      patternGrid.repaint();
+    };
+    header->onMute = [apply, first](bool on) {
+      apply([first, on](extracker::ChannelManager& channels) { channels.setTrackMuted(first, on); }, true);
+    };
+    header->onSolo = [apply, first](bool on) {
+      apply([first, on](extracker::ChannelManager& channels) { channels.setTrackSoloed(first, on); }, true);
+    };
+    header->onVolume = [apply, first](float volume) {
+      apply([first, volume](extracker::ChannelManager& channels) { channels.setTrackVolume(first, volume); }, false);
+    };
+    header->onRename = [apply, first](const std::string& name) {
+      apply([first, name](extracker::ChannelManager& channels) { channels.setTrackName(first, name); }, false);
+    };
+    if (songPage) {
+      songPage->addAndMakeVisible(*header);
+    } else {
+      addAndMakeVisible(*header);
+    }
+    return header;
   }
 
   void refreshSlotActivityLabels() {
@@ -7382,6 +7565,10 @@ private:
   std::vector<std::unique_ptr<juce::Label>> channelLabels;
   std::vector<std::unique_ptr<juce::ToggleButton>> channelMuteToggles;
   std::vector<std::unique_ptr<juce::ToggleButton>> channelSoloToggles;
+  // Song tab track header rows, keyed by each track's first channel.
+  std::vector<std::unique_ptr<TrackHeaderRow>> trackHeaderRows;
+  std::vector<std::size_t> trackHeaderFirsts;
+  std::vector<std::size_t> trackHeaderLasts;
   std::vector<std::unique_ptr<juce::Label>> slotActivityLabels;
   std::vector<std::unique_ptr<SlotActivityBar>> slotActivityBars;
   std::vector<juce::String> cachedSlotActivityText;
