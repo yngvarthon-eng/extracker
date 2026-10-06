@@ -35,6 +35,7 @@
 #include <cmath>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -5336,6 +5337,27 @@ public:
 
 #ifdef EXTRACKER_HAVE_FLUIDSYNTH
 
+// FluidSynth logs "SDL3 not initialized" for every synth it creates (we never
+// use its audio drivers). Drop that line and pass every other warning through.
+static void fluidLogFilter(int level, const char* message, void* /*data*/) {
+  if (message == nullptr || std::strstr(message, "SDL3") != nullptr) {
+    return;
+  }
+  std::fprintf(stderr, "fluidsynth: %s: %s\n", level == FLUID_WARN ? "warning" : "error", message);
+}
+
+static fluid_settings_t* newFluidSettings() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    fluid_set_log_function(FLUID_WARN, fluidLogFilter, nullptr);
+  });
+  return new_fluid_settings();
+}
+
+// Voices per SF2 instrument: one note can take several (stereo pairs, layered
+// zones) and pads release for seconds, so chords need room. FluidSynth's own default.
+constexpr int kSf2Polyphony = 256;
+
 class SF2Plugin final : public extracker::IInstrumentPlugin {
   std::string        path_;
   int                bank_    = 0;
@@ -5360,10 +5382,10 @@ class SF2Plugin final : public extracker::IInstrumentPlugin {
   bool ensureInit(std::uint32_t sampleRate) {
     if (synth_) return sfontId_ >= 0;
     const std::uint32_t rate = sampleRate > 0 ? sampleRate : 44100u;
-    settings_ = new_fluid_settings();
+    settings_ = newFluidSettings();
     if (!settings_) return false;
     fluid_settings_setnum(settings_, "synth.sample-rate", static_cast<double>(rate));
-    fluid_settings_setint(settings_, "synth.polyphony", 64);
+    fluid_settings_setint(settings_, "synth.polyphony", kSf2Polyphony);
     fluid_settings_setint(settings_, "synth.reverb.active", 0);
     fluid_settings_setint(settings_, "synth.chorus.active", 0);
     fluid_settings_setstr(settings_, "audio.driver", "none");
@@ -5499,10 +5521,10 @@ class SF2MelodicPlugin final : public extracker::IInstrumentPlugin {
   bool ensureInit(std::uint32_t sampleRate) {
     if (synth_) return sfontId_ >= 0;
     const std::uint32_t rate = sampleRate > 0 ? sampleRate : 44100u;
-    settings_ = new_fluid_settings();
+    settings_ = newFluidSettings();
     if (!settings_) return false;
     fluid_settings_setnum(settings_, "synth.sample-rate", static_cast<double>(rate));
-    fluid_settings_setint(settings_, "synth.polyphony", 32);
+    fluid_settings_setint(settings_, "synth.polyphony", kSf2Polyphony);
     fluid_settings_setint(settings_, "synth.reverb.active", 0);
     fluid_settings_setint(settings_, "synth.chorus.active", 0);
     fluid_settings_setstr(settings_, "audio.driver", "none");
@@ -7161,7 +7183,7 @@ bool PluginHost::loadInstrumentAuto(const std::string& pathOrId, std::uint8_t in
 
 std::vector<int> PluginHost::enumSF2DrumKeys(const std::string& sf2Path) const {
 #ifdef EXTRACKER_HAVE_FLUIDSYNTH
-  fluid_settings_t* settings = new_fluid_settings();
+  fluid_settings_t* settings = newFluidSettings();
   if (!settings) return {};
   fluid_settings_setnum(settings, "synth.sample-rate", 44100.0);
   fluid_settings_setint(settings, "synth.polyphony", 16);
