@@ -42,6 +42,7 @@ add_library(extracker_core
   src/audio_engine.cpp
   src/channel_layout.cpp
   src/channel_manager.cpp
+  src/track_instruments.cpp
   src/midi_input.cpp
   src/module.cpp
   src/pattern_clipboard.cpp
@@ -217,6 +218,11 @@ if(BUILD_TESTING)
   target_include_directories(extracker_channel_manager_test PRIVATE include)
   target_link_libraries(extracker_channel_manager_test PRIVATE extracker_core)
   add_test(NAME extracker_channel_manager_test COMMAND extracker_channel_manager_test)
+
+  add_executable(extracker_track_instruments_test tests/track_instruments_test.cpp)
+  target_include_directories(extracker_track_instruments_test PRIVATE include)
+  target_link_libraries(extracker_track_instruments_test PRIVATE extracker_core)
+  add_test(NAME extracker_track_instruments_test COMMAND extracker_track_instruments_test)
 
   add_executable(extracker_pattern_clipboard_test tests/pattern_clipboard_test.cpp)
   target_include_directories(extracker_pattern_clipboard_test PRIVATE include)
@@ -959,6 +965,10 @@ if(BUILD_TESTING)
   add_executable(extracker_cli_channel_layout_test tests/cli_channel_layout_test.cpp)
   add_dependencies(extracker_cli_channel_layout_test extracker)
   add_test(NAME extracker_cli_channel_layout_test COMMAND extracker_cli_channel_layout_test)
+
+  add_executable(extracker_cli_channel_track_test tests/cli_channel_track_test.cpp)
+  add_dependencies(extracker_cli_channel_track_test extracker)
+  add_test(NAME extracker_cli_channel_track_test COMMAND extracker_cli_channel_track_test)
 
   add_executable(extracker_cli_reverb_persist_test tests/cli_reverb_persist_test.cpp)
   add_dependencies(extracker_cli_reverb_persist_test extracker)

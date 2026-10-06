@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "extracker/cli_parse_utils.hpp"
+#include "extracker/track_instruments.hpp"
 
 namespace extracker {
 namespace {
@@ -33,7 +34,8 @@ bool parseOptionalDryAndLeadingInt(std::istringstream& input, bool& dryRun, int&
 
 void handleNoteCommand(PatternEditor& editor,
                        std::mutex& stateMutex,
-                       std::istringstream& noteInput) {
+                       std::istringstream& noteInput,
+                       const ChannelManager* channels) {
   std::string subcommand;
   noteInput >> subcommand;
   auto printNoteUsage = [&](const std::string& usage) {
@@ -59,6 +61,7 @@ void handleNoteCommand(PatternEditor& editor,
   };
 
   if (subcommand == "set") {
+    // <instr> may be "-" on a track channel: take the track lead's instrument (see channel help).
     const std::string usage = "Usage: note set [dry] <row> <ch> <midi> <instr> [vel] [fx] [fxval]";
     bool dryRun = false;
     int row = -1;
@@ -77,10 +80,11 @@ void handleNoteCommand(PatternEditor& editor,
     std::string midiToken;
     std::string instrumentToken;
 
+    bool inheritInstrument = false;
     if (!(noteInput >> channelToken >> midiToken >> instrumentToken) ||
         !cli::parseStrictIntToken(channelToken, channel) ||
         !cli::parseStrictIntToken(midiToken, midi) ||
-        !cli::parseStrictIntToken(instrumentToken, instrument)) {
+        !((inheritInstrument = instrumentToken == "-") || cli::parseStrictIntToken(instrumentToken, instrument))) {
       std::cout << usage << '\n';
     } else {
       std::vector<std::string> optionalArgs;
@@ -108,6 +112,21 @@ void handleNoteCommand(PatternEditor& editor,
 
       if (!ensureNoTrailing(usage)) {
         return;
+      }
+
+      if (inheritInstrument && midi >= 0) {
+        std::lock_guard<std::mutex> lock(stateMutex);
+        if (channels == nullptr || channel < 0 || !channels->inTrack(static_cast<std::size_t>(channel))) {
+          std::cout << "Channel " << channel << " is not in a track; give an instrument\n";
+          return;
+        }
+        instrument = trackLeadInstrument(editor, *channels, row, channel, channel);
+        if (instrument < 0) {
+          const ChannelManager::TrackInfo track = channels->track(static_cast<std::size_t>(channel));
+          std::cout << "No note on row " << row << " in track " << track.first << "-" << track.last
+                    << " to take the instrument from\n";
+          return;
+        }
       }
 
       if (dryRun) {
@@ -139,6 +158,8 @@ void handleNoteCommand(PatternEditor& editor,
                 static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
           }
         } else {
+          const int previousLead =
+              channels != nullptr ? trackLeadInstrument(editor, *channels, row, channel) : -1;
           editor.insertNote(
               row,
               channel,
@@ -149,6 +170,19 @@ void handleNoteCommand(PatternEditor& editor,
               false,
               static_cast<std::uint8_t>(std::clamp(effectCommand, 0, 255)),
               static_cast<std::uint8_t>(std::clamp(effectValue, 0, 255)));
+          if (inheritInstrument) {
+            std::cout << "Instrument " << instrument << " taken from track lead\n";
+          } else if (channels != nullptr) {
+            const std::vector<int> followers = followTrackLead(editor, *channels, row, channel, previousLead);
+            if (!followers.empty()) {
+              std::cout << "Instrument " << std::clamp(instrument, 0, 255) << " applied to chord channel"
+                        << (followers.size() > 1 ? "s" : "");
+              for (const int follower : followers) {
+                std::cout << ' ' << follower;
+              }
+              std::cout << '\n';
+            }
+          }
         }
         std::cout << "Note set at row " << row << ", channel " << channel << '\n';
       }

@@ -15,6 +15,7 @@ ChannelManager::ChannelManager(std::size_t channels) {
 
 void ChannelManager::resize(std::size_t channels) {
   channels_.resize(std::min(channels, kMaxChannels));
+  normalizeTracks();
 }
 
 const std::string& ChannelManager::name(std::size_t channel) const {
@@ -57,20 +58,25 @@ void ChannelManager::setSoloed(std::size_t channel, bool soloed) {
 }
 
 bool ChannelManager::anySoloed() const {
-  return std::any_of(channels_.begin(), channels_.end(), [](const Channel& ch) { return ch.soloed; });
+  return std::any_of(channels_.begin(), channels_.end(), [](const Channel& ch) { return ch.soloed; }) ||
+         std::any_of(tracks_.begin(), tracks_.end(), [](const Track& track) { return track.soloed; });
 }
 
 void ChannelManager::clearSolo() {
   for (Channel& ch : channels_) {
     ch.soloed = false;
   }
+  for (Track& track : tracks_) {
+    track.soloed = false;
+  }
 }
 
 bool ChannelManager::isAudible(std::size_t channel) const {
+  const Track* track = trackOf(channel);
   if (anySoloed()) {
-    return isSoloed(channel);
+    return isSoloed(channel) || (track != nullptr && track->soloed && !isMuted(channel));
   }
-  return !isMuted(channel);
+  return !isMuted(channel) && (track == nullptr || !track->muted);
 }
 
 float ChannelManager::volume(std::size_t channel) const {
@@ -81,6 +87,114 @@ float ChannelManager::volume(std::size_t channel) const {
 void ChannelManager::setVolume(std::size_t channel, float volume) {
   if (Channel* ch = ensure(channel)) {
     ch->volume = std::clamp(volume, 0.0f, kMaxVolume);
+  }
+}
+
+float ChannelManager::effectiveVolume(std::size_t channel) const {
+  const Track* track = trackOf(channel);
+  return volume(channel) * (track != nullptr ? track->volume : 1.0f);
+}
+
+bool ChannelManager::addTrack(std::size_t first, std::size_t last, const std::string& name, std::string& error) {
+  if (first > last) {
+    error = "first channel " + std::to_string(first) + " is after last channel " + std::to_string(last);
+    return false;
+  }
+  if (last >= kMaxChannels) {
+    error = "channel " + std::to_string(last) + " is out of range";
+    return false;
+  }
+  for (std::size_t ch = first; ch <= last; ++ch) {
+    if (inTrack(ch)) {
+      const TrackInfo other = track(ch);
+      error = "channel " + std::to_string(ch) + " is already in track " + std::to_string(other.first) + "-" +
+              std::to_string(other.last);
+      return false;
+    }
+  }
+  Track track;
+  track.id = nextTrackId_++;
+  track.name = name;
+  tracks_.push_back(track);
+  for (std::size_t ch = first; ch <= last; ++ch) {
+    ensure(ch)->track = track.id;
+  }
+  return true;
+}
+
+bool ChannelManager::removeTrack(std::size_t channel) {
+  const Track* track = trackOf(channel);
+  if (track == nullptr) {
+    return false;
+  }
+  const int id = track->id;
+  for (Channel& ch : channels_) {
+    if (ch.track == id) {
+      ch.track = -1;
+    }
+  }
+  tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(), [id](const Track& t) { return t.id == id; }),
+                tracks_.end());
+  return true;
+}
+
+bool ChannelManager::inTrack(std::size_t channel) const {
+  return trackOf(channel) != nullptr;
+}
+
+ChannelManager::TrackInfo ChannelManager::track(std::size_t channel) const {
+  TrackInfo info;
+  const Track* track = trackOf(channel);
+  if (track == nullptr) {
+    info.first = info.last = channel;
+    return info;
+  }
+  info.first = channel;
+  while (info.first > 0 && channels_[info.first - 1].track == track->id) {
+    --info.first;
+  }
+  info.last = channel;
+  while (info.last + 1 < channels_.size() && channels_[info.last + 1].track == track->id) {
+    ++info.last;
+  }
+  info.name = track->name;
+  info.muted = track->muted;
+  info.soloed = track->soloed;
+  info.volume = track->volume;
+  return info;
+}
+
+std::vector<ChannelManager::TrackInfo> ChannelManager::tracks() const {
+  std::vector<TrackInfo> result;
+  for (std::size_t ch = 0; ch < channels_.size(); ++ch) {
+    if (inTrack(ch) && (ch == 0 || channels_[ch - 1].track != channels_[ch].track)) {
+      result.push_back(track(ch));
+    }
+  }
+  return result;
+}
+
+void ChannelManager::setTrackName(std::size_t channel, const std::string& name) {
+  if (Track* track = trackOf(channel)) {
+    track->name = name;
+  }
+}
+
+void ChannelManager::setTrackMuted(std::size_t channel, bool muted) {
+  if (Track* track = trackOf(channel)) {
+    track->muted = muted;
+  }
+}
+
+void ChannelManager::setTrackSoloed(std::size_t channel, bool soloed) {
+  if (Track* track = trackOf(channel)) {
+    track->soloed = soloed;
+  }
+}
+
+void ChannelManager::setTrackVolume(std::size_t channel, float volume) {
+  if (Track* track = trackOf(channel)) {
+    track->volume = std::clamp(volume, 0.0f, kMaxVolume);
   }
 }
 
@@ -106,6 +220,50 @@ void ChannelManager::remap(const std::vector<int>& sources) {
                            : Channel{});
   }
   channels_.swap(remapped);
+  normalizeTracks();
+}
+
+void ChannelManager::normalizeTracks() {
+  // A channel between two channels of the same track joins it (an inserted
+  // channel, or one moved into the middle of a chord).
+  for (std::size_t ch = 1; ch + 1 < channels_.size(); ++ch) {
+    const int left = channels_[ch - 1].track;
+    if (left >= 0 && left == channels_[ch + 1].track) {
+      channels_[ch].track = left;
+    }
+  }
+
+  // Keep each track's longest run (the first on a tie); other members leave.
+  for (const Track& track : tracks_) {
+    std::size_t bestFirst = 0;
+    std::size_t bestLength = 0;
+    for (std::size_t ch = 0; ch < channels_.size();) {
+      if (channels_[ch].track != track.id) {
+        ++ch;
+        continue;
+      }
+      const std::size_t runFirst = ch;
+      while (ch < channels_.size() && channels_[ch].track == track.id) {
+        ++ch;
+      }
+      if (ch - runFirst > bestLength) {
+        bestFirst = runFirst;
+        bestLength = ch - runFirst;
+      }
+    }
+    for (std::size_t ch = 0; ch < channels_.size(); ++ch) {
+      if (channels_[ch].track == track.id && (ch < bestFirst || ch >= bestFirst + bestLength)) {
+        channels_[ch].track = -1;
+      }
+    }
+  }
+
+  tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(),
+                               [this](const Track& track) {
+                                 return std::none_of(channels_.begin(), channels_.end(),
+                                                     [&track](const Channel& ch) { return ch.track == track.id; });
+                               }),
+                tracks_.end());
 }
 
 ChannelManager::Channel* ChannelManager::ensure(std::size_t channel) {
@@ -120,6 +278,23 @@ ChannelManager::Channel* ChannelManager::ensure(std::size_t channel) {
 
 const ChannelManager::Channel* ChannelManager::find(std::size_t channel) const {
   return channel < channels_.size() ? &channels_[channel] : nullptr;
+}
+
+const ChannelManager::Track* ChannelManager::trackOf(std::size_t channel) const {
+  const Channel* ch = find(channel);
+  if (ch == nullptr || ch->track < 0) {
+    return nullptr;
+  }
+  for (const Track& track : tracks_) {
+    if (track.id == ch->track) {
+      return &track;
+    }
+  }
+  return nullptr;
+}
+
+ChannelManager::Track* ChannelManager::trackOf(std::size_t channel) {
+  return const_cast<Track*>(static_cast<const ChannelManager*>(this)->trackOf(channel));
 }
 
 void writeChannelState(std::ostream& out, const ChannelManager& channels, std::size_t channelCount) {
@@ -149,11 +324,25 @@ void writeChannelState(std::ostream& out, const ChannelManager& channels, std::s
         << " " << static_cast<int>(std::lround(filter.resonanceNorm * 255.0f));
   }
   out << "\n";
+
+  bool anyTrack = false;
+  for (const ChannelManager::TrackInfo& track : channels.tracks()) {
+    if (track.last >= channelCount) {
+      continue;
+    }
+    out << (anyTrack ? "" : "CHANNEL_TRACKS") << " " << track.first << " " << track.last << " "
+        << (track.muted ? 1 : 0) << " " << static_cast<int>(std::lround(track.volume * 100.0f)) << " "
+        << std::quoted(track.name);
+    anyTrack = true;
+  }
+  if (anyTrack) {
+    out << "\n";
+  }
 }
 
 bool isChannelFileToken(const std::string& token) {
   return token == "CHANNEL_INSTRUMENTS" || token == "CHANNEL_MUTED" || token == "CHANNEL_VOLUME" ||
-         token == "CHANNEL_NAMES" || token == "CHANNEL_FILTERS";
+         token == "CHANNEL_NAMES" || token == "CHANNEL_FILTERS" || token == "CHANNEL_TRACKS";
 }
 
 bool applyChannelFileToken(std::istream& in, const std::string& token, ChannelManager& channels) {
@@ -187,6 +376,19 @@ bool applyChannelFileToken(std::istream& in, const std::string& token, ChannelMa
       filter.cutoffNorm = static_cast<float>(std::clamp(cutoff, 0, 255)) / 255.0f;
       filter.resonanceNorm = static_cast<float>(std::clamp(resonance, 0, 255)) / 255.0f;
       channels.setFilter(ch, filter);
+    }
+  } else if (token == "CHANNEL_TRACKS") {
+    std::size_t first = 0;
+    std::size_t last = 0;
+    int muted = 0;
+    int pct = 100;
+    std::string name;
+    std::string error;
+    while (values >> first >> last >> muted >> pct >> std::quoted(name)) {
+      if (channels.addTrack(first, last, name, error)) {
+        channels.setTrackMuted(first, muted != 0);
+        channels.setTrackVolume(first, static_cast<float>(std::clamp(pct, 0, 200)) / 100.0f);
+      }
     }
   } else {
     std::string name;

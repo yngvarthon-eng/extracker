@@ -37,13 +37,41 @@ public:
   bool anySoloed() const;
   void clearSolo();
 
-  // Solo wins over mute: while any channel is soloed, exactly the soloed
-  // channels are audible; otherwise every unmuted channel is.
+  // Solo wins over mute. While any channel or track is soloed, a channel is
+  // audible if it is soloed itself, or its track is soloed and the channel is
+  // not muted. Otherwise it is audible unless it or its track is muted.
   bool isAudible(std::size_t channel) const;
 
-  // Linear gain, 1.0 = unity, clamped to 0..kMaxVolume.
+  // The channel's own linear gain, 1.0 = unity, clamped to 0..kMaxVolume.
   float volume(std::size_t channel) const;
   void setVolume(std::size_t channel, float volume);
+  // Gain playback uses: the channel volume times its track volume.
+  float effectiveVolume(std::size_t channel) const;
+
+  // Tracks group a contiguous run of channels (e.g. the notes of a chord) under
+  // one name, mute, solo and volume. Each channel keeps its own state and is in
+  // at most one track. Track functions take any channel inside the track.
+  struct TrackInfo {
+    std::size_t first = 0;
+    std::size_t last = 0;
+    std::string name;
+    bool muted = false;
+    bool soloed = false;
+    float volume = 1.0f;
+  };
+
+  // Fails (with error set) if the range is invalid or overlaps another track.
+  bool addTrack(std::size_t first, std::size_t last, const std::string& name, std::string& error);
+  bool removeTrack(std::size_t channel);
+  bool inTrack(std::size_t channel) const;
+  // The track holding channel; only valid when inTrack(channel).
+  TrackInfo track(std::size_t channel) const;
+  // Every track, ordered by first channel.
+  std::vector<TrackInfo> tracks() const;
+  void setTrackName(std::size_t channel, const std::string& name);
+  void setTrackMuted(std::size_t channel, bool muted);
+  void setTrackSoloed(std::size_t channel, bool soloed);
+  void setTrackVolume(std::size_t channel, float volume);
 
   // Base filter set from the GUI filter panel. Pattern effects 18/19/1A can
   // override it during playback; a sequencer reset falls back to this value.
@@ -52,7 +80,9 @@ public:
 
 
   // Rebuilds the channel list so new channel i takes the state of old channel
-  // sources[i], or defaults when sources[i] < 0.
+  // sources[i], or defaults when sources[i] < 0. Tracks follow their channels
+  // and stay contiguous: a channel landing between two channels of a track
+  // joins it, and a channel moved away from its track leaves it.
   void remap(const std::vector<int>& sources);
 
 private:
@@ -62,16 +92,30 @@ private:
     bool soloed = false;
     float volume = 1.0f;
     BiquadParams filter;
+    int track = -1;  // Track::id, or -1
+  };
+  struct Track {
+    int id = 0;
+    std::string name;
+    bool muted = false;
+    bool soloed = false;
+    float volume = 1.0f;
   };
 
   Channel* ensure(std::size_t channel);
   const Channel* find(std::size_t channel) const;
+  const Track* trackOf(std::size_t channel) const;
+  Track* trackOf(std::size_t channel);
+  void normalizeTracks();
 
   std::vector<Channel> channels_;
+  std::vector<Track> tracks_;
+  int nextTrackId_ = 0;
 };
 
 // Song file persistence. Writes CHANNEL_MUTED, CHANNEL_VOLUME, CHANNEL_NAMES and
-// CHANNEL_FILTERS lines for channelCount channels; solo is audition state and is
+// CHANNEL_FILTERS lines for channelCount channels, plus a CHANNEL_TRACKS line
+// ("first last muted volume name" per track) when there are tracks; solo is audition state and is
 // not saved. CHANNEL_INSTRUMENTS (per-channel default instruments, which notes
 // no longer use) is still accepted from older files and ignored. CHANNEL_FILTERS holds one "type cutoff
 // resonance" triple per channel (type 0-4, cutoff and resonance 0-255).

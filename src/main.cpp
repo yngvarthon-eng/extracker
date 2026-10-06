@@ -1476,7 +1476,7 @@ int main() {
             extracker::handleSineCommand(plugins, input);
           },
           [&](std::istringstream& input) {
-            extracker::handleNoteCommand(module.currentEditor(), stateMutex, input);
+            extracker::handleNoteCommand(module.currentEditor(), stateMutex, input, &channels);
           },
           [&](std::istringstream& input) {
             extracker::handlePatternCommand(makePatternContext(), input);

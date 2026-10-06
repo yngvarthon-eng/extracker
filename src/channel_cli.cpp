@@ -9,6 +9,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace extracker {
 
@@ -17,7 +18,11 @@ namespace {
 constexpr const char* kUsage =
     "Usage: channel [list] | vol [<ch>] [<0-200>] | mute <ch> [on|off] | "
     "solo <ch> [on|off] | solo off | name <ch> [<name>|-] | "
-    "insert <ch> | delete <ch> | move <from> <to> | dup <ch> | undo | redo";
+    "insert <ch> | delete <ch> | move <from> <to> | dup <ch> | undo | redo | track ...";
+
+constexpr const char* kTrackUsage =
+    "Usage: channel track [list] | add <first> <last> [<name>] | remove <ch> | "
+    "mute <ch> [on|off] | solo <ch> [on|off] | vol <ch> [<0-200>] | name <ch> [<name>|-]";
 
 void printHelp() {
   std::cout << "channel list                 show name, volume, mute and solo for every channel\n";
@@ -36,6 +41,14 @@ void printHelp() {
   std::cout << "channel undo | redo          undo/redo the last insert/delete/move/dup\n";
   std::cout << "  Structural edits apply to all patterns and keep the channel count:\n";
   std::cout << "  insert and dup need the last channel to be empty.\n";
+  std::cout << "channel track [list]          show tracks (groups of adjacent channels, e.g. a chord)\n";
+  std::cout << "channel track add <first> <last> [<name>]  group channels first..last into a track\n";
+  std::cout << "channel track remove <ch>     ungroup the track holding <ch> (notes are kept)\n";
+  std::cout << "channel track mute|solo <ch> [on|off]  mute/solo the whole track\n";
+  std::cout << "channel track vol <ch> [<0-200>]       track volume, multiplied with each channel's\n";
+  std::cout << "channel track name <ch> [<name>|-]     show, set or clear a track name\n";
+  std::cout << "  <ch> is any channel inside the track. A note set with instrument '-' on a\n";
+  std::cout << "  track channel takes the instrument of the track's first note on that row.\n";
 }
 
 int volumePercent(const ChannelManager& channels, std::size_t ch) {
@@ -88,7 +101,149 @@ void printList(const ChannelManager& channels, std::size_t numChannels) {
               << " vol " << std::setw(3) << volumePercent(channels, ch) << "%"
               << (channels.isMuted(ch) ? "  M" : "   ")
               << (channels.isSoloed(ch) ? " S" : "  ")
-              << (channels.isAudible(ch) ? "" : "  (silent)") << '\n';
+              << (channels.isAudible(ch) ? "" : "  (silent)");
+    if (channels.inTrack(ch)) {
+      const ChannelManager::TrackInfo track = channels.track(ch);
+      std::cout << "  [track " << track.first << "-" << track.last
+                << (track.name.empty() ? "" : " " + track.name) << "]";
+    }
+    std::cout << '\n';
+  }
+}
+
+std::string trackLabel(const ChannelManager::TrackInfo& track) {
+  std::string label = "Track " + std::to_string(track.first) + "-" + std::to_string(track.last);
+  if (!track.name.empty()) {
+    label += " (" + track.name + ")";
+  }
+  return label;
+}
+
+void printTracks(const ChannelManager& channels, std::size_t numChannels) {
+  const std::vector<ChannelManager::TrackInfo> tracks = channels.tracks();
+  if (tracks.empty()) {
+    std::cout << "No tracks\n";
+    return;
+  }
+  std::cout << "Tracks:\n";
+  for (const ChannelManager::TrackInfo& track : tracks) {
+    if (track.first >= numChannels) {
+      continue;
+    }
+    std::cout << "  ch " << std::setw(2) << track.first << "-" << std::setw(2) << track.last << "  "
+              << std::left << std::setw(16) << (track.name.empty() ? "-" : track.name) << std::right
+              << " vol " << std::setw(3) << static_cast<int>(std::lround(track.volume * 100.0f)) << "%"
+              << (track.muted ? "  M" : "   ") << (track.soloed ? " S" : "  ") << '\n';
+  }
+}
+
+// Parses <ch> and checks it is inside a track.
+bool parseTrackChannel(std::istringstream& input, const ChannelManager& channels, std::size_t numChannels,
+                       std::size_t& channel) {
+  std::string token;
+  if (!(input >> token)) {
+    std::cout << kTrackUsage << '\n';
+    return false;
+  }
+  if (!parseChannel(token, numChannels, channel)) {
+    return false;
+  }
+  if (!channels.inTrack(channel)) {
+    std::cout << "Channel " << channel << " is not in a track\n";
+    return false;
+  }
+  return true;
+}
+
+void handleTrack(std::istringstream& input, ChannelManager& channels, std::size_t numChannels) {
+  std::string subcommand;
+  input >> subcommand;
+
+  if (subcommand.empty() || subcommand == "list") {
+    printTracks(channels, numChannels);
+    return;
+  }
+
+  if (subcommand == "add") {
+    std::string firstToken;
+    std::string lastToken;
+    if (!(input >> firstToken >> lastToken)) {
+      std::cout << kTrackUsage << '\n';
+      return;
+    }
+    std::size_t first = 0;
+    std::size_t last = 0;
+    if (!parseChannel(firstToken, numChannels, first) || !parseChannel(lastToken, numChannels, last)) {
+      return;
+    }
+    std::string name;
+    std::getline(input >> std::ws, name);
+    std::string error;
+    if (!channels.addTrack(first, last, name, error)) {
+      std::cout << "Track add failed: " << error << '\n';
+      return;
+    }
+    std::cout << "Added " << trackLabel(channels.track(first)) << '\n';
+    return;
+  }
+
+  const bool known = subcommand == "remove" || subcommand == "mute" || subcommand == "solo" ||
+                     subcommand == "vol" || subcommand == "volume" || subcommand == "name";
+  if (!known) {
+    std::cout << "Unknown track subcommand: " << subcommand << '\n';
+    std::cout << kTrackUsage << '\n';
+    return;
+  }
+
+  std::size_t ch = 0;
+  if (!parseTrackChannel(input, channels, numChannels, ch)) {
+    return;
+  }
+  const ChannelManager::TrackInfo track = channels.track(ch);
+
+  if (subcommand == "remove") {
+    channels.removeTrack(ch);
+    std::cout << "Removed " << trackLabel(track) << '\n';
+  } else if (subcommand == "mute" || subcommand == "solo") {
+    const bool isSolo = subcommand == "solo";
+    bool state = isSolo ? !track.soloed : !track.muted;
+    if (!parseOnOff(input, state)) {
+      return;
+    }
+    if (isSolo) {
+      channels.setTrackSoloed(ch, state);
+      std::cout << trackLabel(track) << " solo " << (state ? "on" : "off") << '\n';
+    } else {
+      channels.setTrackMuted(ch, state);
+      std::cout << trackLabel(track) << (state ? " muted" : " unmuted") << '\n';
+    }
+  } else if (subcommand == "vol" || subcommand == "volume") {
+    std::string valToken;
+    if (!(input >> valToken)) {
+      std::cout << trackLabel(track) << " volume: " << static_cast<int>(std::lround(track.volume * 100.0f))
+                << "%\n";
+      return;
+    }
+    int pct = -1;
+    try { pct = std::stoi(valToken); } catch (...) {}
+    if (pct < 0 || pct > 200) {
+      std::cout << "Volume out of range: " << valToken << " (valid: 0-200)\n";
+      return;
+    }
+    channels.setTrackVolume(ch, static_cast<float>(pct) / 100.0f);
+    std::cout << trackLabel(track) << " volume set to " << pct << "%\n";
+  } else {
+    std::string name;
+    std::getline(input >> std::ws, name);
+    if (name.empty()) {
+      std::cout << trackLabel(track) << " name: " << (track.name.empty() ? "-" : track.name) << '\n';
+    } else if (name == "-") {
+      channels.setTrackName(ch, "");
+      std::cout << trackLabel(track) << " name cleared\n";
+    } else {
+      channels.setTrackName(ch, name);
+      std::cout << "Track " << track.first << "-" << track.last << " name set to " << name << '\n';
+    }
   }
 }
 
@@ -205,7 +360,7 @@ bool handleLayoutCommand(const std::string& subcommand,
 
 }  // namespace
 
-// channel [list] | vol | mute | solo | name | insert | delete | move | dup | undo | redo
+// channel [list] | vol | mute | solo | name | insert | delete | move | dup | undo | redo | track
 void handleChannelCommand(std::istringstream& input, ChannelCommandContext context) {
   std::string subcommand;
   input >> subcommand;
@@ -230,6 +385,11 @@ void handleChannelCommand(std::istringstream& input, ChannelCommandContext conte
 
   if (subcommand == "vol" || subcommand == "volume") {
     handleVolume(input, channels, numChannels);
+    return;
+  }
+
+  if (subcommand == "track") {
+    handleTrack(input, channels, numChannels);
     return;
   }
 

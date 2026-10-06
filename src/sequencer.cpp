@@ -638,7 +638,7 @@ void Sequencer::update(
         velocity = static_cast<std::uint8_t>(adjustedVelocity);
       }
 
-      const float channelVolume = channels != nullptr ? channels->volume(channel) : 1.0f;
+      const float channelVolume = channels != nullptr ? channels->effectiveVolume(channel) : 1.0f;
       if (channelVolume != 1.0f) {
         const int scaled = std::clamp<int>(
             static_cast<int>(std::lround(static_cast<float>(velocity) * channelVolume)),

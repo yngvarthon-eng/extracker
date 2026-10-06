@@ -112,6 +112,11 @@ Real-time-ish playback pipeline, all driven by a background thread:
   sequencer takes it as `update(..., const ChannelManager*)` and reads mute/solo/volume/filter from
   it; the GUI hands the playback thread a copy per tick. Pattern effects 18/19/1A override the base
   filter only in the sequencer's running state, which `Sequencer::reset()` clears.
+  **Tracks** group a contiguous run of channels (e.g. one chord note per channel, each keeping its own
+  effect column) with a name, mute, solo and volume; the sequencer uses `effectiveVolume()` (channel ×
+  track) and `isAudible()` folds track mute/solo in. `remap()` keeps tracks contiguous. Chord notes
+  share an instrument via the track's lead note (lowest channel on the row): `track_instruments.hpp`
+  (`trackLeadInstrument`, `followTrackLead`); CLI `channel track ...` and `note set ... -`.
 - **Channel layout** (`channel_layout.hpp`) — insert/delete/move/duplicate a channel across *all*
   patterns plus `ChannelManager`, keeping each pattern's channel count. `ChannelEditResult::sources`
   maps new→old channel so callers can carry other per-channel state (record channel, cursor, ...).
@@ -170,7 +175,8 @@ Per-channel and global lines go through shared helpers instead of hand-written l
 new song state the same way:
 - `writeChannelState` / `applyChannelFileToken` / `isChannelFileToken` (`channel_manager.hpp`):
   `CHANNEL_MUTED`, `CHANNEL_VOLUME`, `CHANNEL_NAMES` (quoted),
-  `CHANNEL_FILTERS` (`type cutoff resonance` per channel, 0–255). Solo is not saved.
+  `CHANNEL_FILTERS` (`type cutoff resonance` per channel, 0–255), `CHANNEL_TRACKS`
+  (`first last muted volume "name"` per track, only written when tracks exist). Solo is not saved.
 - `writeReverbLine` / `readReverbLine` (`song_bundle.hpp`): `REVERB room damping wet width`, 0–255.
 - Loaders reset `ChannelManager`, channel undo history and reverb before reading a file, so songs
   without these lines do not inherit the previous song's state.
