@@ -6,25 +6,18 @@ A Linux-first, pattern-based music tracker with real-time audio engine. Ships a 
 
 ## Build & Run
 
+Everything goes through `./x` (plain bash; build trees come from `CMakePresets.json`):
+
 ```bash
-# Configure
-cmake -S . -B build-make -G "Unix Makefiles"
-
-# Build CLI only (fast, no JUCE download)
-cmake --build build-make --target extracker
-
-# Build GUI (downloads JUCE 7.0.10 on first run — slow once)
-cmake --build build-make --target extracker_gui
-
-# Run CLI
-cd build-make && ./extracker
-
-# Run GUI (auto-connects Keystation 88 MK3 if present)
-./launch-gui.sh
-
-# Run tests
-ctest --test-dir build-make --output-on-failure
+./x cli              # build and run the CLI REPL
+./x gui              # build and run the GUI
+./x test             # build everything and run the tests (extra args go to ctest)
+./x build [target]   # just build (first configure fetches JUCE 7.0.10 — slow once)
+./x package          # Release build + tarball
 ```
+
+Machine-specific launcher settings (instrument library, MIDI keyboard to auto-connect)
+live outside the repo in `~/.config/extracker/env`; see `tools/run-gui.sh`.
 
 Audio backends are auto-detected: **PipeWire → JACK → ALSA → Null**.
 

@@ -1,4 +1,4 @@
-# Build trees (build/, build-make/, build-make-gui/, ...)
+# Build trees (build/dev, build/release from CMakePresets.json)
 /build*/
 # CTest output
 /Testing/
@@ -9,10 +9,7 @@
 *.a
 *.out
 .DS_Store
-# Local launcher script in the repo root only; a bare "extracker" would also
-# match include/extracker/ and hide every new header.
-/extracker
-# Release tarballs from package.sh
+# Release tarballs from ./x package
 *.tar.gz
 # Local Claude Code settings
 .claude/

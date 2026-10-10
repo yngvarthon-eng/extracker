@@ -12,34 +12,26 @@ executables built from one shared core library (`extracker_core`):
 
 ## Build & test
 
+Use `./x` (plain bash) for everything; it configures on first use. Build trees are defined
+only in `CMakePresets.json` (`dev` → `build/dev`, Debug; `release` → `build/release`) — never
+hardcode a build dir in scripts or docs.
+
 ```bash
-# Configure (preferred: Ninja)
-cmake -S . -B build -G Ninja
-# Fallback if Ninja is unavailable
-cmake -S . -B build-make -G "Unix Makefiles"
-
-# Build everything (CLI, GUI, tests)
-cmake --build build
-
-# Build just the CLI (skips the JUCE fetch/build — much faster)
-cmake --build build --target extracker
-
-# Run the whole suite
-ctest --test-dir build --output-on-failure
-
-# Run a single test by exact name or regex
-ctest --test-dir build -R extracker_cli_core_status_json_test --output-on-failure
+./x build                      # build CLI, GUI and tests in build/dev
+./x build extracker            # just the CLI (skips the JUCE build — much faster)
+./x test                       # build everything, run the suite (ctest --preset dev)
+./x test -R cli_record_chord   # extra args go to ctest
+./x cli                        # build and run the CLI (cwd build/dev)
+./x gui                        # build and run the GUI via tools/run-gui.sh
+./x package                    # Release build + tarball (tools/package.sh)
 ```
 
 Notes:
-- Build dirs (all ignored via `/build*/`):
-  - `build-gui/`: Debug build of CLI and GUI; `./launch-gui.sh` runs (and first builds) the GUI here.
-  - `build-make/`: the local, untracked `./extracker` wrapper script builds/runs the CLI here.
-  - `build-release/`: Release build that `./package.sh` configures and packages into a tarball.
-  - `build/` and `build-make-gui/` are older dirs; `build-make-gui/` was configured under a
-    previous checkout path and no longer works (`package.sh` refuses such dirs).
+- Machine-specific launcher settings (instrument library path, MIDI keyboard to auto-connect)
+  live outside the repo in `~/.config/extracker/env`, read by `tools/run-gui.sh` (which the
+  package also installs as `extracker-gui`). Keep personal paths and devices out of tracked files.
 - The GUI target pulls JUCE 7.0.10 from GitHub on first configure and links `curl`. A clean
-  configure that touches the GUI is slow; prefer `--target extracker` when working on core/CLI.
+  configure that touches the GUI is slow; prefer `./x build extracker` when working on core/CLI.
 - Audio backends are auto-detected via pkg-config and gated by CMake options
   `EXTRACKER_ENABLE_ALSA/JACK/PIPEWIRE` (all ON by default). JACK is opened with
   `JackNoStartServer`, so without a running jackd it falls through to ALSA immediately

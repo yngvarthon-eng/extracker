@@ -6,16 +6,16 @@ exTracker is a Linux step-sequencer with a pattern-grid interface inspired by cl
 Notes, volumes, and effects are entered directly in the grid using keyboard shortcuts.
 Audio is rendered in real time through the built-in sample engine and/or JUCE audio plugins.
 
-Run the GUI build:
+Run the GUI:
 
 ```sh
-./build-make-gui/extracker
+./x gui
 ```
 
-Or the headless CLI build (for scripting and tests):
+Or the headless CLI (for scripting and tests):
 
 ```sh
-./build-make/extracker
+./x cli
 ```
 
 ---
@@ -69,16 +69,16 @@ exTracker is a Linux step-sequencer with a pattern-grid interface inspired by cl
 Notes, volumes, and effects are entered directly in the grid using keyboard shortcuts.
 Audio is rendered in real time through the built-in sample engine and/or JUCE audio plugins.
 
-Run the GUI build:
+Run the GUI:
 
 ```sh
-./build-make-gui/extracker
+./x gui
 ```
 
-Or the headless CLI build (for scripting and tests):
+Or the headless CLI (for scripting and tests):
 
 ```sh
-./build-make/extracker
+./x cli
 ```
 
 ---

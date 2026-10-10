@@ -15,8 +15,7 @@ This checklist is intentionally lightweight for the current prototype stage.
 Suggested commands:
 
 - git status --short
-- cmake --build build-make
-- ctest --test-dir build-make --output-on-failure
+- ./x test
 
 ## 2) Version and Tag
 
@@ -55,7 +54,7 @@ Example draft:
 - Fixed:
   - Improved coverage for CLI save/load behavior.
 - Tests:
-  - build-make build passes.
+  - ./x test passes.
   - CTest suite passes.
 
 ## 4) Post-Release Sanity
