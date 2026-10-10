@@ -1,10 +1,23 @@
 #pragma once
 
 #include <unordered_map>
+#include <vector>
 
 #include "extracker/channel_manager.hpp"
+#include "extracker/pattern_editor.hpp"
+#include "extracker/record_workflow.hpp"
 
 namespace extracker {
+
+// A chord recorded on a track row replaces the row's old chord: clears the
+// notes (and note-offs) on the other channels of channel's track on that row,
+// keeping their effects. `keep` are the channels the new chord uses. Returns
+// the changed cells (for record undo); nothing outside a track.
+std::vector<RecordCellEdit> clearTrackLeftovers(PatternEditor& editor,
+                                                const ChannelManager& channels,
+                                                int row,
+                                                int channel,
+                                                const std::vector<int>& keep);
 
 // Spreads recorded chords over a track: while a note is held on a track, the
 // next notes join its row, each on the track's lowest channel not already

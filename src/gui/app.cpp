@@ -292,17 +292,21 @@ void ExTrackerApp::initialise(const juce::String& commandLine) {
           if (!chordStillHeld) {
             // Write the whole chord at once. The cursor was already advanced on NoteOn.
             auto& editor = module.currentEditor();
+            std::vector<int> written;
             for (auto entry = pendingRecordNotes.begin(); entry != pendingRecordNotes.end();) {
               const PendingRecordNote& note = entry->second;
               if (note.released && sameChord(note)) {
                 editor.insertNote(note.row, note.channel, entry->first, note.instrument, note.gateTicks,
                                   note.velocity, false, 0, 0);
                 editor.setSample(note.row, note.channel, 0xFFFF);
+                written.push_back(note.channel);
                 entry = pendingRecordNotes.erase(entry);
               } else {
                 ++entry;
               }
             }
+            // The new chord replaces the row's old one on the track (effects stay).
+            extracker::clearTrackLeftovers(editor, channels, releasedNote.row, releasedNote.channel, written);
             recordDirty.store(true, std::memory_order_relaxed);
           }
         }

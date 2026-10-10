@@ -1,6 +1,40 @@
 #include "extracker/chord_recorder.hpp"
 
+#include <algorithm>
+
 namespace extracker {
+
+std::vector<RecordCellEdit> clearTrackLeftovers(PatternEditor& editor,
+                                                const ChannelManager& channels,
+                                                int row,
+                                                int channel,
+                                                const std::vector<int>& keep) {
+  std::vector<RecordCellEdit> cleared;
+  if (row < 0 || channel < 0 || static_cast<std::size_t>(row) >= editor.rows() ||
+      !channels.inTrack(static_cast<std::size_t>(channel))) {
+    return cleared;
+  }
+  const ChannelManager::TrackInfo track = channels.track(static_cast<std::size_t>(channel));
+  for (std::size_t ch = track.first; ch <= track.last && ch < editor.channels(); ++ch) {
+    const int c = static_cast<int>(ch);
+    if (std::find(keep.begin(), keep.end(), c) != keep.end() || !editor.hasNoteAt(row, c)) {
+      continue;
+    }
+    RecordCellEdit edit;
+    edit.row = row;
+    edit.channel = c;
+    edit.beforeStep = captureStep(editor, row, c);
+    const std::uint8_t effectCommand = editor.effectCommandAt(row, c);
+    const std::uint8_t effectValue = editor.effectValueAt(row, c);
+    editor.clearStep(row, c);
+    if (effectCommand != 0 || effectValue != 0) {
+      editor.setEffect(row, c, effectCommand, effectValue);
+    }
+    edit.afterStep = captureStep(editor, row, c);
+    cleared.push_back(edit);
+  }
+  return cleared;
+}
 
 namespace {
 

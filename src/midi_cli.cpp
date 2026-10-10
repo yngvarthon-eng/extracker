@@ -795,6 +795,12 @@ void handleMidiEventLocked(const MidiEvent& event,
             0);
         if (joinChord) {
           joinRecordWrite(context.recordState, earlier);
+        } else if (heldRow < 0) {
+          // First note of a chord: the row's old chord notes go, in the same undo step.
+          const auto cleared = clearTrackLeftovers(context.editor(), context.channels, targetRow, recordChannel,
+                                                   {targetChannel});
+          auto& cells = context.recordState.undoState.chordCells;
+          cells.insert(cells.begin(), cleared.begin(), cleared.end());
         }
       }
     }

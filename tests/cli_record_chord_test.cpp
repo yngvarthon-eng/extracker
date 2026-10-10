@@ -62,6 +62,15 @@ int main() {
     expect(reloaded, "Undid record write at row 0, channel 6 and 2 more chord note(s)", "chord undo after load");
   }
 
+  // Re-recording a row replaces the old chord; undo brings it back.
+  {
+    const auto out = run("ch track add 4 7; record on 4; record overdub on; record chord 60 64 67 71; "
+                         "record cursor 0; record chord 62 65; record undo; record cursor 0; record chord 62 65; "
+                         "record chord dry 62; quit");
+    expect(out, "Recorded chord at row 0: ch 4=62 ch 5=65 (cleared old notes on ch 6 7)", "leftovers cleared");
+    expect(out, "Undid record write at row 0, channel 5 and 3 more chord note(s)", "undo covers cleared notes");
+  }
+
   if (failures != 0) {
     std::cerr << failures << " check(s) failed\n";
     return 1;

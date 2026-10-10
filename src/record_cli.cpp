@@ -387,7 +387,22 @@ void handleRecordCommand(std::istringstream& recordInput,
                 << static_cast<int>(vel) << ',';
     } else {
       applyRecordChordWrite(editor, recordState, row, placedChannels, notes, instr, vel);
+      const auto cleared = clearTrackLeftovers(editor, channels, row, recordChannel, placedChannels);
+      auto& cells = recordState.undoState.chordCells;
+      cells.insert(cells.begin(), cleared.begin(), cleared.end());
       std::cout << "Recorded chord at row " << row << ':';
+      for (std::size_t i = 0; i < notes.size(); ++i) {
+        std::cout << " ch " << placedChannels[i] << '=' << notes[i];
+      }
+      if (!cleared.empty()) {
+        std::cout << " (cleared old notes on ch";
+        for (const RecordCellEdit& cell : cleared) {
+          std::cout << ' ' << cell.channel;
+        }
+        std::cout << ')';
+      }
+      std::cout << '\n';
+      return;
     }
     for (std::size_t i = 0; i < notes.size(); ++i) {
       std::cout << " ch " << placedChannels[i] << '=' << notes[i];

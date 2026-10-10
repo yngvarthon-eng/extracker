@@ -73,6 +73,7 @@ struct MidiEventContext {
   RecordWorkflowState& recordState;
   const ChannelManager& channels;
   ChordRecorder& chordRecorder;
+  const std::function<PatternEditor&()>& editor;  // pattern being recorded into
   const std::function<int(int)>& chooseRecordRow;
   const std::function<void(int,
                            int,

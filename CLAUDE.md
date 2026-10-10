@@ -118,7 +118,8 @@ Real-time-ish playback pipeline, all driven by a background thread:
   share an instrument via the track's lead note (lowest channel on the row): `track_instruments.hpp`
   (`trackLeadInstrument`, `followTrackLead`, `chordEntryInstrument` for GUI typing); CLI
   `channel track ...` and `note set ... -`. Recording: `ChordRecorder` (`chord_recorder.hpp`) spreads
-  notes held together over the record channel's track on one row (CLI MIDI + `record chord`, GUI MIDI).
+  notes held together over the record channel's track on one row (CLI MIDI + `record chord`, GUI MIDI);
+  `clearTrackLeftovers` removes the row's old chord notes (effects stay), inside the same undo step.
   GUI MIDI recording writes into the grid cursor channel (`ExTrackerApp::cursorChannel`).
 - **Channel layout** (`channel_layout.hpp`) — insert/delete/move/duplicate a channel across *all*
   patterns plus `ChannelManager`, keeping each pattern's channel count. `ChannelEditResult::sources`

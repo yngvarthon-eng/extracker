@@ -132,6 +132,9 @@ int main() {
   std::atomic<std::size_t> songPlaybackPosition{0};
   extracker::RecordWorkflowState recordState;
   extracker::ChordRecorder chordRecorder;
+  std::function<extracker::PatternEditor&()> currentEditorFn = [&module]() -> extracker::PatternEditor& {
+    return module.currentEditor();
+  };
   bool& recordEnabled = recordState.enabled;
   int& recordChannel = recordState.channel;
   int& recordCursorRow = recordState.cursorRow;
@@ -382,6 +385,7 @@ int main() {
                          recordState,
                          channels,
                          chordRecorder,
+                         currentEditorFn,
                          chooseRecordRowFn,
                          applyRecordWriteFn,
                          midiNoteToFrequencyHzFn});
