@@ -834,7 +834,7 @@ public:
   }
 
   bool keyPressed(const juce::KeyPress& key) override {
-    // Ctrl+C/X/V: route to pattern grid even when focus is on a panel control.
+    // Ctrl+C/X/V/Z/Y: route to pattern grid / undo even when focus is on a panel control.
     // JUCE only calls this after the focused component and all intermediate parents
     // return false, so text editors still handle their own copy/paste first.
     if (key.getModifiers().isCommandDown()) {
@@ -846,6 +846,10 @@ public:
       if (keyCode == 'X' || keyCode == 'x') {
         if (patternGrid.cutSelection()) { patternGrid.grabKeyboardFocus(); return true; }
         return false;
+      }
+      if (keyCode == 'Z' || keyCode == 'z' || keyCode == 'Y' || keyCode == 'y') {
+        stepUndoHistory(keyCode == 'Y' || keyCode == 'y' || key.getModifiers().isShiftDown());
+        return true;
       }
       if (keyCode == 'V' || keyCode == 'v') {
         const auto pasteMode = key.getModifiers().isShiftDown() ? extracker::PatternClipboard::PasteMode::Mix
@@ -1461,6 +1465,7 @@ public:
     patternGrid.setSearchNavigationCallback([this](bool forward) {
       findPatternMatch(forward);
     });
+    patternGrid.setUndoCallback([this](bool redo) { stepUndoHistory(redo); });
     refreshPluginChoices();
     refreshSlotSelector();
     refreshSampleSlotSelector();
@@ -1897,6 +1902,7 @@ public:
         "=== BLOCK EDITING ===\n"
         "Shift+Arrows / Click+Drag  - mark block\n"
         "Ctrl+C / X / V             - copy / cut / paste block\n"
+        "Ctrl+Z / Ctrl+Shift+Z, Y   - undo / redo pattern edits\n"
         "Ctrl+Up / Down             - transpose +/-1 semitone\n"
         "Ctrl+Shift+Up / Down       - transpose +/-1 octave\n"
         "Alt+Up / Down              - selected step velocity +/-1\n"
@@ -5153,6 +5159,7 @@ private:
 
       // Per-pattern undo snapshots predate the new layout; start a fresh baseline.
       undoHistoryEntries.clear();
+      undoHistoryPosition = -1;
       undoHistoryInitialized = false;
       lock.unlock();
 
@@ -7041,6 +7048,11 @@ private:
       return;
     }
 
+    // A new edit after an undo drops the undone (redo) entries, like any undo stack.
+    if (undoHistoryPosition >= 0 && undoHistoryPosition + 1 < static_cast<int>(undoHistoryEntries.size())) {
+      undoHistoryEntries.erase(undoHistoryEntries.begin() + undoHistoryPosition + 1, undoHistoryEntries.end());
+    }
+
     UndoHistoryEntry entry;
     entry.patternIndex = patternIndex;
     entry.rows = rows;
@@ -7066,6 +7078,7 @@ private:
     }
 
     undoHistoryInitialized = true;
+    undoHistoryPosition = static_cast<int>(undoHistoryEntries.size()) - 1;
     lastUndoObservedHash = hash;
     lastUndoObservedPatternIndex = patternIndex;
 
@@ -7113,7 +7126,31 @@ private:
     if (selectedIdx < 0 || selectedIdx >= static_cast<int>(undoHistoryDisplayToIndex.size())) {
       return;
     }
-    const int historyIndex = undoHistoryDisplayToIndex[static_cast<std::size_t>(selectedIdx)];
+    restoreUndoHistoryEntry(undoHistoryDisplayToIndex[static_cast<std::size_t>(selectedIdx)], "Restored snapshot: ");
+  }
+
+  // Ctrl+Z / Ctrl+Shift+Z: restore the nearest earlier / later snapshot of the current
+  // pattern that differs from it. Other patterns' snapshots are skipped.
+  void stepUndoHistory(bool redo) {
+    captureUndoHistoryIfPatternChanged();  // an edit the timer has not seen yet is the step to undo
+    const int count = static_cast<int>(undoHistoryEntries.size());
+    if (undoHistoryPosition < 0 || undoHistoryPosition >= count) {
+      pluginStatusLabel.setText(redo ? "Nothing to redo" : "Nothing to undo", juce::dontSendNotification);
+      return;
+    }
+    const auto& current = undoHistoryEntries[static_cast<std::size_t>(undoHistoryPosition)];
+    const int step = redo ? 1 : -1;
+    for (int i = undoHistoryPosition + step; i >= 0 && i < count; i += step) {
+      const auto& candidate = undoHistoryEntries[static_cast<std::size_t>(i)];
+      if (candidate.patternIndex == current.patternIndex && candidate.hash != current.hash) {
+        restoreUndoHistoryEntry(i, redo ? "Redo: " : "Undo: ");
+        return;
+      }
+    }
+    pluginStatusLabel.setText(redo ? "Nothing to redo" : "Nothing to undo", juce::dontSendNotification);
+  }
+
+  void restoreUndoHistoryEntry(int historyIndex, const juce::String& statusPrefix) {
     if (historyIndex < 0 || historyIndex >= static_cast<int>(undoHistoryEntries.size())) {
       return;
     }
@@ -7150,11 +7187,16 @@ private:
     lastUndoObservedPatternIndex = entry.patternIndex;
     lastUndoObservedHash = entry.hash;
     undoHistoryInitialized = true;
+    undoHistoryPosition = historyIndex;
 
     lock.unlock();
+    suppressUndoHistorySelectionCallback = true;
+    undoHistorySelector.setSelectedItemIndex(static_cast<int>(undoHistoryEntries.size()) - 1 - historyIndex,
+                                             juce::dontSendNotification);
+    suppressUndoHistorySelectionCallback = false;
     refreshPatternView();
     patternGrid.repaint();
-    pluginStatusLabel.setText("Restored snapshot: " + entry.label, juce::dontSendNotification);
+    pluginStatusLabel.setText(statusPrefix + entry.label, juce::dontSendNotification);
   }
 
   void capturePatternCompareA() {
@@ -7603,6 +7645,7 @@ private:
   std::uint64_t lastUndoObservedHash = 0;
   std::size_t lastUndoObservedPatternIndex = 0;
   bool undoHistoryInitialized = false;
+  int undoHistoryPosition = -1;  // entry matching the pattern now (undo/redo step from here)
   bool suppressUndoHistorySelectionCallback = false;
   int patternCompareRows = 0;
   int patternCompareChannels = 0;
@@ -7720,6 +7763,7 @@ void TrackerMainComponent::saveHelpToFile() {
     "=== BLOCK EDITING ===\n"
     "Shift+Arrows / Click+Drag  - mark block\n"
     "Ctrl+C / X / V             - copy / cut / paste block\n"
+    "Ctrl+Z / Ctrl+Shift+Z, Y   - undo / redo pattern edits\n"
     "Ctrl+Up / Down             - transpose +/-1 semitone\n"
     "Ctrl+Shift+Up / Down       - transpose +/-1 octave\n"
     "Alt+Up / Down              - selected step velocity +/-1\n"

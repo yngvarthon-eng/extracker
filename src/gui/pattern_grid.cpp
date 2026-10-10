@@ -93,6 +93,10 @@ void PatternGrid::setSearchNavigationCallback(std::function<void(bool)> callback
   searchNavigationCallback = std::move(callback);
 }
 
+void PatternGrid::setUndoCallback(std::function<void(bool redo)> callback) {
+  undoCallback = std::move(callback);
+}
+
 void PatternGrid::setChannelHeaderMenuCallback(std::function<void(int)> callback) {
   channelHeaderMenuCallback = std::move(callback);
 }
@@ -454,7 +458,7 @@ void PatternGrid::drawHeaders(juce::Graphics& g) {
   }
   hint += "  FXadv:" + juce::String(fxCommitAutoAdvance ? "ON" : "OFF") + "(F6)";
   hint += "  F2:step-edit  </> switch col(Ins|Vol|FX)  Esc:exit  FX:|/`  VOL:'  INS:;";
-  hint += "  Alt+drag:scrub  Shift+arrows/drag:mark  Ctrl+C/X/V  Ctrl+Up/Down:transpose";
+  hint += "  Alt+drag:scrub  Shift+arrows/drag:mark  Ctrl+C/X/V  Ctrl+Z/Y:undo/redo  Ctrl+Up/Down:transpose";
   if (hintBandHeight > 0) {
     g.drawText(hint, 4, hintBandY, getWidth() - 8, hintBandHeight, juce::Justification::centredLeft, true);
   }
@@ -1347,6 +1351,10 @@ bool PatternGrid::keyPressed(const juce::KeyPress& key) {
     }
 
     const int keyCode = key.getKeyCode();
+    if ((keyCode == 'Z' || keyCode == 'Y') && undoCallback) {
+      undoCallback(keyCode == 'Y' || mods.isShiftDown());
+      return true;
+    }
     if (keyCode == 'C') {
       return copySelectionToClipboard();
     }

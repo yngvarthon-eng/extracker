@@ -30,6 +30,8 @@ public:
   void setTogglePlaybackCallback(std::function<void()> callback);
   void setFocusModuleMessageCallback(std::function<void()> callback);
   void setSearchNavigationCallback(std::function<void(bool)> callback);
+  // Ctrl+Z (false) / Ctrl+Shift+Z or Ctrl+Y (true): undo / redo.
+  void setUndoCallback(std::function<void(bool redo)> callback);
   // Right-click on a channel header.
   void setChannelHeaderMenuCallback(std::function<void(int)> callback);
   // Called with the row of a left-clicked cell.
@@ -103,6 +105,7 @@ private:
   std::function<void()> togglePlaybackCallback;
   std::function<void()> focusModuleMessageCallback;
   std::function<void(bool)> searchNavigationCallback;
+  std::function<void(bool)> undoCallback;
   std::function<void(int)> channelHeaderMenuCallback;
   std::function<void(int)> rowClickedCallback;
   std::uint32_t insertGateTicks = 0;

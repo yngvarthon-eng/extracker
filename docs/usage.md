@@ -217,6 +217,8 @@ Auto-advances by step after the 2nd digit.
 | Ctrl+X | Cut block |
 | Ctrl+V | Paste block (overwrite) |
 | Ctrl+Shift+V | Mix-paste: only fill empty cells |
+| Ctrl+Z | Undo the last change to this pattern |
+| Ctrl+Shift+Z / Ctrl+Y | Redo |
 | Ctrl+Up / Down | Transpose ±1 semitone |
 | Ctrl+Shift+Up / Down | Transpose ±1 octave |
 | Alt+Up / Down | Selected step velocity ±1 |
