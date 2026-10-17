@@ -39,7 +39,7 @@ void handleEffectsCommand(AudioEngine& audio, PluginHost& plugins, Sequencer& se
         int instr = -1; int timeMs = 375, fb = 100, wet = 128;
         if (!(input >> instr >> timeMs >> fb >> wet)
             || instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: effects delay <instr 0-15> <time_ms 0-1000> <feedback 0-255> <wet 0-255>\n";
+            std::cout << "Usage: effects delay <instr 0-255> <time_ms 0-1000> <feedback 0-255> <wet 0-255>\n";
             return;
         }
         auto p = plugins.getInstrumentEffectParams(static_cast<std::uint8_t>(instr));
@@ -55,7 +55,7 @@ void handleEffectsCommand(AudioEngine& audio, PluginHost& plugins, Sequencer& se
         int instr = -1; std::string typeStr; int drive = 128;
         if (!(input >> instr >> typeStr >> drive)
             || instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: effects dist <instr 0-15> <off|soft|hard|fuzz> <drive 0-255>\n";
+            std::cout << "Usage: effects dist <instr 0-255> <off|soft|hard|fuzz> <drive 0-255>\n";
             return;
         }
         auto p = plugins.getInstrumentEffectParams(static_cast<std::uint8_t>(instr));
@@ -71,7 +71,7 @@ void handleEffectsCommand(AudioEngine& audio, PluginHost& plugins, Sequencer& se
         int instr = -1; int rate = 64, depth = 128, wet = 128;
         if (!(input >> instr >> rate >> depth >> wet)
             || instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: effects chorus <instr 0-15> <rate 0-255> <depth 0-255> <wet 0-255>\n";
+            std::cout << "Usage: effects chorus <instr 0-255> <rate 0-255> <depth 0-255> <wet 0-255>\n";
             return;
         }
         auto p = plugins.getInstrumentEffectParams(static_cast<std::uint8_t>(instr));
@@ -85,7 +85,7 @@ void handleEffectsCommand(AudioEngine& audio, PluginHost& plugins, Sequencer& se
     } else if (sub == "clear") {
         int instr = -1;
         if (!(input >> instr) || instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: effects clear <instr 0-15>\n";
+            std::cout << "Usage: effects clear <instr 0-255>\n";
             return;
         }
         audio.clearInstrumentEffects(static_cast<std::uint8_t>(instr));
@@ -93,11 +93,11 @@ void handleEffectsCommand(AudioEngine& audio, PluginHost& plugins, Sequencer& se
         std::cout << "Instr " << instr << " effects cleared\n";
 
     } else if (sub == "depth") {
-        // effects depth <instr 0-15> <depth 0-255>  (0=front 255=rear)
+        // effects depth <instr 0-255> <depth 0-255>  (0=front 255=rear)
         int instr = -1, depth = -1;
         if (!(input >> instr >> depth)
             || instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: effects depth <instr 0-15> <depth 0-255>\n";
+            std::cout << "Usage: effects depth <instr 0-255> <depth 0-255>\n";
             return;
         }
         const float d = norm(std::clamp(depth, 0, 255));
@@ -107,7 +107,7 @@ void handleEffectsCommand(AudioEngine& audio, PluginHost& plugins, Sequencer& se
         std::cout << "Instr " << instr << " depth=" << d << " (0=front 1=rear)\n";
 
     } else if (sub == "reset") {
-        // effects reset [<instr 0-15>|all]  — clears effects + filter + pitch
+        // effects reset [<instr 0-255>|all]  — clears effects + filter + pitch
         std::string arg;
         input >> arg;
         auto resetOne = [&](std::uint8_t i) {
@@ -123,14 +123,14 @@ void handleEffectsCommand(AudioEngine& audio, PluginHost& plugins, Sequencer& se
             plugins.setInstrumentDepth(i, 0.0f);
         };
         if (arg.empty() || arg == "all") {
-            for (std::uint8_t i = 0; i < static_cast<std::uint8_t>(PluginHost::kMaxInstrumentSlots); ++i)
-                resetOne(i);
+            for (std::size_t slot = 0; slot < PluginHost::kMaxInstrumentSlots; ++slot)
+                resetOne(static_cast<std::uint8_t>(slot));
             std::cout << "All instruments: effects/filter/pitch reset\n";
         } else {
             int instr = -1;
             try { instr = std::stoi(arg); } catch (...) {}
             if (instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-                std::cout << "Usage: effects reset [<instr 0-15>|all]\n";
+                std::cout << "Usage: effects reset [<instr 0-255>|all]\n";
                 return;
             }
             resetOne(static_cast<std::uint8_t>(instr));
@@ -140,7 +140,7 @@ void handleEffectsCommand(AudioEngine& audio, PluginHost& plugins, Sequencer& se
     } else if (sub == "get") {
         int instr = -1;
         if (!(input >> instr) || instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: effects get <instr 0-15>\n";
+            std::cout << "Usage: effects get <instr 0-255>\n";
             return;
         }
         const auto p = plugins.getInstrumentEffectParams(static_cast<std::uint8_t>(instr));
@@ -154,7 +154,8 @@ void handleEffectsCommand(AudioEngine& audio, PluginHost& plugins, Sequencer& se
 
     } else if (sub == "list") {
         std::cout << "Instr  Delay(ms/fb/wet)        Dist(type/drive)  Chorus(rate/depth/wet)\n";
-        for (std::uint8_t i = 0; i < PluginHost::kMaxInstrumentSlots; ++i) {
+        for (std::size_t slot = 0; slot < PluginHost::kMaxInstrumentSlots; ++slot) {
+            const auto i = static_cast<std::uint8_t>(slot);
             const auto p = plugins.getInstrumentEffectParams(i);
             if (!p.isActive()) continue;
             char line[120];

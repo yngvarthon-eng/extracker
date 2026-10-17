@@ -211,9 +211,8 @@ void Sequencer::update(
         if (channel < channelNoteState_.size()) {
           auto& ns = channelNoteState_[channel];
           if (ns.active) {
-            std::uint8_t prevSlot = (ns.sample != 0xFFFF && ns.sample <= 255)
-                ? static_cast<std::uint8_t>(ns.sample) : ns.instrument;
-            if (!pluginHost.triggerNoteOffResolved(ns.instrument, ns.sample, ns.midiNote)) {
+            std::uint8_t prevSlot = ns.instrument;
+            if (!pluginHost.triggerNoteOff(ns.instrument, ns.midiNote)) {
               audioEngine.noteOff(ns.midiNote, prevSlot);
             }
             ns.active = false;
@@ -444,10 +443,8 @@ void Sequencer::update(
             } else {
               ns.active = false;
               ns.fadingOut = false;
-              std::uint8_t targetSlot = (ns.sample != 0xFFFF && ns.sample <= 255)
-                  ? static_cast<std::uint8_t>(ns.sample)
-                  : ns.instrument;
-              if (!pluginHost.triggerNoteOffResolved(ns.instrument, ns.sample, ns.midiNote)) {
+              std::uint8_t targetSlot = ns.instrument;
+              if (!pluginHost.triggerNoteOff(ns.instrument, ns.midiNote)) {
                 audioEngine.noteOff(ns.midiNote, targetSlot);
               }
             }
@@ -505,7 +502,6 @@ void Sequencer::update(
       key.midiNote = note;
       key.channel = channel;
       key.instrument = pattern.instrumentAt(static_cast<int>(row), static_cast<int>(channel));
-      key.sample = pattern.sampleAt(static_cast<int>(row), static_cast<int>(channel));
 
       int existingIndex = findRowNoteIndex(rowNotes, key);
       std::uint32_t gate = pattern.gateTicksAt(static_cast<int>(row), static_cast<int>(channel));
@@ -700,7 +696,6 @@ void Sequencer::update(
         rowNote.midiNote = note;
         rowNote.channel = channel;
         rowNote.instrument = key.instrument;
-        rowNote.sample = key.sample;
         rowNote.gateTicks = gate;
         rowNote.velocity = velocity;
         rowNote.retrigger = retrigger;
@@ -773,13 +768,10 @@ void Sequencer::update(
       for (RowNote& activeNote : activeNotes_) {
         if (activeNote.channel == rowNote.channel &&
             activeNote.instrument == rowNote.instrument &&
-            activeNote.sample == rowNote.sample &&
             activeNote.midiNote != rowNote.midiNote &&
             activeNote.hasStarted && !activeNote.releasedByGate) {
-          std::uint8_t targetSlot = (activeNote.sample != 0xFFFF && activeNote.sample <= 255)
-              ? static_cast<std::uint8_t>(activeNote.sample)
-              : activeNote.instrument;
-          if (!pluginHost.triggerNoteOffResolved(activeNote.instrument, activeNote.sample, activeNote.midiNote)) {
+          std::uint8_t targetSlot = activeNote.instrument;
+          if (!pluginHost.triggerNoteOff(activeNote.instrument, activeNote.midiNote)) {
             audioEngine.noteOff(activeNote.midiNote, targetSlot);
           }
           activeNote.releasedByGate = true;
@@ -794,12 +786,10 @@ void Sequencer::update(
       if (rowNote.channel < channelNoteState_.size()) {
         auto& ns = channelNoteState_[rowNote.channel];
         const bool differentNote = ns.midiNote != rowNote.midiNote
-            || ns.instrument != rowNote.instrument
-            || ns.sample != rowNote.sample;
+            || ns.instrument != rowNote.instrument;
         if (ns.active && differentNote) {
-          std::uint8_t prevSlot = (ns.sample != 0xFFFF && ns.sample <= 255)
-              ? static_cast<std::uint8_t>(ns.sample) : ns.instrument;
-          if (!pluginHost.triggerNoteOffResolved(ns.instrument, ns.sample, ns.midiNote)) {
+          std::uint8_t prevSlot = ns.instrument;
+          if (!pluginHost.triggerNoteOff(ns.instrument, ns.midiNote)) {
             audioEngine.noteOff(ns.midiNote, prevSlot);
           }
           ns.active = false;
@@ -821,20 +811,17 @@ void Sequencer::update(
       }
       double velocity = static_cast<double>(startVelocity) / 127.0;
       double startFrequency = rowNote.currentFrequencyHz > 0.0 ? rowNote.currentFrequencyHz : midiNoteToFrequencyHz(rowNote.midiNote);
-      // Prefer sample slot if specified, otherwise use instrument
-      std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255) 
-          ? static_cast<std::uint8_t>(rowNote.sample) 
-          : rowNote.instrument;
+      std::uint8_t targetSlot = rowNote.instrument;
       if (!containsNote(activeNotes_, rowNote)) {
         // Not in activeNotes_ means this is an explicitly placed note this row — always retrigger.
         // (The old stillActive guard suppressed retrigger for same-note repeats to "avoid doubling",
         // but that breaks percussion: samples left at end-of-playback silently re-use the finished
         // voice position rather than restarting, so every hit after the first produces no sound.)
-        if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, startVelocity, true)) {
+        if (!pluginHost.triggerNoteOn(rowNote.instrument, rowNote.midiNote, startVelocity, true)) {
           audioEngine.noteOn(rowNote.midiNote, startFrequency, velocity, true, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
         }
         if (rowNote.channel < channelNoteState_.size()) {
-          channelNoteState_[rowNote.channel] = ChannelNoteState{true, rowNote.midiNote, rowNote.instrument, rowNote.sample, false, 0, startVelocity, startFrequency, static_cast<double>(rowNote.pan) / 255.0};
+          channelNoteState_[rowNote.channel] = ChannelNoteState{true, rowNote.midiNote, rowNote.instrument, false, 0, startVelocity, startFrequency, static_cast<double>(rowNote.pan) / 255.0};
           if (rowNote.channel < channelFilterParams_.size() && channelFilterParams_[rowNote.channel].isActive()) {
             const auto& cfp = channelFilterParams_[rowNote.channel];
             audioEngine.setInstrumentFilter(rowNote.instrument, cfp.type, cfp.cutoffNorm, cfp.resonanceNorm);
@@ -846,11 +833,11 @@ void Sequencer::update(
           }
         }
       } else if (rowNote.retrigger) {
-        if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, startVelocity, true)) {
+        if (!pluginHost.triggerNoteOn(rowNote.instrument, rowNote.midiNote, startVelocity, true)) {
           audioEngine.noteOn(rowNote.midiNote, startFrequency, velocity, true, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
         }
         if (rowNote.channel < channelNoteState_.size()) {
-          channelNoteState_[rowNote.channel] = ChannelNoteState{true, rowNote.midiNote, rowNote.instrument, rowNote.sample, false, 0, startVelocity, startFrequency, static_cast<double>(rowNote.pan) / 255.0};
+          channelNoteState_[rowNote.channel] = ChannelNoteState{true, rowNote.midiNote, rowNote.instrument, false, 0, startVelocity, startFrequency, static_cast<double>(rowNote.pan) / 255.0};
           if (rowNote.channel < channelFilterParams_.size() && channelFilterParams_[rowNote.channel].isActive()) {
             const auto& cfp = channelFilterParams_[rowNote.channel];
             audioEngine.setInstrumentFilter(rowNote.instrument, cfp.type, cfp.cutoffNorm, cfp.resonanceNorm);
@@ -862,7 +849,7 @@ void Sequencer::update(
           }
         }
       } else {
-        if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, startVelocity, false)) {
+        if (!pluginHost.triggerNoteOn(rowNote.instrument, rowNote.midiNote, startVelocity, false)) {
           audioEngine.noteOn(rowNote.midiNote, startFrequency, velocity, false, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
         }
       }
@@ -888,10 +875,8 @@ void Sequencer::update(
     for (RowNote& rowNote : currentRowNotes_) {
       if (isChannelMuted(rowNote.channel)) {
         if (rowNote.hasStarted && !rowNote.releasedByGate) {
-          std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255) 
-              ? static_cast<std::uint8_t>(rowNote.sample) 
-              : rowNote.instrument;
-          if (!pluginHost.triggerNoteOffResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote)) {
+          std::uint8_t targetSlot = rowNote.instrument;
+          if (!pluginHost.triggerNoteOff(rowNote.instrument, rowNote.midiNote)) {
             audioEngine.noteOff(rowNote.midiNote, targetSlot);
           }
           if (rowNote.channel < channelNoteState_.size() &&
@@ -923,14 +908,12 @@ void Sequencer::update(
         }
         double velocity = static_cast<double>(startVelocity) / 127.0;
         double startFrequency = rowNote.currentFrequencyHz > 0.0 ? rowNote.currentFrequencyHz : rowNote.baseFrequencyHz;
-        std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255) 
-            ? static_cast<std::uint8_t>(rowNote.sample) 
-            : rowNote.instrument;
-        if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, startVelocity, true)) {
+        std::uint8_t targetSlot = rowNote.instrument;
+        if (!pluginHost.triggerNoteOn(rowNote.instrument, rowNote.midiNote, startVelocity, true)) {
           audioEngine.noteOn(rowNote.midiNote, startFrequency, velocity, true, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
         }
         if (rowNote.channel < channelNoteState_.size()) {
-          channelNoteState_[rowNote.channel] = ChannelNoteState{true, rowNote.midiNote, rowNote.instrument, rowNote.sample, false, 0, startVelocity, startFrequency, static_cast<double>(rowNote.pan) / 255.0};
+          channelNoteState_[rowNote.channel] = ChannelNoteState{true, rowNote.midiNote, rowNote.instrument, false, 0, startVelocity, startFrequency, static_cast<double>(rowNote.pan) / 255.0};
           if (rowNote.channel < channelFilterParams_.size() && channelFilterParams_[rowNote.channel].isActive()) {
             const auto& cfp = channelFilterParams_[rowNote.channel];
             audioEngine.setInstrumentFilter(rowNote.instrument, cfp.type, cfp.cutoffNorm, cfp.resonanceNorm);
@@ -950,10 +933,8 @@ void Sequencer::update(
       }
 
       if (rowNote.gateTicks > 0 && ticksIntoRow >= rowNote.gateTicks) {
-        std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255)
-            ? static_cast<std::uint8_t>(rowNote.sample)
-            : rowNote.instrument;
-        if (!pluginHost.triggerNoteOffResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote)) {
+        std::uint8_t targetSlot = rowNote.instrument;
+        if (!pluginHost.triggerNoteOff(rowNote.instrument, rowNote.midiNote)) {
           audioEngine.noteOff(rowNote.midiNote, targetSlot);
         }
         if (rowNote.channel < channelNoteState_.size() &&
@@ -965,10 +946,8 @@ void Sequencer::update(
       }
 
       if (rowNote.noteCutTicks > 0 && ticksIntoRow >= rowNote.noteCutTicks) {
-        std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255)
-            ? static_cast<std::uint8_t>(rowNote.sample)
-            : rowNote.instrument;
-        if (!pluginHost.triggerNoteOffResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote)) {
+        std::uint8_t targetSlot = rowNote.instrument;
+        if (!pluginHost.triggerNoteOff(rowNote.instrument, rowNote.midiNote)) {
           audioEngine.noteOff(rowNote.midiNote, targetSlot);
         }
         if (rowNote.channel < channelNoteState_.size() &&
@@ -989,10 +968,8 @@ void Sequencer::update(
         }
         double velocity = static_cast<double>(retriggerVelocity) / 127.0;
         double frequency = rowNote.currentFrequencyHz > 0.0 ? rowNote.currentFrequencyHz : rowNote.baseFrequencyHz;
-        std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255) 
-            ? static_cast<std::uint8_t>(rowNote.sample) 
-            : rowNote.instrument;
-        if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, retriggerVelocity, true)) {
+        std::uint8_t targetSlot = rowNote.instrument;
+        if (!pluginHost.triggerNoteOn(rowNote.instrument, rowNote.midiNote, retriggerVelocity, true)) {
           audioEngine.noteOn(rowNote.midiNote, frequency, velocity, true, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
         }
         rowNote.lastRetriggerTick = ticksIntoRow;
@@ -1006,10 +983,8 @@ void Sequencer::update(
         if (updatedVelocity != rowNote.velocity) {
           rowNote.velocity = static_cast<std::uint8_t>(updatedVelocity);
           double velocity = static_cast<double>(rowNote.velocity) / 127.0;
-          std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255) 
-              ? static_cast<std::uint8_t>(rowNote.sample) 
-              : rowNote.instrument;
-          if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, rowNote.velocity, false)) {
+          std::uint8_t targetSlot = rowNote.instrument;
+          if (!pluginHost.triggerNoteOn(rowNote.instrument, rowNote.midiNote, rowNote.velocity, false)) {
             audioEngine.noteOn(rowNote.midiNote, midiNoteToFrequencyHz(rowNote.midiNote), velocity, false, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
           }
         }
@@ -1076,10 +1051,8 @@ void Sequencer::update(
           outputVelocity = static_cast<std::uint8_t>(std::clamp(scaledVelocity, 1, 127));
         }
         double velocity = static_cast<double>(outputVelocity) / 127.0;
-        if (!pluginHost.triggerNoteOnResolved(rowNote.instrument, rowNote.sample, rowNote.midiNote, outputVelocity, false)) {
-          std::uint8_t targetSlot = (rowNote.sample != 0xFFFF && rowNote.sample <= 255)
-              ? static_cast<std::uint8_t>(rowNote.sample)
-              : rowNote.instrument;
+        if (!pluginHost.triggerNoteOn(rowNote.instrument, rowNote.midiNote, outputVelocity, false)) {
+          std::uint8_t targetSlot = rowNote.instrument;
           audioEngine.noteOn(rowNote.midiNote, modulationFrequency, velocity, false, targetSlot, static_cast<double>(rowNote.pan) / 255.0);
         }
       }
@@ -1097,19 +1070,18 @@ void Sequencer::update(
     // Fade-out processor: decrement velocity each tick for channels fading via effect 0x14.
     for (auto& ns : channelNoteState_) {
       if (!ns.fadingOut || !ns.active) continue;
-      std::uint8_t targetSlot = (ns.sample != 0xFFFF && ns.sample <= 255)
-          ? static_cast<std::uint8_t>(ns.sample) : ns.instrument;
+      std::uint8_t targetSlot = ns.instrument;
       if (ns.currentVelocity <= ns.fadeDecrement) {
         ns.currentVelocity = 0;
         ns.active = false;
         ns.fadingOut = false;
-        if (!pluginHost.triggerNoteOffResolved(ns.instrument, ns.sample, ns.midiNote)) {
+        if (!pluginHost.triggerNoteOff(ns.instrument, ns.midiNote)) {
           audioEngine.noteOff(ns.midiNote, targetSlot);
         }
       } else {
         ns.currentVelocity -= ns.fadeDecrement;
         double fadeVelocity = static_cast<double>(ns.currentVelocity) / 127.0;
-        if (!pluginHost.triggerNoteOnResolved(ns.instrument, ns.sample, ns.midiNote, ns.currentVelocity, false)) {
+        if (!pluginHost.triggerNoteOn(ns.instrument, ns.midiNote, ns.currentVelocity, false)) {
           audioEngine.noteOn(ns.midiNote, ns.baseFrequencyHz, fadeVelocity, false, targetSlot, ns.pan);
         }
       }
@@ -1169,8 +1141,7 @@ void Sequencer::setChannelEffects(std::size_t channel, const InstrumentEffectPar
 bool Sequencer::sameKey(const RowNote& a, const RowNote& b) {
   return a.midiNote == b.midiNote &&
          a.channel == b.channel &&
-         a.instrument == b.instrument &&
-         a.sample == b.sample;
+         a.instrument == b.instrument;
 }
 
 bool Sequencer::containsNote(const std::vector<RowNote>& notes, const RowNote& note) {

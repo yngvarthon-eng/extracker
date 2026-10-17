@@ -33,7 +33,7 @@ void handleFilterCommand(AudioEngine& audio, PluginHost& plugins, std::istringst
         double cutoff = 0.5, resonance = 0.0;
         if (!(input >> instr >> typeStr >> cutoff >> resonance) ||
             instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: filter set <instrument 0-15> <off|lp|hp|bp|notch> <cutoff 0..1> <resonance 0..1>\n";
+            std::cout << "Usage: filter set <instrument 0-255> <off|lp|hp|bp|notch> <cutoff 0..1> <resonance 0..1>\n";
             return;
         }
         const auto t  = parseType(typeStr);
@@ -48,7 +48,7 @@ void handleFilterCommand(AudioEngine& audio, PluginHost& plugins, std::istringst
     } else if (sub == "clear") {
         int instr = -1;
         if (!(input >> instr) || instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: filter clear <instrument 0-15>\n";
+            std::cout << "Usage: filter clear <instrument 0-255>\n";
             return;
         }
         const auto u8 = static_cast<std::uint8_t>(instr);
@@ -59,7 +59,7 @@ void handleFilterCommand(AudioEngine& audio, PluginHost& plugins, std::istringst
     } else if (sub == "get") {
         int instr = -1;
         if (!(input >> instr) || instr < 0 || instr >= static_cast<int>(PluginHost::kMaxInstrumentSlots)) {
-            std::cout << "Usage: filter get <instrument 0-15>\n";
+            std::cout << "Usage: filter get <instrument 0-255>\n";
             return;
         }
         const BiquadParams p = plugins.getInstrumentFilterParams(static_cast<std::uint8_t>(instr));

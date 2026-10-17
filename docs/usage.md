@@ -141,8 +141,8 @@ The **upper row** plays in the higher octave (oct+1); the **lower row** plays in
 
 ## Input Modes
 
-Three direct-entry modes accelerate entering effects, velocities, and sample slots without touching sliders.  
-The active mode is shown in the column header: `[FX]`, `[VOL]`, or `[SMP]`.
+Three direct-entry modes accelerate entering effects, velocities, and instruments without touching sliders.  
+The active mode is shown in the column header: `[FX]`, `[VOL]`, or `[INS]`.
 
 ---
 
@@ -190,20 +190,20 @@ Auto-advances by step after the 2nd digit.
 
 ---
 
-### Sample Direct Entry — `;` or F4
+### Instrument Direct Entry — `;` or F4
 
 Toggle: `;` or F4  
-Header badge: `[SMP]`
+Header badge: `[INS]`
 
-Type **3 hex characters**: sample slot `000`–`0FF`.  
+Type **2 hex characters**: instrument `00`–`FF`. The note then plays that instrument.  
 The selected cell shows an amber overlay while typing.  
-Auto-advances by step after the 3rd digit.
+Auto-advances by step after the 2nd digit.
 
 | Key | Action |
 |-----|--------|
-| Enter | Commit partial buffer (zero-pads remaining digits) |
-| Backspace | Remove last typed digit; if buffer empty, clears sample field |
-| Esc | Exit sample mode |
+| Enter | Commit partial buffer (zero-pads to 2 digits) |
+| Backspace | Remove last typed digit |
+| Esc | Exit instrument mode |
 
 ---
 
@@ -356,10 +356,34 @@ Patterns are arranged in a song order list (right panel, Song Order section).
 
 ## Instruments and Samples
 
-### Per-Channel Instrument Selector
+**A note plays its instrument and nothing else.** There are 256 instrument slots (`I00`–`IFF`);
+each holds either a plugin (sine, square, SF2, SFZ, LV2, VST3, ...) or a *sample instrument* that
+plays a sample from the sample bank. Pattern cells show the note's 2-digit instrument number.
 
-Each of the 16 channels has an instrument selector.  
-When no sample slot is armed in the pattern cell, the channel instrument is used as fallback.
+- New notes get the **selected instrument**: the **Ins** box on the toolbar, which is the same
+  selection as the slot list on the **Instruments** tab.
+- Loading a WAV on the **Samples** tab also creates its sample instrument (the selected
+  instrument slot if it is empty, otherwise the first free one). **Make Instrument** does the
+  same for a sample that has none; the tab shows which instrument plays the selected sample.
+- Several instruments can play one sample; edits on the Samples tab (trim, normalize, loop, ...)
+  reach all of them. Unloading a sample silences its instruments until a sample is loaded into
+  that slot again; they keep their own settings (gain, root, loop). The same happens when a
+  song's sample file is missing: load the WAV into that sample slot and the instrument is back.
+- Assigning a plugin or instrument file to a slot that is in use asks before replacing it.
+- **Clear Instrument** (Instruments tab) empties the selected slot after asking; notes that use it
+  fall silent and a sample it played stays in the sample bank.
+- Songs from older versions, where a note could pick a sample through its sample column or by
+  sharing its number with a sample slot, are converted when loaded; the status line says so.
+
+The side panel has four tabs: **Song** (song order, arranger, message, channels, channel filter,
+reverb), **Instruments**, **Samples** and **Edit** (step editor, search, clipboard, MIDI learn,
+macros, undo, keyboard settings).
+
+### Set Instrument
+
+**Set Instrument** (Edit tab) gives every note in the marked block the selected instrument, or
+every note in the selected channel when no block is marked. Channels have no instrument of their
+own; older songs' per-channel instruments are ignored when loaded.
 
 ### Channel Mute, Solo and Names
 
@@ -412,16 +436,18 @@ channel here**, **Duplicate channel**, **Delete channel**, **Move left / right**
 
 ### Sample Bank
 
-The sample bank holds up to 256 sample slots (000–0FF).
+The sample bank (Samples tab) holds sample slots S000–S100. The slot list shows which instrument
+plays each sample, e.g. `S003 - kick (I03)`.
 
 | Control | Action |
 |---------|--------|
-| Slot selector | Choose the active sample slot |
-| Load | Open an audio file (WAV, AIFF, FLAC, etc.) |
-| Assign | Arm this slot for the current channel |
-| Assign to Channel | Map this slot as the default for that channel |
+| Sample selector | Choose the sample slot |
+| Load WAV | Load a WAV into the slot and create its sample instrument |
+| Play / Stop | Preview the sample itself |
+| Make Instrument | Create an instrument that plays this sample (if none does) |
+| Play from MIDI Keys | Play the sample's instrument from the MIDI keyboard |
 | Rename | Set a display name for this slot |
-| Clear | Remove sample from slot |
+| Clear | Remove the sample (asks first if instruments play it); they fall silent until the slot is loaded again |
 
 ### Waveform Editor
 
@@ -494,7 +520,7 @@ After all pattern data, the following tokens appear:
 | `MIDI_MAP` | 16 integers | MIDI channel → internal channel map |
 | `MIDI_EDITOR_CC_MAP` | integers | Step editor MIDI CC assignments |
 | `SAMPLE_ENTRY` | `<slot> <name> <path>` | One line per loaded sample slot |
-| `CHANNEL_INSTRUMENTS` | one slot (0–15) per channel | Default instrument per channel |
+| `CHANNEL_INSTRUMENTS` | one slot per channel | Older files only; ignored when loading |
 | `CHANNEL_MUTED` | one `0`/`1` per channel | Channel mute state |
 | `CHANNEL_VOLUME` | one integer (0–200) per channel | Channel volume in percent |
 | `CHANNEL_NAMES` | one quoted string per channel | Channel names (`""` = default) |

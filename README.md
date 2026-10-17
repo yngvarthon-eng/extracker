@@ -57,7 +57,8 @@ The GUI **auto-loads** the last used song on startup.
 - **Parameters section** (scroll down) — labeled sliders for LV2 control ports (e.g. Cutoff, Resonance, ADSR).
 - **Gain / Attack / Release** — envelope for all instrument types.
 - **Root / Pan / Loop** — sample-specific settings (builtin.sample only).
-- **Keystation >** (Samples panel) — assigns a loaded WAV sample slot to MIDI keyboard playback.
+- **Play from MIDI Keys** (Samples tab) — plays the selected sample's instrument from the MIDI keyboard.
+- Notes play instruments `I00`–`IFF`; a loaded sample gets its own sample instrument, and new notes use the instrument selected in the toolbar **Ins** box.
 
 ### Instrument types
 
@@ -71,7 +72,7 @@ The GUI **auto-loads** the last used song on startup.
 | SFZ | `plugin assign <i> sfz:/path/file.sfz` | SFZ scripted sampler via sfizz |
 | S3I (OPL2 FM) | Load Instrument File → `.s3i` | Software FM synthesis, 9-voice poly |
 | XPM / F9 | Load Instrument File → `.xpm` | Multi-zone sampler, WAV loop sustain |
-| WAV sample | Samples panel → Load WAV → Keystation > | Pitch-shifted per MIDI key |
+| WAV sample | Samples tab → Load WAV (creates its instrument) | Pitch-shifted per MIDI key |
 
 ### SF2 Melodic mode
 
@@ -411,13 +412,13 @@ midi quick                    — show MIDI status
 ### Play WAV samples from keyboard
 
 ```
-sample load 5 kick /path/to/kick.wav
-sample assign 5 3              — assign sample slot 5 to instrument slot 3
+sample load 5 kick /path/to/kick.wav   — also creates the sample instrument (here: 5)
+instrument sample 3 5          — or make instrument 3 play sample slot 5
 midi instrument 3              — route keyboard to instrument 3
 midi thru on
 ```
 
-Or in the GUI: load WAV in Samples panel → select slot → click **Keystation >**.
+Or in the GUI: load a WAV on the Samples tab → select the slot → click **Play from MIDI Keys**.
 
 ---
 

@@ -231,7 +231,7 @@ int main() {
   plugins.setSampleSlotParameter(0, "loop_mode", 1.0);
   plugins.setSampleSlotParameter(0, "loop_end", 0.0);  // full sample length loop
 
-  plugins.triggerNoteOnResolved(0, 0, 60, 100, true);
+  plugins.previewSampleNoteOn(0, 60, 100);
 
   const std::uint32_t renderRate = 44100;
   // Render more frames than the sample length to verify looping keeps voices alive

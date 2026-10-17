@@ -79,12 +79,36 @@ Real-time-ish playback pipeline, all driven by a background thread:
 - **Module** — owns multiple `PatternEditor`s plus the song order (sequence of pattern indices),
   per-pattern swing, and module message. `currentEditor()` is what the CLI/GUI edit live.
 - **PluginHost** — instrument slots (assign a plugin id like `builtin.sine`/`builtin.square` to an
-  instrument number), sample slots, a plugin registry/factory layer, and an external-adapter
-  scaffold with an LV2 manifest backend (`dlopen` + `lv2_descriptor` probing; audio still falls
-  back to built-in synthesis until the full LV2 port bridge lands).
+  instrument number), sample slots, a plugin registry/factory layer, and external adapters. LV2
+  plugins run for real: `Lv2HostFeatures` offers urid:map/unmap, options, boundedBlockLength and a
+  synchronous worker, plus the bundle path; a plugin that still fails to instantiate warns once on
+  stderr and plays a built-in tone (effects pass audio through). LV2 instruments keep rendering
+  after the last note-off until quiet (max 10 s) so release tails play. The TTL parsers are
+  line-based but follow Turtle statements (subject after a `.`, `@prefix` names, nested `[ ]`).
+  There are 256 instrument slots (`kInstrumentSlotCount` in `instrument_mix.hpp`; every
+  per-instrument table uses it — loop over slots with a `std::size_t`, never a `std::uint8_t`).
+  A sample instrument linked to a sample-bank slot (`assignSampleSlotToInstrument`) shares that
+  slot's `SampleAsset` (data + root/gain/loop), so bank edits reach every linked instrument;
+  each plugin keeps its own voices. The audio thread renders into reusable
+  `InstrumentMixBuffers` and only touches instruments that are assigned or sounding.
+  **A note plays its instrument and nothing else** (`triggerNoteOn`): the step's `sample` field is
+  kept only for reading older files, and an empty instrument slot no longer borrows the
+  same-numbered bank sample. `migrateSampleReferences` (`sample_instrument_migration.hpp`)
+  converts older songs after every load (CLI `load`, GUI `loadPatternFromFile`) and
+  `ensureSampleInstrument` finds/creates the sample instrument for a bank slot (used by
+  `sample load`, GUI note entry with an armed sample, keyboard routing). Bank previews use
+  `previewSampleNoteOn/Off`. On load, `INSTR_SAMPLE_SLOT` links with
+  `SampleLinkProperties::FromInstrument` so the instrument's saved root/loop params survive.
+  Unloading a bank slot silences its sample instruments but keeps them linked (with their own
+  gain/root/loop); loading the slot again brings them back. Loaders link with
+  `SampleLinkProperties::FromInstrument`, which also links to an empty slot (missing file).
+  Panel sliders ignore the mouse wheel (it scrolls the tab page instead). Both song loaders start with `resetInstrumentsToDefaults()`
+  (0 = sine, 1 = square, all per-instrument settings cleared) so songs never inherit the
+  previous song's instruments. CLI: `instrument clear`, and assignments that replace an
+  occupied slot print `Replaced <what> on instrument N`.
 - **MidiInput** — ALSA-seq based MIDI in, with clock/transport sync and channel→instrument mapping.
 - **ChannelManager** (`channel_manager.hpp`) — the single owner of per-channel user state: name,
-  default instrument, mute, solo, volume and base filter. Solo wins over mute (`isAudible`). The
+  mute, solo, volume and base filter (channels have no instrument; notes carry theirs). Solo wins over mute (`isAudible`). The
   sequencer takes it as `update(..., const ChannelManager*)` and reads mute/solo/volume/filter from
   it; the GUI hands the playback thread a copy per tick. Pattern effects 18/19/1A override the base
   filter only in the sequencer's running state, which `Sequencer::reset()` clears.
@@ -123,6 +147,13 @@ Real-time-ish playback pipeline, all driven by a background thread:
 `ExTrackerApp` (a `juce::JUCEApplication`) owns its **own** copies of the same core engine objects
 and its own sequencer thread, reusing `extracker_core` for all the actual logic. `pattern_grid`
 renders the tracker grid; `main_window` hosts it.
+The side panel is four tab pages (`PanelTab`: Song / Instruments / Samples / Edit), each a
+`PanelWrapper` shown in `panelViewport`; `resized()` lays out every page from the top and
+`finishPage` sizes it. Put new panel controls on a page (`reparentToPage`), not on the component.
+`pluginStatusLabel` sits under the tab row so messages show on every tab. New notes use
+`ExTrackerApp::selectedInstrument` (Instruments tab slot list = toolbar "Ins" box); the grid's
+`;`/F4 column mode types a 2-hex-digit instrument. Assigning to an occupied instrument slot goes
+through `confirmReplaceInstrument`.
 
 ### Save/load & file format
 
@@ -138,7 +169,7 @@ pattern), so there are three tail-token parsers in total, plus an `isSongTailTok
 Per-channel and global lines go through shared helpers instead of hand-written loops; prefer adding
 new song state the same way:
 - `writeChannelState` / `applyChannelFileToken` / `isChannelFileToken` (`channel_manager.hpp`):
-  `CHANNEL_INSTRUMENTS`, `CHANNEL_MUTED`, `CHANNEL_VOLUME`, `CHANNEL_NAMES` (quoted),
+  `CHANNEL_MUTED`, `CHANNEL_VOLUME`, `CHANNEL_NAMES` (quoted),
   `CHANNEL_FILTERS` (`type cutoff resonance` per channel, 0–255). Solo is not saved.
 - `writeReverbLine` / `readReverbLine` (`song_bundle.hpp`): `REVERB room damping wet width`, 0–255.
 - Loaders reset `ChannelManager`, channel undo history and reverb before reading a file, so songs

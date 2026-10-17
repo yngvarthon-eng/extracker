@@ -6,6 +6,8 @@
 #include <mutex>
 #include <vector>
 
+#include "extracker/instrument_mix.hpp"
+
 namespace extracker {
 
 struct ReverbParams {
@@ -145,7 +147,7 @@ struct ReverbState {
     std::mutex mutex;
     ReverbParams params;
     FreeverbProcessor proc;
-    std::array<float, 16> sends{};  // per-instrument send level 0..1
+    std::array<float, kInstrumentSlotCount> sends{};  // per-instrument send level 0..1
 };
 
 } // namespace extracker

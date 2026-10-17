@@ -121,6 +121,16 @@ int main() {
   std::fill(monoBuffer.begin(), monoBuffer.end(), 0.0);
   (void)plugins.renderInterleaved(monoBuffer, 48000);
   const double runtimeActiveAfterNoteOff = plugins.getInstrumentParameter(8, "lv2_runtime_active");
+  const double meterAfterNoteOff = plugins.getInstrumentParameter(8, "lv2_control_out_0");
+
+  // The note-off reaches the plugin in the very next block (it keeps rendering
+  // after the last note-off so release tails play out); the test plugin then
+  // drops its note boost, so its output meter falls.
+  if (!(meterAfterNoteOff < meterAfterNoteOn)) {
+    std::cerr << "Note-off was not delivered to the plugin in the next block (meter " << meterAfterNoteOn
+              << " -> " << meterAfterNoteOff << ")" << '\n';
+    return 1;
+  }
 
   if (plugins.noteOffEventCount() != noteOffBefore + 1) {
     std::cerr << "Plugin host note-off event count did not advance" << '\n';

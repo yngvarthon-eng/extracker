@@ -41,6 +41,40 @@ bool tryParseSampleSlotToken(const std::string& token, int& outSlot) {
   return true;
 }
 
+}  // namespace
+
+std::string describeInstrumentSlot(PluginHost& plugins, int instrument) {
+  const auto index = static_cast<std::uint8_t>(instrument);
+  const std::string pluginId = plugins.pluginForInstrument(index);
+  if (pluginId.empty()) {
+    return "";
+  }
+  const int sampleSlot = plugins.sampleSlotForInstrument(index);
+  if (pluginId == "builtin.sample" && sampleSlot >= 0) {
+    const auto bankSlot = static_cast<std::uint16_t>(sampleSlot);
+    if (plugins.samplePathForSlot(bankSlot).empty()) {
+      return "sample slot " + std::to_string(sampleSlot) + " (empty)";
+    }
+    return "sample slot " + std::to_string(sampleSlot) + " \"" + plugins.sampleNameForSlot(bankSlot) + "\"";
+  }
+  return pluginId;
+}
+
+std::vector<int> instrumentsPlayingSample(PluginHost& plugins, int sampleSlot) {
+  if (sampleSlot < 0 || sampleSlot >= static_cast<int>(PluginHost::kMaxSampleSlots)) {
+    return {};
+  }
+  return plugins.instrumentsForSampleSlot(static_cast<std::uint16_t>(sampleSlot));
+}
+
+void reportInstrumentReplacement(PluginHost& plugins, int instrument, const std::string& before) {
+  if (!before.empty() && before != describeInstrumentSlot(plugins, instrument)) {
+    std::cout << "Replaced " << before << " on instrument " << instrument << "\n";
+  }
+}
+
+namespace {
+
 void printInstrumentSummaryLine(PluginHost& plugins, int instrument) {
   const bool assigned = plugins.hasInstrumentAssignment(static_cast<std::uint8_t>(instrument));
   if (!assigned) {
@@ -55,7 +89,8 @@ void printInstrumentSummaryLine(PluginHost& plugins, int instrument) {
 
   std::cout << "  [" << instrument << "] " << pluginId;
   if (sampleSlot >= 0) {
-    std::cout << " (sample slot " << sampleSlot << ")";
+    std::cout << " (sample slot " << sampleSlot << ") \""
+              << plugins.sampleNameForSlot(static_cast<std::uint16_t>(sampleSlot)) << "\"";
   }
   std::cout << "\n";
 }
@@ -429,9 +464,11 @@ void handleInstrumentCommand(PluginHost& plugins, std::istringstream& input) {
       return;
     }
 
+    const std::string before = describeInstrumentSlot(plugins, instrument);
     if (plugins.assignInstrument(static_cast<std::uint8_t>(instrument), pluginId)) {
       std::cout << "Assigned " << pluginId << " to instrument " << instrument
                 << "\n";
+      reportInstrumentReplacement(plugins, instrument, before);
     } else {
       std::cout << "Failed to assign plugin; ensure it is loaded and instrument index is valid\n";
     }
@@ -453,6 +490,7 @@ void handleInstrumentCommand(PluginHost& plugins, std::istringstream& input) {
       return;
     }
 
+    const std::string before = describeInstrumentSlot(plugins, instrument);
     if (!plugins.assignSampleSlotToInstrument(static_cast<std::uint16_t>(sampleSlot),
                                                static_cast<std::uint8_t>(instrument))) {
       std::cout << "Failed to assign sample slot " << sampleSlot
@@ -463,6 +501,28 @@ void handleInstrumentCommand(PluginHost& plugins, std::istringstream& input) {
 
     std::cout << "Assigned sample slot " << sampleSlot << " to instrument "
               << instrument << "\n";
+    reportInstrumentReplacement(plugins, instrument, before);
+    return;
+  }
+
+  if (subcommand == "clear") {
+    std::string instrumentToken;
+    input >> instrumentToken;
+
+    int instrument = -1;
+    if (!tryParseInstrumentToken(instrumentToken, instrument) || cli::hasExtraTokens(input)) {
+      std::cout << "Usage: instrument clear <instrument:0-"
+                << (PluginHost::kMaxInstrumentSlots - 1) << ">\n";
+      return;
+    }
+
+    const std::string before = describeInstrumentSlot(plugins, instrument);
+    if (before.empty()) {
+      std::cout << "Instrument " << instrument << " is already empty\n";
+      return;
+    }
+    plugins.clearInstrument(static_cast<std::uint8_t>(instrument));
+    std::cout << "Cleared instrument " << instrument << " (was " << before << ")\n";
     return;
   }
 
@@ -471,11 +531,14 @@ void handleInstrumentCommand(PluginHost& plugins, std::istringstream& input) {
     return;
   }
 
-  std::cout << "Usage: instrument <list|status|assign|sample|edit> ...\n";
+  std::cout << "Usage: instrument <list|status|assign|sample|clear|edit> ...\n";
+  std::cout << "Notes play instruments (0-" << (PluginHost::kMaxInstrumentSlots - 1)
+            << "); an instrument is a plugin or a sample from the sample bank.\n";
   std::cout << "  instrument list                            list assigned instruments\n";
   std::cout << "  instrument status [instrument]             status of one or all instruments\n";
-  std::cout << "  instrument assign <instrument> <plugin-id> assign loaded plugin\n";
-  std::cout << "  instrument sample <instrument> <slot>      route sample slot to instrument\n";
+  std::cout << "  instrument assign <instrument> <plugin-id> assign loaded plugin (replaces the slot)\n";
+  std::cout << "  instrument sample <instrument> <slot>      make instrument play sample slot (replaces the slot)\n";
+  std::cout << "  instrument clear <instrument>              empty an instrument slot\n";
   std::cout << "  instrument edit ...                        edit instrument parameters\n";
 }
 

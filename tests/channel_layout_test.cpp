@@ -29,7 +29,6 @@ void setup(Module& module, ChannelManager& channels) {
   channels = ChannelManager(4);
   channels.setName(1, "Bass");
   channels.setMuted(1, true);
-  channels.setInstrument(1, 3);
 }
 
 int noteAt(const Module& module, std::size_t pattern, int channel) {
@@ -51,7 +50,7 @@ int main() {
               noteAt(module, 0, 3) == 62,
           "insert shifts pattern 0");
     check(noteAt(module, 1, 2) == 71, "insert shifts pattern 1 too");
-    check(channels.name(2) == "Bass" && channels.isMuted(2) && channels.instrument(2) == 3 && channels.name(1).empty(),
+    check(channels.name(2) == "Bass" && channels.isMuted(2) && channels.name(1).empty(),
           "insert carries channel state");
     check(result.newIndexOf(1) == 2 && result.newIndexOf(3) == -1, "insert mapping");
   }
