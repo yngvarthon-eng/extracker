@@ -55,6 +55,22 @@ struct MixGainList {
   const MixGains* end() const { return items.data() + count; }
 };
 
+// Master volume make-up: +6 dB on top of the volume setting. A note at the
+// default velocity on a centered instrument otherwise left the output around
+// -5 dB below full scale (SF2/SFZ instruments a further -6 dB). The master
+// stage soft-saturates plugin renders, so the extra level rounds off loud
+// passages instead of clipping them.
+constexpr double kMasterMakeupGain = 2.0;
+
+// Plugin renders: a soft-saturation scale (tanh) chosen so a single centered
+// instrument at unity maps to unity output: atanh(sqrt(0.5)) / sqrt(0.5).
+constexpr double kPluginSatScale = 1.2466;
+
+double masterGain(const std::shared_ptr<std::atomic<float>>& globalVolume) {
+  const double volume = globalVolume ? static_cast<double>(std::clamp(globalVolume->load(), 0.0f, 2.0f)) : 1.0;
+  return volume * kMasterMakeupGain;
+}
+
 MixGainList computeMixGains(const InstrumentMixBuffers& mix,
                             const std::array<double, kInstrumentSlotCount>& pan,
                             const std::array<double, kInstrumentSlotCount>& depth) {
@@ -297,9 +313,7 @@ private:
       }
 
       constexpr double kRearGainA = 0.7071;
-      const double volA = config.globalVolume
-                            ? static_cast<double>(std::clamp(config.globalVolume->load(), 0.0f, 2.0f))
-                            : 1.0;
+      const double volA = masterGain(config.globalVolume);
       const auto gainsA = computeMixGains(*mixA, instrPanA, instrDepthA);
       for (std::uint32_t i = 0; i < config.bufferFrames; ++i) {
         double fl = 0.0, fr = 0.0, rl = 0.0, rr = 0.0;
@@ -318,6 +332,10 @@ private:
         }
         mixedLeft  *= volA;
         mixedRight *= volA;
+        if (renderedByPluginHostA) {
+          mixedLeft  = std::tanh(mixedLeft * kPluginSatScale);
+          mixedRight = std::tanh(mixedRight * kPluginSatScale);
+        }
         buffer[i * 2]     = clampToI16(mixedLeft);
         buffer[i * 2 + 1] = clampToI16(mixedRight);
         captureL[i] = static_cast<float>(std::clamp(mixedLeft,  -1.0, 1.0));
@@ -446,11 +464,11 @@ static void renderFrames4ch(const AudioConfig& config,
 
   // Built-in path: normalize by total voice count so simultaneous tones don't clip.
   // Plugin path: each instrMono[fi] is already per-voice normalized by BuiltinSamplePlugin;
-  // use a soft-saturation scale (tanh) chosen so a single centered instrument at unity
-  // maps to unity output: scale = atanh(sqrt(0.5)) / sqrt(0.5) ≈ 1.2466.
-  // This is transparent at normal levels and compresses gracefully under heavy load
-  // without the dynamic pumping that a per-buffer active-count normalization would cause.
-  static constexpr double kPluginSatScale = 1.2466;
+  // soft-saturate with kPluginSatScale. This is transparent at normal levels and compresses
+  // gracefully under heavy load without the dynamic pumping that a per-buffer
+  // active-count normalization would cause.
+  // Global volume goes in before the saturator so turning it up rounds peaks off.
+  const double master = masterGain(config.globalVolume);
   const double norm = (totalVoices > 0) ? 1.0 / static_cast<double>(totalVoices) : 1.0;
 
   // Reverb send bus — accumulated before stereo mix, normalized with dry
@@ -485,6 +503,10 @@ static void renderFrames4ch(const AudioConfig& config,
       rl += s * g.rl;
       rr += s * g.rr;
     }
+    fl *= master;
+    fr *= master;
+    rl *= master;
+    rr *= master;
     if (renderedByPluginHost) {
       flOut[i] = static_cast<float>(std::tanh(fl * kPluginSatScale));
       frOut[i] = static_cast<float>(std::tanh(fr * kPluginSatScale));
@@ -506,21 +528,8 @@ static void renderFrames4ch(const AudioConfig& config,
                                         static_cast<double>(config.sampleRate));
     }
     for (std::uint32_t i = 0; i < numFrames; ++i) {
-      flOut[i] = static_cast<float>(std::clamp(static_cast<double>(flOut[i]) + revL[i], -1.0, 1.0));
-      frOut[i] = static_cast<float>(std::clamp(static_cast<double>(frOut[i]) + revR[i], -1.0, 1.0));
-    }
-  }
-
-  // Global volume — applied after all processing so capture reflects what's heard.
-  if (config.globalVolume) {
-    const float vol = std::clamp(config.globalVolume->load(), 0.0f, 2.0f);
-    if (vol != 1.0f) {
-      for (std::uint32_t i = 0; i < numFrames; ++i) {
-        flOut[i] = std::clamp(flOut[i] * vol, -1.0f, 1.0f);
-        frOut[i] = std::clamp(frOut[i] * vol, -1.0f, 1.0f);
-        rlOut[i] = std::clamp(rlOut[i] * vol, -1.0f, 1.0f);
-        rrOut[i] = std::clamp(rrOut[i] * vol, -1.0f, 1.0f);
-      }
+      flOut[i] = static_cast<float>(std::clamp(static_cast<double>(flOut[i]) + revL[i] * master, -1.0, 1.0));
+      frOut[i] = static_cast<float>(std::clamp(static_cast<double>(frOut[i]) + revR[i] * master, -1.0, 1.0));
     }
   }
 
