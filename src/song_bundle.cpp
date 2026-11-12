@@ -172,6 +172,34 @@ std::string bundleFile(const std::string& sourcePath,
   return stored;
 }
 
+std::string bundleWrittenFile(const std::filesystem::path& moduleDirectory,
+                              const std::filesystem::path& songStem,
+                              const std::string& bundleDirName,
+                              const std::string& slotLabel,
+                              const std::string& displayName,
+                              const std::string& extension,
+                              const std::function<bool(const std::string&)>& write,
+                              const std::string& fallbackPath) {
+  if (moduleDirectory.empty() || !write) {
+    return fallbackPath;
+  }
+
+  const std::filesystem::path bundleDirectoryPath =
+      moduleDirectory / (songStem.string() + "_" + bundleDirName);
+  std::error_code createDirError;
+  std::filesystem::create_directories(bundleDirectoryPath, createDirError);
+  if (createDirError) {
+    return fallbackPath;
+  }
+
+  const std::filesystem::path targetFile =
+      bundleDirectoryPath / (slotLabel + "_" + sanitizeFileToken(displayName) + extension);
+  if (!write(targetFile.string())) {
+    return fallbackPath;
+  }
+  return toStoredRelativeOrAbsolute(targetFile, moduleDirectory);
+}
+
 std::string bundleDirectory(const std::string& sourceFilePath,
                              const std::filesystem::path& moduleDirectory,
                              const std::filesystem::path& songStem,

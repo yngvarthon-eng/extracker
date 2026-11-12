@@ -732,9 +732,17 @@ bool ExTrackerApp::savePatternToFile(const std::string& path, bool blocking) {
     const std::string samplePathRaw = plugins.samplePathForSlot(static_cast<std::uint16_t>(sampleSlot));
     if (!samplePathRaw.empty()) {
       const std::string sampleName = plugins.sampleNameForSlot(static_cast<std::uint16_t>(sampleSlot));
-      const std::string storedPath = extracker::bundleFile(
-          samplePathRaw, moduleDirectory, songStem, "samples", "slot_" + padSlot(sampleSlot),
-          sampleName, bundledSamples);
+      const auto slot = static_cast<std::uint16_t>(sampleSlot);
+      const std::string slotLabel = "slot_" + padSlot(sampleSlot);
+      // Edited samples (reverse, trim, ...) only live in memory: write the edited data.
+      const std::string storedPath = plugins.isSampleSlotEdited(slot)
+          ? extracker::bundleWrittenFile(
+                moduleDirectory, songStem, "samples", slotLabel,
+                sampleName.empty() ? std::filesystem::path(samplePathRaw).stem().string() : sampleName,
+                ".wav", [&](const std::string& wavPath) { return plugins.saveSampleFromSlot(slot, wavPath); },
+                samplePathRaw)
+          : extracker::bundleFile(samplePathRaw, moduleDirectory, songStem, "samples", slotLabel,
+                                  sampleName, bundledSamples);
       out << "SAMPLE_ENTRY " << sampleSlot << " " << std::quoted(sampleName) << " " << std::quoted(storedPath) << "\n";
     }
   }

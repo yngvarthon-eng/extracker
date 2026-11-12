@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <iosfwd>
 #include <string>
 #include <unordered_map>
@@ -37,6 +38,20 @@ std::string bundleFile(const std::string& sourcePath,
                         const std::string& slotLabel,
                         const std::string& displayName,
                         std::unordered_map<std::string, std::string>& dedupe);
+
+// Like bundleFile, but for data that only exists in memory (e.g. a sample
+// edited after loading): `write` is called with
+// `<moduleDirectory>/<songStem>_<bundleDirName>/<slotLabel>_<sanitized name><extension>`
+// and must create that file. Returns the path to store in the .xtp file, or
+// `fallbackPath` if the file could not be written.
+std::string bundleWrittenFile(const std::filesystem::path& moduleDirectory,
+                              const std::filesystem::path& songStem,
+                              const std::string& bundleDirName,
+                              const std::string& slotLabel,
+                              const std::string& displayName,
+                              const std::string& extension,
+                              const std::function<bool(const std::string&)>& write,
+                              const std::string& fallbackPath);
 
 // Copies the entire parent directory of `sourceFilePath` (resolved against
 // moduleDirectory if relative) into

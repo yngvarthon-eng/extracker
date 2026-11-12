@@ -549,6 +549,7 @@ struct SampleAsset {
   SampleData sample;
   SampleData source;  // as loaded, for trim/restore
   std::string path;
+  bool edited = false;  // sample data no longer matches the file at `path`
   int rootMidiNote = 60;
   double gain = 1.0;
   double pan = 0.5;
@@ -760,6 +761,7 @@ public:
     a_->source = loaded;
     a_->sample = std::move(loaded);
     a_->path = wavPath;
+    a_->edited = false;
     voices_.clear();
     return true;
   }
@@ -772,11 +774,16 @@ public:
     a_->sample = SampleData{};
     a_->source = SampleData{};
     a_->path.clear();
+    a_->edited = false;
     voices_.clear();
   }
 
   std::string samplePath() const {
     return a_->path;
+  }
+
+  bool isEdited() const {
+    return a_->edited;
   }
 
   std::size_t sampleFrameCount() const {
@@ -801,6 +808,7 @@ public:
 
     a_->sample.mono = std::vector<float>(a_->source.mono.begin() + startFrame,
                                       a_->source.mono.begin() + endFrameExclusive);
+    a_->edited = true;
     voices_.clear();
     return !a_->sample.mono.empty();
   }
@@ -810,6 +818,7 @@ public:
       return false;
     }
     a_->sample = a_->source;
+    a_->edited = false;
     voices_.clear();
     return true;
   }
@@ -831,6 +840,7 @@ public:
     for (std::size_t i = startFrame; i < endFrameExclusive; ++i) {
       a_->sample.mono[i] = std::clamp(a_->sample.mono[i] * gain, -1.0f, 1.0f);
     }
+    a_->edited = true;
     return true;
   }
 
@@ -843,6 +853,7 @@ public:
       const double t = static_cast<double>(i - startFrame) / denom;
       a_->sample.mono[i] = static_cast<float>(a_->sample.mono[i] * t);
     }
+    a_->edited = true;
     return true;
   }
 
@@ -855,6 +866,7 @@ public:
       const double t = static_cast<double>(i - startFrame) / denom;
       a_->sample.mono[i] = static_cast<float>(a_->sample.mono[i] * (1.0 - t));
     }
+    a_->edited = true;
     return true;
   }
 
@@ -863,6 +875,7 @@ public:
       return false;
     }
     std::reverse(a_->sample.mono.begin() + startFrame, a_->sample.mono.begin() + endFrameExclusive);
+    a_->edited = true;
     voices_.clear();
     return true;
   }
@@ -916,6 +929,7 @@ public:
 
     a_->sample.mono = std::move(out);
     a_->sample.sampleRate = newRate;
+    a_->edited = true;
     voices_.clear();
     return true;
   }
@@ -932,6 +946,7 @@ public:
       const double q = std::round(static_cast<double>(a_->sample.mono[i]) * levels) / levels;
       a_->sample.mono[i] = static_cast<float>(std::clamp(q, -1.0, 1.0));
     }
+    a_->edited = true;
     voices_.clear();
     return true;
   }
@@ -970,6 +985,7 @@ public:
                            static_cast<double>(a_->sample.mono[preIdx]) * gIn;
       a_->sample.mono[tailIdx] = static_cast<float>(std::clamp(mixed, -1.0, 1.0));
     }
+    a_->edited = true;
     voices_.clear();
     return true;
   }
@@ -6715,6 +6731,15 @@ bool PluginHost::saveSampleFromSlot(std::uint16_t sampleSlot, const std::string&
     return false;
   }
   return saveWavFile(wavPath, source);
+}
+
+bool PluginHost::isSampleSlotEdited(std::uint16_t sampleSlot) const {
+  std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+  if (!lock.try_lock_for(std::chrono::milliseconds(50)) || !isValidSampleSlot(sampleSlot)) {
+    return false;
+  }
+  const auto* samplePlugin = asSamplePlugin(sampleSlotPlugins_[sampleSlot].get());
+  return samplePlugin && samplePlugin->isEdited();
 }
 
 bool PluginHost::clearSampleSlot(std::uint16_t sampleSlot) {

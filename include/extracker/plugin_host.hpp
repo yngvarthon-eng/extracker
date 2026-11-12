@@ -207,6 +207,8 @@ public:
   bool getPluginEditorPreferredSize(std::uint8_t instrument, int& widthOut, int& heightOut);
   bool loadSampleToSlot(std::uint16_t sampleSlot, const std::string& wavPath);
   bool saveSampleFromSlot(std::uint16_t sampleSlot, const std::string& wavPath) const;
+  // True once trim/reverse/normalize/... changed the slot's data away from its file.
+  bool isSampleSlotEdited(std::uint16_t sampleSlot) const;
   bool clearSampleSlot(std::uint16_t sampleSlot);
   std::string samplePathForSlot(std::uint16_t sampleSlot) const;
   std::size_t sampleFrameCountForSlot(std::uint16_t sampleSlot) const;
