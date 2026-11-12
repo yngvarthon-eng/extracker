@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "extracker/pattern_clipboard.hpp"
+#include "extracker/pattern_editor.hpp"
 
 class ExTrackerApp;
 
@@ -22,6 +23,7 @@ public:
   void mouseDown(const juce::MouseEvent& event) override;
   void mouseDrag(const juce::MouseEvent& event) override;
   void mouseMove(const juce::MouseEvent& event) override;
+  void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
   bool keyPressed(const juce::KeyPress& key) override;
   void focusGained(FocusChangeType cause) override;
   void focusLost(FocusChangeType cause) override;
@@ -48,6 +50,17 @@ public:
   void setEditStep(int step);
   void setCompactDensity(bool compact);
   bool isCompactDensity() const;
+  // Centered view: a fixed line in the middle of the grid holds the playing
+  // row (or, when stopped, the cursor row) and the pattern scrolls smoothly
+  // under it, with the neighbouring patterns dimmed above and below. Off: the
+  // whole pattern is laid out and the viewport scrolls it.
+  void setCenteredView(bool enabled);
+  bool isCenteredView() const { return centeredView; }
+  // Called every GUI frame: moves the centered view with the playback position.
+  void updatePlaybackView();
+  // Row on the center line (fractional while playing).
+  double viewCenterRow() const { return viewRow; }
+  void setViewCenterRow(double row);
   void jumpToCell(int row, int channel);
   void clampSelectionToBounds();
   void recalculateGridSize();
@@ -120,6 +133,22 @@ private:
   bool compactDensity = false;
   std::vector<PendingPreviewNoteOff> pendingPreviewNoteOffs;
 
+  // Centered view state.
+  bool centeredView = true;
+  double viewRow = 0.0;
+  bool followingPlayback = false;
+  bool recenterOnSelect = true;  // off while the mouse selects, so rows don't move under it
+  std::uint64_t lastSeenTick = 0;
+  double lastTickMs = 0.0;
+  double lastFrameMs = 0.0;
+  struct GhostPattern {
+    int rows = 0;
+    int channels = 0;
+    std::vector<extracker::PatternEditor::Step> steps;
+  };
+  GhostPattern ghostBefore;  // pattern shown above row 0
+  GhostPattern ghostAfter;   // pattern shown below the last row
+
   // FX direct-entry mode (toggled with backtick)
   bool fxInputMode = false;
   std::string fxInputBuffer;  // 3 chars (CVV) or 4 chars (CCVV)
@@ -145,6 +174,9 @@ private:
   std::vector<std::uint8_t> cachedEffectValue;
   std::vector<bool> cachedChannelMuted;
 
+  double centerRowTop() const;
+  int rowTop(int row) const;
+  void snapshotGhostPatterns();
   int getRowAtY(int y) const;
   int getChannelAtX(int x) const;
   juce::Rectangle<int> getCellBounds(int row, int channel) const;
@@ -177,7 +209,8 @@ private:
                 int row,
                 int channel,
                 int x,
-                int y);
+                int y,
+                bool ghost = false);
   void handleCellClick(int row, int channel);
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PatternGrid)

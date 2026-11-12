@@ -8,6 +8,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <thread>
 
@@ -245,13 +246,17 @@ void PatternGrid::recalculateGridSize() {
 }
 
 void PatternGrid::repaintPlaybackRows(int previousRow, int currentRow) {
+  if (centeredView) {
+    repaint();  // the whole view moves; updatePlaybackView keeps it moving
+    return;
+  }
   const int maxRow = std::max(0, static_cast<int>(app.module.currentEditor().rows()) - 1);
   auto repaintRow = [this, maxRow](int row) {
     if (row < 0 || row > maxRow) {
       return;
     }
     const int y = headerHeight + row * cellHeight;
-    repaint(0, y, getWidth(), cellHeight);
+    repaint(0, y, getWidth(), cellHeight + 1);
   };
 
   repaintRow(previousRow);
@@ -310,7 +315,8 @@ void PatternGrid::resized() {
       const int minCellWidth = compactDensity ? 18 : 24;
       const int minCellHeight = compactDensity ? 14 : 20;
       cellWidth = std::max(minCellWidth, availableWidth / numChannels);
-      cellHeight = std::max(minCellHeight, availableHeight / numRows);
+      cellHeight = centeredView ? (compactDensity ? 18 : 24)
+                                : std::max(minCellHeight, availableHeight / numRows);
     }
   }
 }
@@ -467,7 +473,6 @@ void PatternGrid::drawHeaders(juce::Graphics& g) {
 void PatternGrid::drawGrid(juce::Graphics& g) {
   refreshSnapshot();
 
-  int startY = headerHeight;
   int numRows = cachedRows;
   int numChannels = cachedChannels;
   std::uint32_t playbackRow = app.transport.currentRow();
@@ -475,93 +480,157 @@ void PatternGrid::drawGrid(juce::Graphics& g) {
     return;
   }
 
-  for (int row = 0; row < numRows; ++row) {
-    int y = startY + row * cellHeight;
+  // Rows on screen. In the centered view they run past both ends of the
+  // pattern; those rows come from the neighbouring patterns (ghosts).
+  int firstRow = 0;
+  int lastRow = numRows - 1;
+  if (centeredView) {
+    firstRow = static_cast<int>(std::floor(viewRow - (centerRowTop() - headerHeight) / cellHeight)) - 1;
+    lastRow = static_cast<int>(std::ceil(viewRow + (getHeight() - centerRowTop()) / cellHeight)) + 1;
+  }
+  const int contentFirst = std::max(firstRow, -ghostBefore.rows);
+  const int contentLast = std::min(lastRow, numRows - 1 + ghostAfter.rows);
+  const int contentTop = rowTop(contentFirst);
+  const int contentBottom = rowTop(contentLast + 1);
+  const juce::Colour shadeColour = app.darkMode ? juce::Colour(0x28FFFFFF) : juce::Colour(0x40383838);
+
+  {
+    juce::Graphics::ScopedSaveState clipState(g);
+    g.reduceClipRegion(0, headerHeight, getWidth(), getHeight() - headerHeight);
+
+    for (int row = contentFirst; row <= contentLast; ++row) {
+      const int y = rowTop(row);
+      const GhostPattern* ghost = nullptr;
+      int shownRow = row;
+      if (row < 0) {
+        ghost = &ghostBefore;
+        shownRow = ghostBefore.rows + row;
+      } else if (row >= numRows) {
+        ghost = &ghostAfter;
+        shownRow = row - numRows;
+      }
+
+      for (int ch = 0; ch < numChannels; ++ch) {
+        int x = labelWidth + ch * cellWidth;
+        if (ghost != nullptr) {
+          if (ch >= ghost->channels) {
+            continue;
+          }
+          const auto& step = ghost->steps[static_cast<std::size_t>(shownRow * ghost->channels + ch)];
+          drawCell(g, step.hasNote, step.hasNote ? step.note : -1, step.gateTicks, step.velocity, step.instrument,
+                   step.sample, step.effectCommand, step.effectValue, shownRow, ch, x, y, true);
+          continue;
+        }
+        std::size_t index = static_cast<std::size_t>(row * numChannels + ch);
+
+        drawCell(g,
+                   cachedHasNote[index],
+                   cachedNote[index],
+                   cachedGate[index],
+                   cachedVelocity[index],
+                   cachedInstrument[index],
+                   cachedSample[index],
+                   cachedEffectCommand[index],
+                   cachedEffectValue[index],
+                 row,
+                 ch,
+                 x,
+                 y);
+      }
+
+      // Draw row number
+      g.setColour(juce::Colours::lightgrey);
+      g.setFont(9.0f);
+      g.drawText(juce::String(shownRow), 0, y, labelWidth, cellHeight, juce::Justification::centred);
+
+      // Shade every 4th tick (rows 0, 4, 8, 12... in 0-indexed) - draw AFTER cells as overlay
+      if (shownRow % 4 == 0) {
+        g.setColour(shadeColour);
+        g.fillRect(labelWidth, y, getWidth() - labelWidth, cellHeight);
+      }
+
+      if (ghost != nullptr) {
+        g.setColour(juce::Colour(0x99000000));
+        g.fillRect(0, y, getWidth(), cellHeight);
+      }
+    }
+
+    // Draw grid lines
+    g.setColour(juce::Colours::black);
+    for (int row = contentFirst; row <= contentLast + 1; ++row) {
+      int y = rowTop(row);
+      g.drawLine(labelWidth, y, getWidth(), y, 1.0f);
+    }
+
+    const int lineBottom = centeredView ? contentBottom : getHeight();
+    for (int ch = 0; ch <= numChannels; ++ch) {
+      int x = labelWidth + ch * cellWidth;
+      g.drawLine(x, contentTop, x, lineBottom, 1.0f);
+    }
 
     for (int ch = 0; ch < numChannels; ++ch) {
+      if (static_cast<std::size_t>(ch) >= cachedChannelMuted.size() ||
+          !cachedChannelMuted[static_cast<std::size_t>(ch)]) {
+        continue;
+      }
+
       int x = labelWidth + ch * cellWidth;
-      std::size_t index = static_cast<std::size_t>(row * numChannels + ch);
-
-      drawCell(g,
-                 cachedHasNote[index],
-                 cachedNote[index],
-                 cachedGate[index],
-                 cachedVelocity[index],
-                 cachedInstrument[index],
-                 cachedSample[index],
-                 cachedEffectCommand[index],
-                 cachedEffectValue[index],
-               row,
-               ch,
-               x,
-               y);
+      g.setColour(juce::Colour(0x551A0000));
+      g.fillRect(x + 1, contentTop + 1, cellWidth - 1, contentBottom - contentTop - 1);
+      g.setColour(juce::Colour(0x99FF6666));
+      g.drawLine(static_cast<float>(x + 1),
+                 static_cast<float>(contentTop + 1),
+                 static_cast<float>(x + 1),
+                 static_cast<float>(contentBottom - 1),
+                 1.5f);
+      g.drawLine(static_cast<float>(x + cellWidth - 1),
+                 static_cast<float>(contentTop + 1),
+                 static_cast<float>(x + cellWidth - 1),
+                 static_cast<float>(contentBottom - 1),
+                 1.5f);
     }
 
-    // Draw row number
-    g.setColour(juce::Colours::lightgrey);
-    g.setFont(9.0f);
-    g.drawText(juce::String(row), 0, y, labelWidth, cellHeight, juce::Justification::centred);
+    // Track edges: a teal line down both sides of each track's channels.
+    g.setColour(juce::Colour(0xFF3FA7AD));
+    for (const auto& track : app.channels.tracks()) {
+      if (track.first >= static_cast<std::size_t>(numChannels)) {
+        continue;
+      }
+      const int last = std::min(static_cast<int>(track.last), numChannels - 1);
+      const float top = static_cast<float>(contentTop);
+      const float bottom = static_cast<float>(contentBottom);
+      const float left = static_cast<float>(labelWidth + static_cast<int>(track.first) * cellWidth) + 0.5f;
+      const float right = static_cast<float>(labelWidth + (last + 1) * cellWidth) - 0.5f;
+      g.drawLine(left, top, left, bottom, 1.5f);
+      g.drawLine(right, top, right, bottom, 1.5f);
+    }
 
-    // Shade every 4th tick (rows 0, 4, 8, 12... in 0-indexed) - draw AFTER cells as overlay
-    if (row % 4 == 0) {
-      g.setColour(app.darkMode ? juce::Colour(0x28FFFFFF) : juce::Colour(0x40383838));
+    // Playback row: an orange band over the whole row, drawn after the grid
+    // lines so nothing paints over it, plus a highlighted row number. In the
+    // centered view the band stays on the center line and the rows move.
+    auto drawPlayBand = [&](int y) {
+      const juce::Colour playColour(0xFFFF7A1A);
+      g.setColour(playColour.withAlpha(0.22f));
       g.fillRect(labelWidth, y, getWidth() - labelWidth, cellHeight);
+      g.setColour(playColour);
+      g.drawRect(labelWidth, y, getWidth() - labelWidth, cellHeight + 1, 2);
+      g.fillRect(0, y, labelWidth, cellHeight + 1);
+      g.setColour(juce::Colours::black);
+      g.setFont(juce::Font(9.0f, juce::Font::bold));
+      g.drawText(juce::String(static_cast<int>(playbackRow)), 0, y, labelWidth, cellHeight,
+                 juce::Justification::centred);
+    };
+    if (centeredView) {
+      const int y = juce::roundToInt(centerRowTop());
+      if (followingPlayback) {
+        drawPlayBand(y);
+      } else {
+        g.setColour(juce::Colour(0x66FF7A1A));
+        g.drawRect(labelWidth, y, getWidth() - labelWidth, cellHeight + 1, 1);
+      }
+    } else if (static_cast<int>(playbackRow) < numRows) {
+      drawPlayBand(rowTop(static_cast<int>(playbackRow)));
     }
-
-    // Highlight playback row
-      if (static_cast<int>(playbackRow) == row) {
-      g.setColour(juce::Colour(0xFF444444));
-      g.drawRect(labelWidth, y, getWidth() - labelWidth, cellHeight, 2);
-    }
-  }
-
-  // Draw grid lines
-  g.setColour(juce::Colours::black);
-  for (int row = 0; row <= numRows; ++row) {
-    int y = startY + row * cellHeight;
-    g.drawLine(labelWidth, y, getWidth(), y, 1.0f);
-  }
-
-  for (int ch = 0; ch <= numChannels; ++ch) {
-    int x = labelWidth + ch * cellWidth;
-    g.drawLine(x, startY, x, getHeight(), 1.0f);
-  }
-
-  for (int ch = 0; ch < numChannels; ++ch) {
-    if (static_cast<std::size_t>(ch) >= cachedChannelMuted.size() ||
-        !cachedChannelMuted[static_cast<std::size_t>(ch)]) {
-      continue;
-    }
-
-    int x = labelWidth + ch * cellWidth;
-    g.setColour(juce::Colour(0x551A0000));
-    g.fillRect(x + 1, startY + 1, cellWidth - 1, numRows * cellHeight - 1);
-    g.setColour(juce::Colour(0x99FF6666));
-    g.drawLine(static_cast<float>(x + 1),
-               static_cast<float>(startY + 1),
-               static_cast<float>(x + 1),
-               static_cast<float>(startY + numRows * cellHeight - 1),
-               1.5f);
-    g.drawLine(static_cast<float>(x + cellWidth - 1),
-               static_cast<float>(startY + 1),
-               static_cast<float>(x + cellWidth - 1),
-               static_cast<float>(startY + numRows * cellHeight - 1),
-               1.5f);
-  }
-
-  // Track edges: a teal line down both sides of each track's channels.
-  g.setColour(juce::Colour(0xFF3FA7AD));
-  for (const auto& track : app.channels.tracks()) {
-    if (track.first >= static_cast<std::size_t>(numChannels)) {
-      continue;
-    }
-    const int last = std::min(static_cast<int>(track.last), numChannels - 1);
-    const float top = static_cast<float>(startY);
-    const float bottom = static_cast<float>(startY + numRows * cellHeight);
-    const float left = static_cast<float>(labelWidth + static_cast<int>(track.first) * cellWidth) + 0.5f;
-    const float right = static_cast<float>(labelWidth + (last + 1) * cellWidth) - 0.5f;
-    g.drawLine(left, top, left, bottom, 1.5f);
-    g.drawLine(right, top, right, bottom, 1.5f);
   }
 
   if (fxInputMode) {
@@ -610,16 +679,19 @@ void PatternGrid::drawCell(juce::Graphics& g,
                            int row,
                            int channel,
                            int x,
-                           int y) {
+                           int y,
+                           bool ghost) {
   juce::ignoreUnused(gateTicks);
+  // Ghost cells belong to a neighbouring pattern: no cursor, block or hover.
+  const bool live = !ghost;
 
   const bool hasEffect = (effectCommand != 0 || effectValue != 0);
   const bool isNoteOff = hasNote && note < 0;
 
   // Cell background
-  if (isCellInBlockSelection(row, channel)) {
+  if (live && isCellInBlockSelection(row, channel)) {
     g.setColour(hasNote ? juce::Colour(0xFF2F6A44) : juce::Colour(0xFF4A5D77));
-  } else if (hoveredRow == row && hoveredChannel == channel) {
+  } else if (live && hoveredRow == row && hoveredChannel == channel) {
     g.setColour(app.darkMode ? juce::Colour(0xFF001A33) : juce::Colours::darkblue);
   } else if (isNoteOff) {
     g.setColour(juce::Colour(0xFF3A1A1A));
@@ -633,7 +705,7 @@ void PatternGrid::drawCell(juce::Graphics& g,
 
   g.fillRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
 
-  if (selectedRow == row && selectedChannel == channel) {
+  if (live && selectedRow == row && selectedChannel == channel) {
     g.setColour(juce::Colour(0xFFF2CC60));
     g.drawRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2, 2);
   }
@@ -646,7 +718,7 @@ void PatternGrid::drawCell(juce::Graphics& g,
   std::string effectText = (effectCommand != 0 || effectValue != 0)
       ? toUpperHex(effectCommand, 2) + toUpperHex(effectValue, 2)
       : "....";
-  const bool showLiveFxPreview = row == selectedRow && channel == selectedChannel && fxInputMode;
+  const bool showLiveFxPreview = live && row == selectedRow && channel == selectedChannel && fxInputMode;
   if (showLiveFxPreview) {
     if (fxInputBuffer.empty() && hasEffect) {
       // Buffer not yet started — show committed effect so it remains visible while navigating in FX mode
@@ -692,7 +764,7 @@ void PatternGrid::drawCell(juce::Graphics& g,
   const int innerH = cellHeight - 4;
   g.drawText(tickText, innerX, innerY, innerW, innerH, juce::Justification::centredLeft, true);
 
-  if (row == selectedRow && channel == selectedChannel && volumeInputMode) {
+  if (live && row == selectedRow && channel == selectedChannel && volumeInputMode) {
     std::string volVisual = volumeInputBuffer;
     while (volVisual.size() < 2) volVisual += '.';
     volVisual = std::string("a") + volVisual;
@@ -701,7 +773,7 @@ void PatternGrid::drawCell(juce::Graphics& g,
     g.drawText(juce::String(volVisual), innerX, innerY, innerW, innerH, juce::Justification::centredRight, false);
   }
 
-  if (row == selectedRow && channel == selectedChannel && instrumentInputMode) {
+  if (live && row == selectedRow && channel == selectedChannel && instrumentInputMode) {
     std::string instrumentVisual = instrumentInputBuffer;
     while (instrumentVisual.size() < 2) instrumentVisual += '.';
     g.setColour(juce::Colour(0xFFFFCC00));
@@ -710,12 +782,24 @@ void PatternGrid::drawCell(juce::Graphics& g,
   }
 }
 
+double PatternGrid::centerRowTop() const {
+  return headerHeight + (getHeight() - headerHeight - cellHeight) / 2.0;
+}
+
+int PatternGrid::rowTop(int row) const {
+  if (centeredView) {
+    return juce::roundToInt(centerRowTop() + (row - viewRow) * cellHeight);
+  }
+  return headerHeight + row * cellHeight;
+}
+
 int PatternGrid::getRowAtY(int y) const {
   if (y < headerHeight) {
     return -1;
   }
-  int row = (y - headerHeight) / cellHeight;
-  if (row >= static_cast<int>(app.module.currentEditor().rows())) {
+  int row = centeredView ? static_cast<int>(std::floor(viewRow + (y - centerRowTop()) / cellHeight))
+                         : (y - headerHeight) / cellHeight;
+  if (row < 0 || row >= static_cast<int>(app.module.currentEditor().rows())) {
     return -1;
   }
   return row;
@@ -741,7 +825,7 @@ juce::Rectangle<int> PatternGrid::getCellBounds(int row, int channel) const {
   }
 
   int x = labelWidth + channel * cellWidth;
-  int y = headerHeight + row * cellHeight;
+  int y = rowTop(row);
   return {x, y, cellWidth, cellHeight};
 }
 
@@ -785,7 +869,10 @@ void PatternGrid::mouseDown(const juce::MouseEvent& event) {
   }
 
   grabKeyboardFocus();
-  selectCell(row, channel);
+  {
+    const juce::ScopedValueSetter<bool> keepView(recenterOnSelect, false);
+    selectCell(row, channel);
+  }
   if (event.mods.isLeftButtonDown() && rowClickedCallback) {
     rowClickedCallback(row);  // toolbar Row: (record/step-entry row) follows the click
   }
@@ -811,6 +898,7 @@ void PatternGrid::mouseDrag(const juce::MouseEvent& event) {
   if (row < 0 || channel < 0) {
     return;
   }
+  const juce::ScopedValueSetter<bool> keepView(recenterOnSelect, false);
 
   if (event.mods.isAltDown()) {
     selectCell(row, channel, false);
@@ -1640,6 +1728,10 @@ void PatternGrid::selectCell(int row, int channel, bool preserveBlock) {
   }
   repaintCell(oldRow, oldChannel);
   repaintCell(selectedRow, selectedChannel);
+  if (centeredView && recenterOnSelect && !followingPlayback && row != oldRow) {
+    viewRow = row;
+    repaint();
+  }
   if (channel != oldChannel) {
     repaint(0, 0, getWidth(), headerHeight);  // the record-channel dot follows the cursor
   }
@@ -2059,6 +2151,7 @@ bool PatternGrid::refreshSnapshot() {
     }
   }
 
+  snapshotGhostPatterns();
   return true;
 }
 
@@ -2111,7 +2204,147 @@ bool PatternGrid::refreshSnapshotForPatternChange() {
     }
   }
 
+  snapshotGhostPatterns();
+  if (!followingPlayback) {
+    viewRow = std::min(viewRow, static_cast<double>(numRows - 1));
+  }
   return true;
+}
+
+// Copies the patterns shown above and below the current one in the centered
+// view: the song order neighbours in song mode, the pattern itself (it loops)
+// in pattern mode. Call with app.stateMutex held.
+void PatternGrid::snapshotGhostPatterns() {
+  const auto& module = app.module;
+  const std::size_t current = module.currentPattern();
+  std::optional<std::size_t> before;
+  std::optional<std::size_t> after;
+  if (!centeredView) {
+    // No ghosts outside the centered view.
+  } else if (app.playMode == PlayMode::PLAY_SONG) {
+    const std::size_t position = app.currentSongOrderPositionCache.load();
+    if (position < module.songLength() && module.songEntryAt(position) == current) {
+      if (position > 0) {
+        before = module.songEntryAt(position - 1);
+      }
+      if (position + 1 < module.songLength()) {
+        after = module.songEntryAt(position + 1);
+      }
+    }
+  } else {
+    before = current;
+    after = current;
+  }
+
+  auto fill = [&module](GhostPattern& ghost, std::optional<std::size_t> pattern) {
+    ghost.rows = 0;
+    ghost.channels = 0;
+    ghost.steps.clear();
+    if (!pattern || *pattern >= module.patternCount()) {
+      return;
+    }
+    const auto& editor = module.patternEditor(*pattern);
+    ghost.rows = static_cast<int>(editor.rows());
+    ghost.channels = static_cast<int>(editor.channels());
+    ghost.steps.reserve(static_cast<std::size_t>(ghost.rows * ghost.channels));
+    for (int row = 0; row < ghost.rows; ++row) {
+      for (int ch = 0; ch < ghost.channels; ++ch) {
+        extracker::PatternEditor::Step step;
+        step.hasNote = editor.hasNoteAt(row, ch);
+        if (step.hasNote) {
+          step.note = editor.noteAt(row, ch);
+          step.instrument = editor.instrumentAt(row, ch);
+          step.velocity = editor.velocityAt(row, ch);
+        }
+        step.effectCommand = editor.effectCommandAt(row, ch);
+        step.effectValue = editor.effectValueAt(row, ch);
+        ghost.steps.push_back(step);
+      }
+    }
+  };
+  fill(ghostBefore, before);
+  fill(ghostAfter, after);
+}
+
+void PatternGrid::setCenteredView(bool enabled) {
+  if (centeredView == enabled) {
+    return;
+  }
+  centeredView = enabled;
+  followingPlayback = false;
+  viewRow = std::max(selectedRow, 0);
+  resized();
+  repaint();
+}
+
+void PatternGrid::setViewCenterRow(double row) {
+  if (!centeredView || followingPlayback) {
+    return;
+  }
+  const double clamped = std::clamp(row, 0.0, static_cast<double>(std::max(cachedRows - 1, 0)));
+  if (clamped != viewRow) {
+    viewRow = clamped;
+    repaint();
+  }
+}
+
+void PatternGrid::updatePlaybackView() {
+  if (!centeredView) {
+    followingPlayback = false;
+    return;
+  }
+  if (!app.transport.isPlaying()) {
+    if (followingPlayback) {
+      // Stay where playback stopped; the next cursor move recenters.
+      followingPlayback = false;
+      setViewCenterRow(std::round(viewRow));
+      repaint();
+    }
+    return;
+  }
+
+  const double nowMs = juce::Time::getMillisecondCounterHiRes();
+  const std::uint64_t tick = app.transport.tickCount();
+  const std::uint32_t row = app.transport.currentRow();
+  const std::uint32_t ticksPerRow = std::max<std::uint32_t>(app.transport.ticksPerRow(), 1);
+  // The tick length Transport::runClock sleeps, swing included.
+  const double bpm = std::max(app.transport.tempoBpm(), 1.0);
+  const double ticksPerBeat = static_cast<double>(std::max<std::uint32_t>(app.transport.ticksPerBeat(), 1));
+  const double swing = static_cast<double>(std::clamp<std::uint32_t>(app.transport.swingPercent(), 50, 75)) / 100.0;
+  const double swingFactor = (row % 2u) == 1u ? std::max(0.25, 2.0 * swing) : std::max(0.25, 2.0 * (1.0 - swing));
+  const double tickMs = 60000.0 / (bpm * ticksPerBeat) * swingFactor;
+
+  if (!followingPlayback || tick != lastSeenTick) {
+    lastSeenTick = tick;
+    lastTickMs = nowMs;
+  }
+  // Where the transport is: its row plus how far into the row it has got.
+  const double sinceTick = std::min((nowMs - lastTickMs) / tickMs, 0.99);
+  const double measured = row + (static_cast<double>(tick % ticksPerRow) + sinceTick) / ticksPerRow;
+
+  if (!followingPlayback) {
+    followingPlayback = true;
+    viewRow = measured;
+  } else {
+    // Glide at the tempo and pull gently toward the measured position, so
+    // ticks seen a frame late don't make the rows stutter. Jumps (pattern
+    // wrap, song advance, Bxx/Dxx) snap.
+    const double predicted = viewRow + (nowMs - lastFrameMs) / (tickMs * ticksPerRow);
+    const double error = measured - predicted;
+    viewRow = std::abs(error) > 2.0 ? measured : predicted + error * 0.2;
+  }
+  lastFrameMs = nowMs;
+  repaint();
+}
+
+void PatternGrid::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) {
+  // The centered view scrolls its rows itself; sideways scrolling still goes
+  // to the viewport.
+  if (!centeredView || std::abs(wheel.deltaX) > std::abs(wheel.deltaY)) {
+    Component::mouseWheelMove(event, wheel);
+    return;
+  }
+  setViewCenterRow(viewRow - wheel.deltaY * 16.0);
 }
 
 void PatternGrid::mouseMove(const juce::MouseEvent& event) {

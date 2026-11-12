@@ -32,6 +32,18 @@ ChannelEditResult moveChannel(Module& module, ChannelManager& channels, std::siz
 // The copy lands right after the original.
 ChannelEditResult duplicateChannel(Module& module, ChannelManager& channels, std::size_t channel);
 
+// Gives every pattern at least `channels` channels (appending empty ones; wider
+// patterns are left alone) and grows the channel state to match. Returns the
+// number of patterns that were widened.
+std::size_t widenAllPatterns(Module& module, ChannelManager& channels, std::size_t count);
+
+// Trims every pattern to at most `count` channels (narrower patterns are left
+// alone) and shrinks the channel state to match. Refuses, changing nothing, if
+// a removed channel holds a note or effect in any pattern: returns false and
+// sets `error`. On success `narrowed` is the number of patterns trimmed.
+bool narrowAllPatterns(Module& module, ChannelManager& channels, std::size_t count,
+                       std::size_t& narrowed, std::string& error);
+
 // True if the channel holds a note or effect in any pattern.
 bool channelHasContent(const Module& module, std::size_t channel);
 

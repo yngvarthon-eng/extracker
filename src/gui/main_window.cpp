@@ -956,6 +956,7 @@ public:
     addAndMakeVisible(insertPatternAfterButton);
     addAndMakeVisible(removePatternButton);
     addAndMakeVisible(gridDensityButton);
+    addAndMakeVisible(gridViewButton);
     addAndMakeVisible(tempoSlider);
     addAndMakeVisible(tempoLabel);
     addAndMakeVisible(swingLabel);
@@ -1176,6 +1177,11 @@ public:
     patternRowSlider.setRange(0.0, 1.0, 1.0);
     patternRowSlider.onValueChange = [this]() {
       if (suppressPatternRowSliderCallback) {
+        return;
+      }
+      if (patternGrid.isCenteredView()) {
+        // Slider top is row 0.
+        patternGrid.setViewCenterRow(patternRowSlider.getMaximum() - patternRowSlider.getValue());
         return;
       }
       patternViewport.setViewPosition(
@@ -1991,6 +1997,13 @@ public:
     gridDensityButton.onClick = [this]() {
       patternGrid.setCompactDensity(!patternGrid.isCompactDensity());
       updateGridDensityButtonText();
+      resized();
+    };
+
+    gridViewButton.onClick = [this]() {
+      patternGrid.setCenteredView(!patternGrid.isCenteredView());
+      updateGridDensityButtonText();
+      patternViewport.setViewPosition(patternViewport.getViewPositionX(), 0);
       resized();
     };
 
@@ -3203,6 +3216,8 @@ public:
     toolbar3.removeFromLeft(4);
     gridDensityButton.setBounds(toolbar3.removeFromLeft(132));
     toolbar3.removeFromLeft(4);
+    gridViewButton.setBounds(toolbar3.removeFromLeft(120));
+    toolbar3.removeFromLeft(4);
     darkModeButton.setBounds(toolbar3.removeFromLeft(80));
     toolbar3.removeFromLeft(4);
     pianoToggleButton.setBounds(toolbar3.removeFromLeft(80));
@@ -3254,9 +3269,15 @@ public:
     const int gridWidth = std::max(patternArea.getWidth(),
                      patternGrid.preferredLabelWidth() +
                      gridColumns * patternGrid.preferredCellWidth());
-    const int gridHeight = std::max(patternArea.getHeight(),
-                    patternGrid.preferredHeaderHeight() +
-                    gridRows * (patternGrid.isCompactDensity() ? 16 : 20));
+    // The centered view scrolls its rows itself, so it is exactly as tall as
+    // the viewport (less the horizontal scrollbar when that shows).
+    const int horizontalBar = gridWidth > patternArea.getWidth() ? patternViewport.getScrollBarThickness() : 0;
+    const int gridHeight = patternGrid.isCenteredView()
+        ? patternArea.getHeight() - horizontalBar
+        : std::max(patternArea.getHeight(),
+                   patternGrid.preferredHeaderHeight() +
+                   gridRows * (patternGrid.isCompactDensity() ? 16 : 20));
+    patternViewport.setScrollBarsShown(!patternGrid.isCenteredView(), true);
     patternGrid.setBounds(0, 0, gridWidth, gridHeight);
     syncPatternRowSliderFromViewport();
     syncMixerLayout();
@@ -3942,15 +3963,18 @@ private:
     }
 
     const int channels = static_cast<int>(app.module.currentEditor().channels());
-    const int maxChannels = 16;
+    constexpr int maxChannels = 32;
+    static_assert(maxChannels <= static_cast<int>(extracker::ChannelManager::kMaxChannels),
+                  "ChannelManager must hold every pattern channel");
     const int newChannels = channels + 1;
     if (newChannels > maxChannels) {
       pluginStatusLabel.setText("Already at maximum channels (" + juce::String(maxChannels) + ")", juce::dontSendNotification);
       return;
     }
 
-    app.module.currentEditor().resizeChannels(static_cast<std::size_t>(newChannels));
-    app.channels.resize(static_cast<std::size_t>(newChannels));
+    // Every pattern grows, so the song keeps one channel layout.
+    const std::size_t widened =
+        extracker::widenAllPatterns(app.module, app.channels, static_cast<std::size_t>(newChannels));
 
     lock.unlock();
     selectedStepChannel = std::clamp(selectedStepChannel, 0, newChannels - 1);
@@ -3960,7 +3984,9 @@ private:
     patternGrid.clampSelectionToBounds();
     updateStepEditorFromSelection();
     patternGrid.repaint();
-    pluginStatusLabel.setText("Channel expanded to " + juce::String(newChannels) + " channels", juce::dontSendNotification);
+    pluginStatusLabel.setText("Channels expanded to " + juce::String(newChannels) + " in " +
+                                  juce::String(static_cast<int>(widened)) + " pattern(s)",
+                              juce::dontSendNotification);
   }
 
   void shrinkChannel() {
@@ -3978,8 +4004,14 @@ private:
       return;
     }
 
-    app.module.currentEditor().resizeChannels(static_cast<std::size_t>(newChannels));
-    app.channels.resize(static_cast<std::size_t>(newChannels));
+    // Every pattern shrinks, mirroring Ch+; refuses if a removed channel has content.
+    std::size_t narrowed = 0;
+    std::string error;
+    if (!extracker::narrowAllPatterns(app.module, app.channels, static_cast<std::size_t>(newChannels),
+                                      narrowed, error)) {
+      pluginStatusLabel.setText("Shrink channel refused: " + juce::String(error), juce::dontSendNotification);
+      return;
+    }
 
     lock.unlock();
     selectedStepChannel = std::clamp(selectedStepChannel, 0, newChannels - 1);
@@ -3989,7 +4021,9 @@ private:
     patternGrid.clampSelectionToBounds();
     updateStepEditorFromSelection();
     patternGrid.repaint();
-    pluginStatusLabel.setText("Channel shrunk to " + juce::String(newChannels) + " channels", juce::dontSendNotification);
+    pluginStatusLabel.setText("Channels shrunk to " + juce::String(newChannels) + " in " +
+                                  juce::String(static_cast<int>(narrowed)) + " pattern(s)",
+                              juce::dontSendNotification);
   }
 
   void newModule() {
@@ -4439,6 +4473,7 @@ private:
       lastTransportRow = currentRow;
     }
 
+    patternGrid.updatePlaybackView();
     syncPatternRowSliderFromViewport();
     syncMixerFromPatternViewport();
 
@@ -6320,6 +6355,7 @@ private:
 
   void updateGridDensityButtonText() {
     gridDensityButton.setButtonText(patternGrid.isCompactDensity() ? "Grid: Compact" : "Grid: Normal");
+    gridViewButton.setButtonText(patternGrid.isCenteredView() ? "View: Center" : "View: Page");
   }
 
   void updateRowEditScopeButtonText() {
@@ -6543,6 +6579,16 @@ private:
   }
 
   void syncPatternRowSliderFromViewport() {
+    if (patternGrid.isCenteredView()) {
+      const int rows = static_cast<int>(app.module.currentEditor().rows());
+      const double sliderMax = std::max(rows - 1, 1);
+      suppressPatternRowSliderCallback = true;
+      patternRowSlider.setRange(0.0, sliderMax, 0.0);
+      patternRowSlider.setValue(sliderMax - patternGrid.viewCenterRow(), juce::dontSendNotification);
+      patternRowSlider.setEnabled(rows > 1);
+      suppressPatternRowSliderCallback = false;
+      return;
+    }
     const int maxScroll = std::max(0, patternGrid.getHeight() - patternViewport.getHeight());
     const int currentY = std::clamp(patternViewport.getViewPositionY(), 0, maxScroll);
 
@@ -7395,6 +7441,7 @@ private:
   juce::TextButton insertPatternAfterButton{"Insert After"};
   juce::TextButton removePatternButton{"Remove Pattern"};
   juce::TextButton gridDensityButton;
+  juce::TextButton gridViewButton;
   juce::TextButton setInstrumentButton{"Set Instrument"};
   juce::TextButton clearInstrumentButton{"Clear Instrument"};
   std::map<int, std::unique_ptr<PluginEditorWindow>> pluginEditorWindows;  // by instrument slot

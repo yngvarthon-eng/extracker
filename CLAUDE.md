@@ -116,6 +116,8 @@ Real-time-ish playback pipeline, all driven by a background thread:
 - **Channel layout** (`channel_layout.hpp`) — insert/delete/move/duplicate a channel across *all*
   patterns plus `ChannelManager`, keeping each pattern's channel count. `ChannelEditResult::sources`
   maps new→old channel so callers can carry other per-channel state (record channel, cursor, ...).
+  `widenAllPatterns` / `narrowAllPatterns` resize every pattern and the `ChannelManager` (GUI Ch+/Ch−,
+  max 32); narrowing refuses while a removed channel has content in any pattern.
   `ChannelLayoutHistory` is the undo/redo for these edits; it refuses to undo once any pattern
   changed since, so it never discards later note edits.
 - **PatternClipboard / ClipboardHistory** (`pattern_clipboard.hpp`) — the one clipboard used by
@@ -174,6 +176,9 @@ new song state the same way:
   `CHANNEL_FILTERS` (`type cutoff resonance` per channel, 0–255), `CHANNEL_TRACKS`
   (`first last muted volume "name"` per track, only written when tracks exist). Solo is not saved.
 - `writeReverbLine` / `readReverbLine` (`song_bundle.hpp`): `REVERB room damping wet width`, 0–255.
+- Sample-bank edits (reverse, trim, normalize, ...) only change memory and set the asset's `edited`
+  flag (`PluginHost::isSampleSlotEdited`); both writers then store the edited data as a WAV via
+  `bundleWrittenFile` instead of copying the original file. `restore` clears the flag.
 - Loaders reset `ChannelManager`, channel undo history and reverb before reading a file, so songs
   without these lines do not inherit the previous song's state.
 

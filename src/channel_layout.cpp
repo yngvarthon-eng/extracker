@@ -105,6 +105,53 @@ bool channelHasContent(const Module& module, std::size_t channel) {
   return false;
 }
 
+std::size_t widenAllPatterns(Module& module, ChannelManager& channels, std::size_t count) {
+  std::size_t widened = 0;
+  std::size_t widest = count;
+  for (std::size_t p = 0; p < module.patternCount(); ++p) {
+    PatternEditor& editor = module.patternEditor(p);
+    if (editor.channels() < count) {
+      editor.resizeChannels(count);
+      ++widened;
+    }
+    widest = std::max(widest, editor.channels());
+  }
+  if (channels.count() < widest) {
+    channels.resize(widest);
+  }
+  return widened;
+}
+
+bool narrowAllPatterns(Module& module, ChannelManager& channels, std::size_t count,
+                       std::size_t& narrowed, std::string& error) {
+  narrowed = 0;
+  count = std::max<std::size_t>(count, 1);
+  for (std::size_t p = 0; p < module.patternCount(); ++p) {
+    const PatternEditor& editor = module.patternEditor(p);
+    for (std::size_t ch = count; ch < editor.channels(); ++ch) {
+      if (columnHasContent(editor, ch)) {
+        error = "channel " + std::to_string(ch) + " is not empty in pattern " + std::to_string(p) +
+                "; clear it first";
+        return false;
+      }
+    }
+  }
+
+  std::size_t widest = 1;
+  for (std::size_t p = 0; p < module.patternCount(); ++p) {
+    PatternEditor& editor = module.patternEditor(p);
+    if (editor.channels() > count) {
+      editor.resizeChannels(count);
+      ++narrowed;
+    }
+    widest = std::max(widest, editor.channels());
+  }
+  if (channels.count() > widest) {
+    channels.resize(widest);
+  }
+  return true;
+}
+
 ChannelEditResult insertChannel(Module& module, ChannelManager& channels, std::size_t at) {
   const std::size_t width = layoutWidth(module);
   if (at >= width) {

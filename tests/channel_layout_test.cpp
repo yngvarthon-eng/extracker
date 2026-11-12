@@ -135,6 +135,50 @@ int main() {
     check(!history.canUndo() && !history.canRedo(), "stale history cleared");
   }
 
+  {
+    // Widening reaches every pattern, keeps notes, and never narrows a wider one.
+    Module module(16, 4);
+    ChannelManager channels(4);
+    module.insertPatternAfter();
+    module.insertPatternAfter();
+    module.patternEditor(0).insertNote(3, 3, 64);
+    module.patternEditor(2).resizeChannels(8);
+    channels.setName(3, "Lead");
+
+    check(extracker::widenAllPatterns(module, channels, 5) == 2, "two narrower patterns widened");
+    check(module.patternEditor(0).channels() == 5 && module.patternEditor(1).channels() == 5,
+          "patterns 0 and 1 widened to 5");
+    check(module.patternEditor(2).channels() == 8, "wider pattern left alone");
+    check(module.patternEditor(0).hasNoteAt(3, 3), "existing notes kept");
+    check(channels.count() == 8 && channels.displayName(3) == "Lead", "channel state grown, names kept");
+  }
+
+  {
+    // Narrowing reaches every wider pattern, but refuses while a removed channel has content.
+    Module module(16, 6);
+    ChannelManager channels(6);
+    module.insertPatternAfter();
+    module.insertPatternAfter();
+    module.patternEditor(1).resizeChannels(3);
+    module.patternEditor(2).insertNote(7, 5, 60);
+    channels.setName(2, "Bass");
+
+    std::size_t narrowed = 0;
+    std::string error;
+    check(!extracker::narrowAllPatterns(module, channels, 5, narrowed, error) &&
+              error.find("pattern 2") != std::string::npos,
+          "refused while pattern 2 channel 5 has a note");
+    check(module.patternEditor(0).channels() == 6 && channels.count() == 6, "refusal changes nothing");
+
+    module.patternEditor(2).clearStep(7, 5);
+    check(extracker::narrowAllPatterns(module, channels, 5, narrowed, error) && narrowed == 2,
+          "two wider patterns narrowed");
+    check(module.patternEditor(0).channels() == 5 && module.patternEditor(2).channels() == 5,
+          "patterns 0 and 2 narrowed to 5");
+    check(module.patternEditor(1).channels() == 3, "narrower pattern left alone");
+    check(channels.count() == 5 && channels.displayName(2) == "Bass", "channel state shrunk, names kept");
+  }
+
   if (failures != 0) {
     std::cerr << failures << " check(s) failed" << '\n';
     return 1;
