@@ -210,6 +210,11 @@ if(BUILD_TESTING)
   target_link_libraries(extracker_sequencer_channel_filter_test PRIVATE extracker_core)
   add_test(NAME extracker_sequencer_channel_filter_test COMMAND extracker_sequencer_channel_filter_test)
 
+  add_executable(extracker_sequencer_tick_update_test tests/sequencer_tick_update_test.cpp)
+  target_include_directories(extracker_sequencer_tick_update_test PRIVATE include)
+  target_link_libraries(extracker_sequencer_tick_update_test PRIVATE extracker_core)
+  add_test(NAME extracker_sequencer_tick_update_test COMMAND extracker_sequencer_tick_update_test)
+
   add_executable(extracker_channel_layout_test tests/channel_layout_test.cpp)
   target_include_directories(extracker_channel_layout_test PRIVATE include)
   target_link_libraries(extracker_channel_layout_test PRIVATE extracker_core)

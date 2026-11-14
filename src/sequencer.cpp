@@ -1035,7 +1035,17 @@ void Sequencer::update(
         modulationFrequency *= std::max(0.2, vibratoScale);
       }
 
-      if (modulationFrequency > 0.0) {
+      // Only re-send the note while an effect is moving its pitch or volume. A plain
+      // note has nothing to update, and some instruments (SF2, SFZ, XPM, VST3) treat
+      // every note-on as a new attack, so re-sending it each tick re-struck the note
+      // TPR-1 times per row (inaudible at TPR 1, a stutter at TPR 6).
+      const bool modulated = rowNote.slideUp > 0 || rowNote.slideDown > 0 ||
+                             rowNote.tonePortamento > 0 ||
+                             rowNote.arpeggioX > 0 || rowNote.arpeggioY > 0 ||
+                             (rowNote.vibratoSpeed > 0 && rowNote.vibratoDepth > 0) ||
+                             (rowNote.tremoloSpeed > 0 && rowNote.tremoloDepth > 0);
+
+      if (modulated && modulationFrequency > 0.0) {
         std::uint8_t outputVelocity = rowNote.velocity;
         if (rowNote.legacyFilterEnabled) {
           outputVelocity = static_cast<std::uint8_t>(std::clamp<int>(
