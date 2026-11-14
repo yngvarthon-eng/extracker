@@ -476,3 +476,9 @@ Instrument assignments (including SF2 melodic IDs) are stored in the file and re
 ## CLI Aliases
 
 Most commands have short aliases: `p` (play), `s` (stop), `st` (status), `w` (save), `r` (load), `pattern dup/sw/ls/del/in`, `song ls/st/se/si/ap/rm/mv/g/f/l/n/b/pl`, etc.
+
+---
+
+## License
+
+MIT – see [LICENSE](LICENSE).
